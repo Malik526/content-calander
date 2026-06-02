@@ -31,11 +31,17 @@ if ENV_FILE.exists():
 
 # ---------------------------------------------------------------------------
 # Content allocation targets (informational — real count driven by schedule)
+# Updated: June 2026
+# Goal: Give educational content more weight to support
+# workshop funnel while maintaining building systems
+# as primary audience engagement driver
 # ---------------------------------------------------------------------------
-BUILDING_SYSTEMS_ALLOC = 0.35       # ~10–11 posts per month
-ENTREPRENEURSHIP_ALLOC = 0.30       # ~9 posts per month
-PERSONAL_TRANSFORM_ALLOC = 0.20     # ~6 posts per month
-EDUCATIONAL_ALLOC = 0.15            # ~4–5 posts per month
+CONTENT_ALLOCATION = {
+    "Building Systems":        0.30,   # 9 posts/mo
+    "Educational":             0.25,   # 7–8 posts/mo
+    "Entrepreneurship Journey": 0.25,  # 7–8 posts/mo
+    "Personal Transformation": 0.20,   # 6 posts/mo
+}
 
 # ---------------------------------------------------------------------------
 # Default run parameters (overridden by CLI flags)
@@ -50,10 +56,12 @@ DEFAULT_YEAR = int(os.getenv("CONTENT_CALENDAR_DEFAULT_YEAR", "2026"))
 WEEKLY_SCHEDULE: dict[int, str] = {
     0: "Entrepreneurship Journey",   # Monday
     1: "Building Systems",           # Tuesday
-    2: "Entrepreneurship Journey",   # Wednesday
+    2: "Educational",                # Wednesday — shifted to boost educational allocation
     3: "Personal Transformation",    # Thursday
     4: "Building Systems",           # Friday
     5: "Entrepreneurship Journey",   # Saturday
+    # Sunday (6) is handled by SUNDAY_ROTATION below; key 6 is here for reference only
+    6: "Educational",                # Sunday — alternates with Personal Transformation
 }
 
 # Sundays alternate; index 0 is week-1, index 1 is week-2, then repeats

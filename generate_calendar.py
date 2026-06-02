@@ -29,6 +29,7 @@ from googleapiclient.errors import HttpError
 
 from config import (
     COLOR_IDS,
+    CONTENT_ALLOCATION,
     DEFAULT_CALENDAR_ID,
     DEFAULT_MONTH,
     DEFAULT_YEAR,
@@ -167,9 +168,18 @@ def build_event_body(post: ScheduledPost) -> dict:
     )
     end_dt = start_dt + timedelta(minutes=EVENT_DURATION_MINUTES)
 
+    description = post.prompt
+    # Append workshop CTA to all Educational posts to support the monthly funnel
+    if post.content_type == "Educational":
+        description += (
+            "\n\nCTA: End this post with:\n"
+            "'I cover this live in my free monthly workshop "
+            "for service business owners. Link in bio to register.'"
+        )
+
     return {
         "summary": f"POST — {post.content_type}",
-        "description": post.prompt,
+        "description": description,
         "start": {
             "dateTime": start_dt.isoformat(),
             "timeZone": TIMEZONE,
@@ -206,8 +216,10 @@ def push_events(service, calendar_id: str, schedule: list[ScheduledPost]) -> int
 # Summary output
 # ---------------------------------------------------------------------------
 
-def print_summary(schedule: list[ScheduledPost], month: int, year: int) -> None:
-    """Print a formatted post-count summary after all events are created."""
+def print_summary(
+    schedule: list[ScheduledPost], month: int, year: int, calendar_id: str
+) -> None:
+    """Print a formatted post-count summary reflecting the revised allocation."""
     counts: dict[str, int] = {}
     for post in schedule:
         counts[post.content_type] = counts.get(post.content_type, 0) + 1
@@ -215,16 +227,24 @@ def print_summary(schedule: list[ScheduledPost], month: int, year: int) -> None:
     month_name = calendar.month_name[month]
     total = sum(counts.values())
 
-    print(f"\n{month_name} {year} Content Calendar Created")
-    print("=" * 37)
-    print(f"  Building Systems:    {counts.get('Building Systems', 0):4d} posts")
-    print(f"  Entrepreneurship:    {counts.get('Entrepreneurship Journey', 0):4d} posts")
-    print(f"  Personal Transform:  {counts.get('Personal Transformation', 0):4d} posts")
-    print(f"  Educational:         {counts.get('Educational', 0):4d} posts")
-    print(f"  Total:               {total:4d} posts")
+    # Print in allocation-rank order
+    ordered_types = [
+        "Building Systems",
+        "Educational",
+        "Entrepreneurship Journey",
+        "Personal Transformation",
+    ]
+
+    print(f"\n{month_name} {year} Content Calendar — Revised Allocation")
+    print("=" * 49)
+    for ct in ordered_types:
+        count = counts.get(ct, 0)
+        pct = int(CONTENT_ALLOCATION.get(ct, 0) * 100)
+        print(f"  {ct + ':':<28} {count:2d} posts  ({pct}%)")
+    print(f"  {'Total:':<28} {total:2d} posts")
     print()
-    print("  Events added to Google Calendar.")
-    print("  Open calendar.google.com to review.")
+    print("  Workshop CTA included on all Educational posts.")
+    print(f"  Events pushed to {calendar_id} calendar.")
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +281,7 @@ def main() -> None:
     push_events(service, args.calendar, schedule)
 
     # --- Final summary ---
-    print_summary(schedule, args.month, args.year)
+    print_summary(schedule, args.month, args.year, args.calendar)
 
 
 if __name__ == "__main__":

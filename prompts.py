@@ -59,13 +59,17 @@ PROMPTS: dict[str, list[str]] = {
     ],
 
     # --- Educational --------------------------------------------------------
+    # Workshop-funnel prompts added June 2026 to support monthly workshop lead gen
     "Educational": [
         "How to get on Google Maps without a storefront — step by step",
         "Why every service business needs lead capture not just a website",
         "What a CRM actually does in plain language",
-        "How automated follow-ups work — and why most businesses skip them",
-        "Local SEO explained in 60 seconds",
-        "The referral system — how to make happy clients bring new ones",
-        "Workshop promo — register for this month's free session",
+        "How automated follow-ups work and why most businesses skip them",
+        "Local SEO explained — why your competitor shows up before you",
+        "The referral system — how to turn happy clients into new ones",
+        "What happens when someone fills out your contact form — the right way",
+        "Workshop promo — register for this month's free session: [link]",
+        "5 digital systems every service business needs to grow — preview",
+        "Google Business Profile optimization in 10 minutes",
     ],
 }
