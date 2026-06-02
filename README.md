@@ -86,7 +86,7 @@ used in `config.py`.
 |---|---|
 | Monday | Entrepreneurship Journey |
 | Tuesday | Building Systems |
-| Wednesday | Entrepreneurship Journey |
+| Wednesday | Educational |
 | Thursday | Personal Transformation |
 | Friday | Building Systems |
 | Saturday | Entrepreneurship Journey |
@@ -98,10 +98,10 @@ used in `config.py`.
 
 | Type | Target |
 |---|---|
-| Building Systems | 35% (~10–11 posts) |
-| Entrepreneurship Journey | 30% (~9 posts) |
+| Building Systems | 30% (~9 posts) |
+| Educational | 25% (~7–8 posts) |
+| Entrepreneurship Journey | 25% (~7–8 posts) |
 | Personal Transformation | 20% (~6 posts) |
-| Educational | 15% (~4–5 posts) |
 
 > Actual counts are driven by the weekly schedule above.
 > The targets are reference benchmarks only.
