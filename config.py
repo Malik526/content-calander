@@ -11,6 +11,24 @@ Settings include:
 No external dependencies.
 """
 
+import os
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Local environment file
+# ---------------------------------------------------------------------------
+# Load simple KEY=value pairs from .env so local tool settings work without
+# requiring shell exports or an extra python-dotenv dependency.
+ENV_FILE = Path(__file__).with_name(".env")
+if ENV_FILE.exists():
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+
+        key, value = stripped.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
 # ---------------------------------------------------------------------------
 # Content allocation targets (informational — real count driven by schedule)
 # ---------------------------------------------------------------------------
@@ -22,8 +40,8 @@ EDUCATIONAL_ALLOC = 0.15            # ~4–5 posts per month
 # ---------------------------------------------------------------------------
 # Default run parameters (overridden by CLI flags)
 # ---------------------------------------------------------------------------
-DEFAULT_MONTH = 6
-DEFAULT_YEAR = 2026
+DEFAULT_MONTH = int(os.getenv("CONTENT_CALENDAR_DEFAULT_MONTH", "6"))
+DEFAULT_YEAR = int(os.getenv("CONTENT_CALENDAR_DEFAULT_YEAR", "2026"))
 
 # ---------------------------------------------------------------------------
 # Weekly schedule: Python weekday int → content type string
@@ -50,13 +68,16 @@ SUNDAY_ROTATION: list[str] = [
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 # Path to service account JSON key — expand ~ at runtime
-SERVICE_ACCOUNT_FILE = "~/.config/gcloud/service_account.json"
+SERVICE_ACCOUNT_FILE = os.getenv(
+    "GOOGLE_SERVICE_ACCOUNT_FILE",
+    "~/growth_agency/credentials/service-account.json",
+)
 
 # Calendar to write events to; overrideable via --calendar flag
-DEFAULT_CALENDAR_ID = "primary"
+DEFAULT_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 
 # Timezone string used for all events
-TIMEZONE = "America/Chicago"
+TIMEZONE = os.getenv("CONTENT_CALENDAR_TIMEZONE", "America/New_York")
 
 # ---------------------------------------------------------------------------
 # Event timing

@@ -33,14 +33,24 @@ python3 generate_calendar.py --month 06 --year 2026 --calendar your_calendar_id@
 pip install -r requirements.txt
 ```
 
-### 2. Add your service account key
+### 2. Configure local environment
+
+Copy `.env.example` to `.env` and update values as needed.
+
+```bash
+cp .env.example .env
+```
+
+The generator reads simple `KEY=value` pairs from `.env` automatically.
+
+### 3. Add your service account key
 
 The script authenticates via a Google service account JSON key.
-Default expected path: `~/.config/gcloud/service_account.json`
+Default expected path: `~/growth_agency/credentials/service-account.json`
 
-To use a different path, update `SERVICE_ACCOUNT_FILE` in `config.py`.
+To use a different path, update `GOOGLE_SERVICE_ACCOUNT_FILE` in `.env`.
 
-### 3. Grant calendar access to the service account
+### 4. Grant calendar access to the service account
 
 In Google Calendar settings → "Share with specific people", add the service
 account email (found in the JSON key as `"client_email"`) with
