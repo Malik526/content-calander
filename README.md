@@ -1,6 +1,6 @@
 # Content Calendar Generator
 
-Generates a full month of content calendar events and pushes them to Google Calendar automatically.
+Generates a full month of short-form video content calendar events and pushes them to Google Calendar automatically.
 Run once at the start of each month.
 
 ---
@@ -11,16 +11,22 @@ Run once at the start of each month.
 python3 generate_calendar.py --month [MM] --year [YYYY]
 ```
 
-**Example — June 2026:**
+**Example — July 2026:**
 
 ```bash
-python3 generate_calendar.py --month 06 --year 2026
+python3 generate_calendar.py --month 07 --year 2026
 ```
 
 **Optional: target a specific calendar by ID**
 
 ```bash
-python3 generate_calendar.py --month 06 --year 2026 --calendar your_calendar_id@group.calendar.google.com
+python3 generate_calendar.py --month 07 --year 2026 --calendar your_calendar_id@group.calendar.google.com
+```
+
+**Preview without creating events**
+
+```bash
+python3 generate_calendar.py --month 07 --year 2026 --dry-run
 ```
 
 ---
@@ -63,16 +69,16 @@ account email (found in the JSON key as `"client_email"`) with
 | File | Purpose |
 |---|---|
 | `generate_calendar.py` | Main script — orchestrates schedule generation and Google Calendar push |
-| `config.py` | All settings: allocations, weekly schedule, auth paths, color IDs |
-| `prompts.py` | Every daily prompt organised by content type |
+| `config.py` | All settings: pillar labels, allocations, weekly schedule, auth paths, color IDs |
+| `prompts.py` | Every daily short-form video prompt organised by pillar |
 | `requirements.txt` | Python package dependencies |
 
 ---
 
 ## Customising
 
-**Change allocation percentages or weekly day assignments:**
-Edit `config.py` → `WEEKLY_SCHEDULE` and `SUNDAY_ROTATION`.
+**Change allocation percentages, labels, colors, or weekly day assignments:**
+Edit `config.py` → `CONTENT_TYPES`, `WEEKLY_SCHEDULE`, and `FIFTH_SUNDAY_CONTENT_TYPE`.
 
 **Add or edit prompts:**
 Edit `prompts.py` → the `PROMPTS` dict. Each key must match a content type string
@@ -84,13 +90,15 @@ used in `config.py`.
 
 | Day | Content Type |
 |---|---|
-| Monday | Entrepreneurship Journey |
-| Tuesday | Building Systems |
-| Wednesday | Educational |
-| Thursday | Personal Transformation |
-| Friday | Building Systems |
-| Saturday | Entrepreneurship Journey |
-| Sunday | Alternates — Educational (odd weeks) / Personal Transformation (even weeks) |
+| Monday | Customer Acquisition in Action |
+| Tuesday | Building Systems & Tools |
+| Wednesday | Customer Acquisition in Action |
+| Thursday | Agency Execution |
+| Friday | Building Systems & Tools |
+| Saturday | Customer Acquisition in Action |
+| Sunday | Mindset & Discipline |
+
+Fifth Sundays are assigned to Agency Execution to rebalance the monthly allocation.
 
 ---
 
@@ -98,10 +106,10 @@ used in `config.py`.
 
 | Type | Target |
 |---|---|
-| Building Systems | 30% (~9 posts) |
-| Educational | 25% (~7–8 posts) |
-| Entrepreneurship Journey | 25% (~7–8 posts) |
-| Personal Transformation | 20% (~6 posts) |
+| Customer Acquisition in Action | 40% |
+| Building Systems & Tools | 25% |
+| Agency Execution | 20% |
+| Mindset & Discipline | 15% |
 
 > Actual counts are driven by the weekly schedule above.
 > The targets are reference benchmarks only.

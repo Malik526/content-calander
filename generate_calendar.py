@@ -28,16 +28,15 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from config import (
-    COLOR_IDS,
-    CONTENT_ALLOCATION,
+    CONTENT_TYPES,
     DEFAULT_CALENDAR_ID,
     DEFAULT_MONTH,
     DEFAULT_YEAR,
     EVENT_DURATION_MINUTES,
     EVENT_START_HOUR,
+    FIFTH_SUNDAY_CONTENT_TYPE,
     SCOPES,
     SERVICE_ACCOUNT_FILE,
-    SUNDAY_ROTATION,
     TIMEZONE,
     WEEKLY_SCHEDULE,
 )
@@ -49,7 +48,7 @@ from prompts import PROMPTS
 # ---------------------------------------------------------------------------
 
 class ScheduledPost(NamedTuple):
-    """One posting slot: the date, content type, and prompt to use."""
+    """One posting slot: the date, content pillar key, and prompt to use."""
     day: date
     content_type: str
     prompt: str
@@ -60,7 +59,7 @@ class ScheduledPost(NamedTuple):
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    """Parse --month, --year, and optional --calendar CLI flags."""
+    """Parse CLI flags for month, year, target calendar, and dry-run mode."""
     parser = argparse.ArgumentParser(
         description="Generate a monthly content calendar and push to Google Calendar."
     )
@@ -80,6 +79,11 @@ def parse_args() -> argparse.Namespace:
         "--calendar",
         default=DEFAULT_CALENDAR_ID,
         help="Google Calendar ID to write events to. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build and print the schedule summary without pushing events.",
     )
     return parser.parse_args()
 
@@ -116,13 +120,37 @@ def get_month_dates(year: int, month: int) -> list[date]:
     return [date(year, month, day) for day in range(1, days_in_month + 1)]
 
 
+def get_content_type_for_date(day: date, sunday_count: int) -> str:
+    """Return the content pillar key assigned to a date."""
+    weekday_name = calendar.day_name[day.weekday()].lower()
+
+    if weekday_name == "sunday" and sunday_count == 5:
+        return FIFTH_SUNDAY_CONTENT_TYPE
+
+    return WEEKLY_SCHEDULE[weekday_name]
+
+
+def get_content_label(content_type: str) -> str:
+    """Return the display label for a content pillar key."""
+    return str(CONTENT_TYPES[content_type]["label"])
+
+
+def get_content_color_id(content_type: str) -> str:
+    """Return the Google Calendar color ID for a content pillar key."""
+    return str(CONTENT_TYPES[content_type]["color_id"])
+
+
+def get_content_target_percent(content_type: str) -> int:
+    """Return the target allocation percentage for a content pillar key."""
+    return int(float(CONTENT_TYPES[content_type]["target_percent"]) * 100)
+
+
 def build_schedule(dates: list[date]) -> list[ScheduledPost]:
     """
     Map each date to its content type and prompt.
 
-    - Weekdays 0–5 use WEEKLY_SCHEDULE directly.
-    - Sundays (weekday 6) alternate between SUNDAY_ROTATION entries,
-      starting with index 0 on the first Sunday of the month.
+    - Each date uses the day-name mapping from WEEKLY_SCHEDULE.
+    - A fifth Sunday is assigned to Agency Execution to rebalance the month.
     - Prompts rotate sequentially per content type; wraps only after
       all prompts in the list have been used once.
     """
@@ -132,14 +160,10 @@ def build_schedule(dates: list[date]) -> list[ScheduledPost]:
     schedule: list[ScheduledPost] = []
 
     for d in dates:
-        weekday = d.weekday()  # 0=Mon … 6=Sun
-
         # --- Resolve content type ---
-        if weekday == 6:
-            content_type = SUNDAY_ROTATION[sunday_count % len(SUNDAY_ROTATION)]
+        if d.weekday() == 6:
             sunday_count += 1
-        else:
-            content_type = WEEKLY_SCHEDULE[weekday]
+        content_type = get_content_type_for_date(d, sunday_count)
 
         # --- Pick next prompt, cycling through list without repeating ---
         prompts_list = PROMPTS[content_type]
@@ -168,18 +192,9 @@ def build_event_body(post: ScheduledPost) -> dict:
     )
     end_dt = start_dt + timedelta(minutes=EVENT_DURATION_MINUTES)
 
-    description = post.prompt
-    # Append workshop CTA to all Educational posts to support the monthly funnel
-    if post.content_type == "Educational":
-        description += (
-            "\n\nCTA: End this post with:\n"
-            "'I cover this live in my free monthly workshop "
-            "for service business owners. Link in bio to register.'"
-        )
-
     return {
-        "summary": f"POST — {post.content_type}",
-        "description": description,
+        "summary": f"POST — {get_content_label(post.content_type)}",
+        "description": post.prompt,
         "start": {
             "dateTime": start_dt.isoformat(),
             "timeZone": TIMEZONE,
@@ -188,7 +203,7 @@ def build_event_body(post: ScheduledPost) -> dict:
             "dateTime": end_dt.isoformat(),
             "timeZone": TIMEZONE,
         },
-        "colorId": COLOR_IDS[post.content_type],
+        "colorId": get_content_color_id(post.content_type),
     }
 
 
@@ -205,7 +220,10 @@ def push_events(service, calendar_id: str, schedule: list[ScheduledPost]) -> int
         try:
             service.events().insert(calendarId=calendar_id, body=event_body).execute()
             created += 1
-            print(f"  Created: {post.day.strftime('%a %b %d')} — {post.content_type}")
+            print(
+                f"  Created: {post.day.strftime('%a %b %d')} — "
+                f"{get_content_label(post.content_type)}"
+            )
         except HttpError as err:
             print(f"  ERROR on {post.day}: {err}", file=sys.stderr)
 
@@ -217,7 +235,11 @@ def push_events(service, calendar_id: str, schedule: list[ScheduledPost]) -> int
 # ---------------------------------------------------------------------------
 
 def print_summary(
-    schedule: list[ScheduledPost], month: int, year: int, calendar_id: str
+    schedule: list[ScheduledPost],
+    month: int,
+    year: int,
+    calendar_id: str,
+    dry_run: bool = False,
 ) -> None:
     """Print a formatted post-count summary reflecting the revised allocation."""
     counts: dict[str, int] = {}
@@ -227,24 +249,20 @@ def print_summary(
     month_name = calendar.month_name[month]
     total = sum(counts.values())
 
-    # Print in allocation-rank order
-    ordered_types = [
-        "Building Systems",
-        "Educational",
-        "Entrepreneurship Journey",
-        "Personal Transformation",
-    ]
-
-    print(f"\n{month_name} {year} Content Calendar — Revised Allocation")
+    print(f"\n{month_name} {year} Content Calendar — 40/25/20/15 Allocation")
     print("=" * 49)
-    for ct in ordered_types:
+    for ct in CONTENT_TYPES:
         count = counts.get(ct, 0)
-        pct = int(CONTENT_ALLOCATION.get(ct, 0) * 100)
-        print(f"  {ct + ':':<28} {count:2d} posts  ({pct}%)")
+        label = get_content_label(ct)
+        pct = get_content_target_percent(ct)
+        print(f"  {label + ':':<34} {count:2d} posts  ({pct}%)")
     print(f"  {'Total:':<28} {total:2d} posts")
     print()
-    print("  Workshop CTA included on all Educational posts.")
-    print(f"  Events pushed to {calendar_id} calendar.")
+    print("  Fifth Sundays are assigned to Agency Execution for rebalancing.")
+    if dry_run:
+        print(f"  Dry run only; no events were pushed to {calendar_id}.")
+    else:
+        print(f"  Events pushed to {calendar_id} calendar.")
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +287,11 @@ def main() -> None:
     # --- Build schedule ---
     dates = get_month_dates(args.year, args.month)
     schedule = build_schedule(dates)
+
+    if args.dry_run:
+        print("Dry run enabled; no Google Calendar events were created.")
+        print_summary(schedule, args.month, args.year, args.calendar, dry_run=True)
+        return
 
     # --- Connect to Google Calendar ---
     try:

@@ -2,9 +2,9 @@
 config.py — Configuration for the content calendar generator.
 
 Settings include:
-  - Content type allocation targets (reference only; actual count follows weekly schedule)
-  - Weekly day → content type schedule
-  - Sunday alternation rotation
+  - Content pillar labels, allocation targets, and Google Calendar colors
+  - Weekly day → content pillar schedule
+  - Month-end Sunday rebalancing behavior
   - Google Calendar auth + API settings
   - Event timing and color IDs per content type
 
@@ -30,17 +30,32 @@ if ENV_FILE.exists():
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 # ---------------------------------------------------------------------------
-# Content allocation targets (informational — real count driven by schedule)
-# Updated: June 2026
-# Goal: Give educational content more weight to support
-# workshop funnel while maintaining building systems
-# as primary audience engagement driver
+# Content pillar definitions
+# Updated: July 2026
+# Goal: Shift MoreClientsCo toward visible acquisition work while keeping
+# systems, execution, and discipline in the weekly mix.
 # ---------------------------------------------------------------------------
-CONTENT_ALLOCATION = {
-    "Building Systems":        0.30,   # 9 posts/mo
-    "Educational":             0.25,   # 7–8 posts/mo
-    "Entrepreneurship Journey": 0.25,  # 7–8 posts/mo
-    "Personal Transformation": 0.20,   # 6 posts/mo
+CONTENT_TYPES: dict[str, dict[str, str | float]] = {
+    "acquisition": {
+        "label": "Customer Acquisition in Action",
+        "color_id": "9",
+        "target_percent": 0.40,
+    },
+    "building": {
+        "label": "Building Systems & Tools",
+        "color_id": "10",
+        "target_percent": 0.25,
+    },
+    "execution": {
+        "label": "Agency Execution",
+        "color_id": "5",
+        "target_percent": 0.20,
+    },
+    "mindset": {
+        "label": "Mindset & Discipline",
+        "color_id": "3",
+        "target_percent": 0.15,
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -50,25 +65,21 @@ DEFAULT_MONTH = int(os.getenv("CONTENT_CALENDAR_DEFAULT_MONTH", "6"))
 DEFAULT_YEAR = int(os.getenv("CONTENT_CALENDAR_DEFAULT_YEAR", "2026"))
 
 # ---------------------------------------------------------------------------
-# Weekly schedule: Python weekday int → content type string
-# 0=Monday … 5=Saturday, 6=Sunday handled via SUNDAY_ROTATION below
+# Weekly schedule: day name → content pillar key
 # ---------------------------------------------------------------------------
-WEEKLY_SCHEDULE: dict[int, str] = {
-    0: "Entrepreneurship Journey",   # Monday
-    1: "Building Systems",           # Tuesday
-    2: "Educational",                # Wednesday — shifted to boost educational allocation
-    3: "Personal Transformation",    # Thursday
-    4: "Building Systems",           # Friday
-    5: "Entrepreneurship Journey",   # Saturday
-    # Sunday (6) is handled by SUNDAY_ROTATION below; key 6 is here for reference only
-    6: "Educational",                # Sunday — alternates with Personal Transformation
+WEEKLY_SCHEDULE: dict[str, str] = {
+    "monday": "acquisition",
+    "tuesday": "building",
+    "wednesday": "acquisition",
+    "thursday": "execution",
+    "friday": "building",
+    "saturday": "acquisition",
+    "sunday": "mindset",
 }
 
-# Sundays alternate; index 0 is week-1, index 1 is week-2, then repeats
-SUNDAY_ROTATION: list[str] = [
-    "Educational",           # odd Sundays  (week 1, 3, 5 …)
-    "Personal Transformation",  # even Sundays (week 2, 4, 6 …)
-]
+# Fifth Sundays rebalance the monthly mix toward Agency Execution, which runs
+# low in the normal weekly pattern.
+FIFTH_SUNDAY_CONTENT_TYPE = "execution"
 
 # ---------------------------------------------------------------------------
 # Google Calendar API
@@ -94,12 +105,3 @@ EVENT_START_HOUR = 9          # 9:00 AM local time
 EVENT_DURATION_MINUTES = 30   # 9:00 → 9:30 AM
 
 # ---------------------------------------------------------------------------
-# Google Calendar colorId per content type
-# 5=Banana  6=Sage  9=Blueberry  11=Tomato  (per spec)
-# ---------------------------------------------------------------------------
-COLOR_IDS: dict[str, str] = {
-    "Building Systems":       "9",   # blueberry
-    "Entrepreneurship Journey": "11", # tomato
-    "Personal Transformation": "6",  # sage
-    "Educational":            "5",   # banana
-}
