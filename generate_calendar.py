@@ -2,10 +2,12 @@
 generate_calendar.py — Content calendar generator for MoreClientsCo.
 
 What it does:
-  Generates a full month of content calendar events based on a fixed weekly
-  posting schedule and pushes each event to Google Calendar via a service
-  account. Prompts are rotated sequentially per content type so no prompt
-  repeats until all in its list have been used.
+  Generates a full month of content calendar events from a configurable
+  posting cadence (posts/week, posting-day strategy, posting time) and
+  per-pillar percentage weights, and pushes each event to Google Calendar
+  via a service account. Prompts are rotated sequentially per content type
+  so no prompt repeats until all in its list have been used. See
+  docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md.
 
 Run command:
   python3 generate_calendar.py --month 06 --year 2026
@@ -13,14 +15,14 @@ Run command:
 
 Dependencies:
   google-auth, google-api-python-client  (see requirements.txt)
-  config.py, prompts.py in the same directory
+  config.py, prompts.py, scheduling.py, content_store.py in the same directory
 """
 
 import argparse
 import calendar
 import os
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
 from google.oauth2.service_account import Credentials
@@ -33,15 +35,23 @@ from config import (
     DEFAULT_MONTH,
     DEFAULT_YEAR,
     EVENT_DURATION_MINUTES,
-    EVENT_START_HOUR,
-    FIFTH_SUNDAY_CONTENT_TYPE,
+    POSTING_DAYS,
+    POSTING_TIME,
+    POSTS_PER_WEEK,
+    PROMPT_GENERATION_ENABLED,
     SCOPES,
     SERVICE_ACCOUNT_FILE,
     TIMEZONE,
-    WEEKLY_SCHEDULE,
 )
 from content_store import ContentStore
 from prompts import PROMPTS
+from scheduling import (
+    ScheduleConfigError,
+    allocate_pillars,
+    distribute_pillars,
+    generate_posting_dates,
+    validate_schedule_config,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -49,10 +59,10 @@ from prompts import PROMPTS
 # ---------------------------------------------------------------------------
 
 class ScheduledPost(NamedTuple):
-    """One posting slot: the date, content pillar key, and prompt to use."""
-    day: date
+    """One posting slot: the datetime, content pillar key, and optional prompt."""
+    scheduled_at: datetime
     content_type: str
-    prompt: str
+    prompt: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -115,22 +125,6 @@ def build_calendar_service(service_account_file: str):
 # Schedule generation
 # ---------------------------------------------------------------------------
 
-def get_month_dates(year: int, month: int) -> list[date]:
-    """Return a list of every date in the given month."""
-    _, days_in_month = calendar.monthrange(year, month)
-    return [date(year, month, day) for day in range(1, days_in_month + 1)]
-
-
-def get_content_type_for_date(day: date, sunday_count: int) -> str:
-    """Return the content pillar key assigned to a date."""
-    weekday_name = calendar.day_name[day.weekday()].lower()
-
-    if weekday_name == "sunday" and sunday_count == 5:
-        return FIFTH_SUNDAY_CONTENT_TYPE
-
-    return WEEKLY_SCHEDULE[weekday_name]
-
-
 def get_content_label(content_type: str) -> str:
     """Return the display label for a content pillar key."""
     return str(CONTENT_TYPES[content_type]["label"])
@@ -141,38 +135,38 @@ def get_content_color_id(content_type: str) -> str:
     return str(CONTENT_TYPES[content_type]["color_id"])
 
 
-def get_content_target_percent(content_type: str) -> int:
-    """Return the target allocation percentage for a content pillar key."""
-    return int(float(CONTENT_TYPES[content_type]["target_percent"]) * 100)
+def get_content_weight_percent(content_type: str) -> int:
+    """Return the configured weight for a content pillar key, as a whole percent."""
+    return int(round(float(CONTENT_TYPES[content_type]["weight"]) * 100))
 
 
-def build_schedule(dates: list[date]) -> list[ScheduledPost]:
+def build_schedule(year: int, month: int) -> list[ScheduledPost]:
     """
-    Map each date to its content type and prompt.
-
-    - Each date uses the day-name mapping from WEEKLY_SCHEDULE.
-    - A fifth Sunday is assigned to Agency Execution to rebalance the month.
-    - Prompts rotate sequentially per content type; wraps only after
-      all prompts in the list have been used once.
+    Build the month's schedule: WHEN comes from scheduling.generate_posting_dates
+    (cadence + posting days + posting time); WHAT pillar comes from
+    scheduling.allocate_pillars (largest remainder) + distribute_pillars
+    (spread pillars evenly rather than clustered). Prompts, if enabled, are
+    attached last and rotate sequentially per pillar — they never influence
+    the date or pillar decision.
     """
-    # Tracks how many times each content type has been assigned (drives prompt index)
-    usage: dict[str, int] = {ct: 0 for ct in PROMPTS}
-    sunday_count = 0
+    dates = generate_posting_dates(year, month, POSTS_PER_WEEK, POSTING_DAYS, POSTING_TIME)
+
+    pillar_weights = {key: info["weight"] for key, info in CONTENT_TYPES.items()}
+    counts = allocate_pillars(len(dates), pillar_weights)
+    pillar_sequence = distribute_pillars(counts)
+
+    prompt_usage: dict[str, int] = {key: 0 for key in CONTENT_TYPES}
     schedule: list[ScheduledPost] = []
 
-    for d in dates:
-        # --- Resolve content type ---
-        if d.weekday() == 6:
-            sunday_count += 1
-        content_type = get_content_type_for_date(d, sunday_count)
+    for scheduled_at, content_type in zip(dates, pillar_sequence):
+        prompt = None
+        if PROMPT_GENERATION_ENABLED:
+            prompts_list = PROMPTS.get(content_type) or []
+            if prompts_list:
+                prompt = prompts_list[prompt_usage[content_type] % len(prompts_list)]
+                prompt_usage[content_type] += 1
 
-        # --- Pick next prompt, cycling through list without repeating ---
-        prompts_list = PROMPTS[content_type]
-        prompt_index = usage[content_type] % len(prompts_list)
-        prompt = prompts_list[prompt_index]
-        usage[content_type] += 1
-
-        schedule.append(ScheduledPost(day=d, content_type=content_type, prompt=prompt))
+        schedule.append(ScheduledPost(scheduled_at=scheduled_at, content_type=content_type, prompt=prompt))
 
     return schedule
 
@@ -181,32 +175,15 @@ def build_schedule(dates: list[date]) -> list[ScheduledPost]:
 # Calendar event creation
 # ---------------------------------------------------------------------------
 
-def slot_start_datetime(post: ScheduledPost) -> datetime:
-    """Naive local wall-clock start time (in TIMEZONE) for a scheduled post.
-
-    Shared by build_event_body (Google Calendar) and push_events
-    (content_slots) so both always agree on the exact scheduled_at value.
-    """
-    return datetime(
-        post.day.year, post.day.month, post.day.day,
-        EVENT_START_HOUR, 0, 0
-    )
-
-
 def build_event_body(post: ScheduledPost) -> dict:
-    """
-    Construct the Google Calendar event dict for a single post.
-
-    Uses dateTime (not all-day) so the block shows at 9:00–9:30 AM.
-    """
-    start_dt = slot_start_datetime(post)
-    end_dt = start_dt + timedelta(minutes=EVENT_DURATION_MINUTES)
+    """Construct the Google Calendar event dict for a single post."""
+    end_dt = post.scheduled_at + timedelta(minutes=EVENT_DURATION_MINUTES)
 
     return {
         "summary": f"POST — {get_content_label(post.content_type)}",
-        "description": post.prompt,
+        "description": post.prompt or "",
         "start": {
-            "dateTime": start_dt.isoformat(),
+            "dateTime": post.scheduled_at.isoformat(),
             "timeZone": TIMEZONE,
         },
         "end": {
@@ -225,9 +202,11 @@ def push_events(service, calendar_id: str, schedule: list[ScheduledPost], store:
     Returns (events_created, slots_created). slots_created is smaller than
     events_created only when re-running generate_calendar.py for a month
     that already has persisted slots — insert_slot_if_missing skips those
-    rather than duplicating them, so content_slots stays idempotent even
-    though re-running still creates duplicate Google Calendar events (existing,
-    unchanged behavior).
+    rather than duplicating or overwriting them (content_slots is unique on
+    scheduled_at alone; see docs/decisions/0002-...), so re-running with a
+    changed strategy never mutates a slot that already exists. Google
+    Calendar events themselves can still duplicate on rerun — that is
+    pre-existing behavior, unchanged here.
     """
     created = 0
     slots_created = 0
@@ -238,15 +217,15 @@ def push_events(service, calendar_id: str, schedule: list[ScheduledPost], store:
             event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
             created += 1
             print(
-                f"  Created: {post.day.strftime('%a %b %d')} — "
+                f"  Created: {post.scheduled_at.strftime('%a %b %d, %I:%M %p')} — "
                 f"{get_content_label(post.content_type)}"
             )
         except HttpError as err:
-            print(f"  ERROR on {post.day}: {err}", file=sys.stderr)
+            print(f"  ERROR on {post.scheduled_at}: {err}", file=sys.stderr)
             continue
 
         was_new = store.insert_slot_if_missing(
-            scheduled_at=slot_start_datetime(post).isoformat(),
+            scheduled_at=post.scheduled_at.isoformat(),
             pillar_key=post.content_type,
             prompt=post.prompt,
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -269,24 +248,25 @@ def print_summary(
     calendar_id: str,
     dry_run: bool = False,
 ) -> None:
-    """Print a formatted post-count summary reflecting the revised allocation."""
+    """Print a formatted post-count summary reflecting the configured allocation."""
     counts: dict[str, int] = {}
     for post in schedule:
         counts[post.content_type] = counts.get(post.content_type, 0) + 1
 
     month_name = calendar.month_name[month]
     total = sum(counts.values())
+    allocation_label = "/".join(str(get_content_weight_percent(ct)) for ct in CONTENT_TYPES)
 
-    print(f"\n{month_name} {year} Content Calendar — 40/25/20/15 Allocation")
+    print(f"\n{month_name} {year} Content Calendar — {allocation_label} Allocation")
     print("=" * 49)
     for ct in CONTENT_TYPES:
         count = counts.get(ct, 0)
         label = get_content_label(ct)
-        pct = get_content_target_percent(ct)
+        pct = get_content_weight_percent(ct)
         print(f"  {label + ':':<34} {count:2d} posts  ({pct}%)")
     print(f"  {'Total:':<28} {total:2d} posts")
     print()
-    print("  Fifth Sundays are assigned to Agency Execution for rebalancing.")
+    print(f"  Cadence: {POSTS_PER_WEEK} post(s)/week, posting days: {POSTING_DAYS}, time: {POSTING_TIME}.")
     if dry_run:
         print(f"  Dry run only; no events were pushed to {calendar_id}.")
     else:
@@ -309,12 +289,19 @@ def main() -> None:
         print(f"ERROR: --year looks wrong (got {args.year})", file=sys.stderr)
         sys.exit(1)
 
+    # --- Validate posting-cadence/pillar-weight configuration up front ---
+    pillar_weights = {key: info["weight"] for key, info in CONTENT_TYPES.items()}
+    try:
+        validate_schedule_config(POSTS_PER_WEEK, POSTING_DAYS, POSTING_TIME, pillar_weights)
+    except ScheduleConfigError as err:
+        print(f"ERROR: invalid scheduling configuration: {err}", file=sys.stderr)
+        sys.exit(1)
+
     print(f"\nGenerating {calendar.month_name[args.month]} {args.year} content calendar …")
     print(f"Calendar target: {args.calendar}\n")
 
     # --- Build schedule ---
-    dates = get_month_dates(args.year, args.month)
-    schedule = build_schedule(dates)
+    schedule = build_schedule(args.year, args.month)
 
     if args.dry_run:
         print("Dry run enabled; no Google Calendar events were created.")

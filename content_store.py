@@ -11,18 +11,26 @@ What it does:
   content_slots is an internal mirror that lets process_content.py query and
   atomically claim open slots without re-deriving the schedule.
 
+  content_slots.scheduled_at is unique on its own (not (scheduled_at,
+  pillar_key)) — one posting opportunity is one slot, regardless of which
+  pillar the strategy later assigns it. See
+  docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md.
+  _migrate_content_slots_unique_constraint() upgrades any database created
+  under the old two-column constraint the first time it's opened.
+
 Dependencies:
   stdlib sqlite3 only.
 """
 
 import sqlite3
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from config import DB_PATH
 
-SCHEMA = """
+SCHEMA_VIDEOS = """
 CREATE TABLE IF NOT EXISTS videos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     file_hash TEXT NOT NULL UNIQUE,
@@ -49,19 +57,78 @@ CREATE TABLE IF NOT EXISTS videos (
     created_at TEXT NOT NULL,
     processed_at TEXT
 );
+"""
 
+SCHEMA_CONTENT_SLOTS = """
 CREATE TABLE IF NOT EXISTS content_slots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scheduled_at TEXT NOT NULL,
+    scheduled_at TEXT NOT NULL UNIQUE,
     pillar_key TEXT NOT NULL,
-    prompt TEXT NOT NULL,
+    prompt TEXT,
     status TEXT NOT NULL DEFAULT 'OPEN',
     assigned_video_id INTEGER REFERENCES videos(id),
     google_calendar_event_id TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE(scheduled_at, pillar_key)
+    created_at TEXT NOT NULL
 );
 """
+
+_SLOT_STATUS_PRIORITY = {"OPEN": 0, "FAILED": 0, "ASSIGNED": 1, "PUBLISHED": 2}
+
+
+def _content_slots_needs_migration(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'content_slots'"
+    ).fetchone()
+    return row is not None and "UNIQUE(scheduled_at, pillar_key)" in (row["sql"] or "")
+
+
+def _migrate_content_slots_unique_constraint(conn: sqlite3.Connection) -> None:
+    """Rebuild content_slots under the new UNIQUE(scheduled_at) constraint.
+
+    SQLite cannot alter a table's constraints in place, so this renames the
+    old table, creates the new one, and copies rows across — keeping at most
+    one row per scheduled_at. If a timestamp somehow has more than one row
+    under the old (scheduled_at, pillar_key) constraint, the row with the
+    most "advanced" status wins (PUBLISHED > ASSIGNED > OPEN/FAILED), tied
+    by lowest id, so an already-assigned/published slot is never silently
+    discarded in favor of a still-open duplicate.
+    """
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("ALTER TABLE content_slots RENAME TO content_slots_old")
+    conn.executescript(SCHEMA_CONTENT_SLOTS)
+
+    rows = conn.execute("SELECT * FROM content_slots_old ORDER BY scheduled_at, id").fetchall()
+    kept: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        key = row["scheduled_at"]
+        current = kept.get(key)
+        if current is None or _SLOT_STATUS_PRIORITY.get(row["status"], 0) > _SLOT_STATUS_PRIORITY.get(current["status"], 0):
+            kept[key] = row
+
+    for row in kept.values():
+        conn.execute(
+            """
+            INSERT INTO content_slots
+                (id, scheduled_at, pillar_key, prompt, status, assigned_video_id, google_calendar_event_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["id"], row["scheduled_at"], row["pillar_key"], row["prompt"],
+                row["status"], row["assigned_video_id"], row["google_calendar_event_id"], row["created_at"],
+            ),
+        )
+    conn.execute("DROP TABLE content_slots_old")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    dropped = len(rows) - len(kept)
+    if dropped:
+        print(
+            f"[content_store] migrated content_slots to UNIQUE(scheduled_at): "
+            f"consolidated {dropped} duplicate-datetime row(s) from the old "
+            f"(scheduled_at, pillar_key) constraint, keeping the most-advanced "
+            f"status per timestamp.",
+            file=sys.stderr,
+        )
 
 
 @dataclass
@@ -97,7 +164,7 @@ class SlotRecord:
     id: int
     scheduled_at: str
     pillar_key: str
-    prompt: str
+    prompt: str | None
     status: str
     assigned_video_id: int | None
     google_calendar_event_id: str | None
@@ -121,7 +188,10 @@ class ContentStore:
         self._conn = sqlite3.connect(self.db_path, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.executescript(SCHEMA)
+        self._conn.executescript(SCHEMA_VIDEOS)
+        if _content_slots_needs_migration(self._conn):
+            _migrate_content_slots_unique_constraint(self._conn)
+        self._conn.executescript(SCHEMA_CONTENT_SLOTS)
 
     def close(self) -> None:
         self._conn.close()
@@ -174,15 +244,18 @@ class ContentStore:
         self,
         scheduled_at: str,
         pillar_key: str,
-        prompt: str,
+        prompt: str | None,
         created_at: str,
         google_calendar_event_id: str | None = None,
     ) -> bool:
-        """Insert a content_slot unless one already exists for (scheduled_at, pillar_key).
+        """Insert a content_slot unless one already exists for this scheduled_at.
 
         Returns True if a new row was created, False if it already existed —
         this is what keeps re-running generate_calendar.py for the same month
-        from duplicating slot records.
+        from duplicating slots, and what stops a changed strategy from
+        silently overwriting an existing slot's pillar/prompt: the row already
+        there always wins, regardless of what the current config would now
+        compute for that timestamp.
         """
         cur = self._conn.execute(
             """

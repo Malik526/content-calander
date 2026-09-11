@@ -2,9 +2,8 @@
 config.py — Configuration for the content calendar generator.
 
 Settings include:
-  - Content pillar labels, allocation targets, and Google Calendar colors
-  - Weekly day → content pillar schedule
-  - Month-end Sunday rebalancing behavior
+  - Content pillar labels, weights, and Google Calendar colors
+  - Posting cadence, posting-day strategy, and posting time
   - Google Calendar auth + API settings
   - Event timing and color IDs per content type
 
@@ -31,15 +30,16 @@ if ENV_FILE.exists():
 
 # ---------------------------------------------------------------------------
 # Content pillar definitions
-# Updated: July 2026
-# Goal: Shift MoreClientsCo toward visible acquisition work while keeping
-# systems, execution, and discipline in the weekly mix.
+# Updated: September 2026 — "target_percent" renamed to "weight" and the
+# weekday-mapping model retired in favor of scheduling.allocate_pillars().
+# See docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md.
+# Weights must sum to 1.0 (validated by scheduling.validate_pillar_weights).
 # ---------------------------------------------------------------------------
 CONTENT_TYPES: dict[str, dict[str, str | float]] = {
     "acquisition": {
         "label": "Customer Acquisition in Action",
         "color_id": "9",
-        "target_percent": 0.40,
+        "weight": 0.40,
         "description": (
             "Outreach and lead generation in action: cold calls, cold emails, "
             "DM outreach, follow-up sequences, booked demos, and the results "
@@ -49,7 +49,7 @@ CONTENT_TYPES: dict[str, dict[str, str | float]] = {
     "building": {
         "label": "Building Systems & Tools",
         "color_id": "10",
-        "target_percent": 0.25,
+        "weight": 0.25,
         "description": (
             "Building or improving internal tools, automation, and the agency's "
             "tech stack: architecture walkthroughs, new features, integrations, "
@@ -59,7 +59,7 @@ CONTENT_TYPES: dict[str, dict[str, str | float]] = {
     "execution": {
         "label": "Agency Execution",
         "color_id": "5",
-        "target_percent": 0.20,
+        "weight": 0.20,
         "description": (
             "Day-to-day agency operating metrics and business execution: "
             "pipeline updates, revenue/MRR, client counts, booking rates, "
@@ -69,7 +69,7 @@ CONTENT_TYPES: dict[str, dict[str, str | float]] = {
     "mindset": {
         "label": "Mindset & Discipline",
         "color_id": "3",
-        "target_percent": 0.15,
+        "weight": 0.15,
         "description": (
             "Personal mindset, discipline, and reflection: handling rejection, "
             "consistency over intensity, personal history and lessons applied "
@@ -85,21 +85,30 @@ DEFAULT_MONTH = int(os.getenv("CONTENT_CALENDAR_DEFAULT_MONTH", "6"))
 DEFAULT_YEAR = int(os.getenv("CONTENT_CALENDAR_DEFAULT_YEAR", "2026"))
 
 # ---------------------------------------------------------------------------
-# Weekly schedule: day name → content pillar key
+# Posting cadence and pillar allocation strategy
+# Replaces the old fixed WEEKLY_SCHEDULE / FIFTH_SUNDAY_CONTENT_TYPE mapping,
+# which coupled "when to post" to "what pillar" through weekday alone.
+# See scheduling.py and docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md.
 # ---------------------------------------------------------------------------
-WEEKLY_SCHEDULE: dict[str, str] = {
-    "monday": "acquisition",
-    "tuesday": "building",
-    "wednesday": "acquisition",
-    "thursday": "execution",
-    "friday": "building",
-    "saturday": "acquisition",
-    "sunday": "mindset",
-}
 
-# Fifth Sundays rebalance the monthly mix toward Agency Execution, which runs
-# low in the normal weekly pattern.
-FIFTH_SUNDAY_CONTENT_TYPE = "execution"
+# Posts per week, 1-7. The month's actual slot count is derived from real
+# calendar dates (scheduling.generate_posting_dates), not posts_per_week * 4.
+POSTS_PER_WEEK = 7
+
+# "auto" (scheduling.auto_posting_weekdays picks evenly-spaced weekdays) or an
+# explicit list of exactly POSTS_PER_WEEK distinct weekday names, e.g.
+# ["monday", "wednesday", "friday"]. Explicit days always override auto.
+POSTING_DAYS: str | list[str] = "auto"
+
+# "HH:MM" 24-hour local time (in TIMEZONE) applied to every generated slot.
+POSTING_TIME = "09:00"
+
+# Whether generated content_slots get a prompt attached from PROMPTS
+# (rotated per pillar, same rule as before: sequential, wraps only after
+# every prompt in the list has been used once). When False, every
+# content_slot.prompt is None. Either way, scheduling and slot matching
+# never depend on prompt text — see slot_matcher.py.
+PROMPT_GENERATION_ENABLED = True
 
 # ---------------------------------------------------------------------------
 # Google Calendar API
@@ -120,9 +129,9 @@ TIMEZONE = os.getenv("CONTENT_CALENDAR_TIMEZONE", "America/New_York")
 
 # ---------------------------------------------------------------------------
 # Event timing
+# Start time now comes from POSTING_TIME above; this only sets event length.
 # ---------------------------------------------------------------------------
-EVENT_START_HOUR = 9          # 9:00 AM local time
-EVENT_DURATION_MINUTES = 30   # 9:00 → 9:30 AM
+EVENT_DURATION_MINUTES = 30
 
 # ---------------------------------------------------------------------------
 # Content processing pipeline (process_content.py)

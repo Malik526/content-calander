@@ -99,9 +99,10 @@ account email (found in the JSON key as `"client_email"`) with
 | File | Purpose |
 |---|---|
 | `generate_calendar.py` | Schedule generation, Google Calendar push, `content_slots` persistence |
+| `scheduling.py` | Posting-date generation and weighted pillar allocation (pure functions, no I/O) |
 | `process_content.py` | Video ingestion orchestrator (discover → inspect → transcribe → classify → route → report) |
-| `config.py` | All settings: pillar labels/descriptions, allocations, weekly schedule, auth paths, color IDs, pipeline config |
-| `prompts.py` | Every daily short-form video prompt organised by pillar |
+| `config.py` | All settings: pillar labels/descriptions/weights, posting cadence, auth paths, color IDs, pipeline config |
+| `prompts.py` | Every daily short-form video prompt organised by pillar (optional; see Customising) |
 | `media.py` | ffprobe inspection, TikTok-compatibility check, audio extraction |
 | `transcription.py` | `Transcriber` interface + local `faster-whisper` implementation |
 | `classification.py` | `ContentClassifier` interface + Claude implementation |
@@ -115,39 +116,28 @@ Run tests with `python3 -m pytest`.
 
 ## Customising
 
-**Change allocation percentages, labels, colors, or weekly day assignments:**
-Edit `config.py` → `CONTENT_TYPES`, `WEEKLY_SCHEDULE`, and `FIFTH_SUNDAY_CONTENT_TYPE`.
+**Posting cadence, days, and time** — edit `config.py`:
 
-**Add or edit prompts:**
-Edit `prompts.py` → the `PROMPTS` dict. Each key must match a content type string
-used in `config.py`.
+```python
+POSTS_PER_WEEK = 3                              # 1-7
+POSTING_DAYS = ["monday", "wednesday", "friday"] # or "auto" for evenly-spaced weekdays
+POSTING_TIME = "10:00"                           # "HH:MM", 24-hour, local (TIMEZONE)
+```
 
----
+`POSTING_DAYS = "auto"` deterministically spreads `POSTS_PER_WEEK` posts across the week (`scheduling.auto_posting_weekdays`) with no randomization; an explicit list always overrides it and must have exactly `POSTS_PER_WEEK` distinct weekday names.
 
-## Weekly Posting Schedule
+**Content pillars and their share of the schedule** — edit `config.py` → `CONTENT_TYPES`. Any number of pillars is supported; each needs a `label`, `color_id`, `description` (used by the classifier), and `weight`. Weights must sum to `1.0`:
 
-| Day | Content Type |
-|---|---|
-| Monday | Customer Acquisition in Action |
-| Tuesday | Building Systems & Tools |
-| Wednesday | Customer Acquisition in Action |
-| Thursday | Agency Execution |
-| Friday | Building Systems & Tools |
-| Saturday | Customer Acquisition in Action |
-| Sunday | Mindset & Discipline |
+```python
+CONTENT_TYPES = {
+    "building": {"label": "Building Systems & Tools", "color_id": "10", "weight": 0.50, "description": "..."},
+    "acquisition": {"label": "Customer Acquisition in Action", "color_id": "9", "weight": 0.30, "description": "..."},
+    "mindset": {"label": "Mindset & Discipline", "color_id": "3", "weight": 0.20, "description": "..."},
+}
+```
 
-Fifth Sundays are assigned to Agency Execution to rebalance the monthly allocation.
+Monthly counts are computed from real calendar dates and the largest-remainder method (`scheduling.allocate_pillars`), then interleaved across the month (`scheduling.distribute_pillars`) rather than clustered — see `docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md`. Invalid configuration (weights not summing to 1.0, a bad posting time, mismatched posting-day count, etc.) fails clearly at startup rather than silently normalizing.
 
----
+**Prompts** — edit `prompts.py` → the `PROMPTS` dict; each key must match a pillar key in `CONTENT_TYPES`. Prompts are optional: set `PROMPT_GENERATION_ENABLED = False` in `config.py` to generate a schedule with no prompt text at all (`content_slots.prompt` will be `NULL`). Either way, prompts never affect which date or pillar a slot gets.
 
-## Content Allocation Targets
-
-| Type | Target |
-|---|---|
-| Customer Acquisition in Action | 40% |
-| Building Systems & Tools | 25% |
-| Agency Execution | 20% |
-| Mindset & Discipline | 15% |
-
-> Actual counts are driven by the weekly schedule above.
-> The targets are reference benchmarks only.
+> Changing the strategy and re-running `generate_calendar.py` for a month that already has persisted slots only *adds* slots for newly-covered dates — it never rewrites an existing slot's pillar or prompt. Mixing two strategies within one already-generated month is a known limitation; regenerate the whole month fresh (see ADR-0002) if you need a clean re-strategize.
