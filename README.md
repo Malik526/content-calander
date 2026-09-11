@@ -1,11 +1,14 @@
 # Content Calendar Generator
 
-Generates a full month of short-form video content calendar events and pushes them to Google Calendar automatically.
-Run once at the start of each month.
+Generates a full month of short-form video content calendar events and pushes them to Google Calendar automatically (run once at the start of each month), and automates routing recorded videos into that schedule: drop `.mov`/`.mp4` files into `content/incoming/`, run `process_content.py`, and each video is transcribed, classified into a content pillar, and assigned to the earliest matching future posting slot.
+
+See `PROJECT_STATE.md` for current architecture and `docs/decisions/` for why it's built this way.
 
 ---
 
-## Run Command
+## Run Commands
+
+**Generate a month's calendar:**
 
 ```bash
 python3 generate_calendar.py --month [MM] --year [YYYY]
@@ -29,6 +32,16 @@ python3 generate_calendar.py --month 07 --year 2026 --calendar your_calendar_id@
 python3 generate_calendar.py --month 07 --year 2026 --dry-run
 ```
 
+**Process incoming videos:**
+
+```bash
+python3 process_content.py
+python3 process_content.py --dry-run    # classify/transcribe and cache, but never claim a slot or move a file
+python3 process_content.py --verbose    # print media/transcript/classification detail per video
+```
+
+Place `.mov`/`.mp4` files in `content/incoming/` first. A video is only auto-assigned once you have generated a month whose slots are still in the future — see "Video Processing Setup" below.
+
 ---
 
 ## Setup
@@ -38,6 +51,17 @@ python3 generate_calendar.py --month 07 --year 2026 --dry-run
 ```bash
 pip install -r requirements.txt
 ```
+
+You'll also need `ffmpeg` (which provides `ffprobe`) on your `PATH` for video processing — it's a system binary, not a Python package:
+
+```bash
+# macOS
+brew install ffmpeg
+# Ubuntu/Debian
+sudo apt-get install ffmpeg
+```
+
+`process_content.py` checks for `ffmpeg`/`ffprobe` before touching any video and fails with this same instruction if they're missing.
 
 ### 2. Configure local environment
 
@@ -62,16 +86,30 @@ In Google Calendar settings → "Share with specific people", add the service
 account email (found in the JSON key as `"client_email"`) with
 "Make changes to events" permission.
 
+### 5. Video processing setup
+
+- Set `ANTHROPIC_API_KEY` in `.env` (used for pillar classification via Claude).
+- First transcription run downloads the local `faster-whisper` model weights (`base` by default, `CONTENT_CALENDAR_WHISPER_MODEL` to change it) — no API key needed for transcription, it runs fully offline after that.
+- `process_content.py` only routes videos into **internally persisted** `content_slots`, written by `generate_calendar.py`. If you already generated upcoming months before this feature existed, re-run `generate_calendar.py` for those months so their slots get persisted — there is no automatic import from existing Google Calendar events.
+
 ---
 
 ## File Reference
 
 | File | Purpose |
 |---|---|
-| `generate_calendar.py` | Main script — orchestrates schedule generation and Google Calendar push |
-| `config.py` | All settings: pillar labels, allocations, weekly schedule, auth paths, color IDs |
+| `generate_calendar.py` | Schedule generation, Google Calendar push, `content_slots` persistence |
+| `process_content.py` | Video ingestion orchestrator (discover → inspect → transcribe → classify → route → report) |
+| `config.py` | All settings: pillar labels/descriptions, allocations, weekly schedule, auth paths, color IDs, pipeline config |
 | `prompts.py` | Every daily short-form video prompt organised by pillar |
+| `media.py` | ffprobe inspection, TikTok-compatibility check, audio extraction |
+| `transcription.py` | `Transcriber` interface + local `faster-whisper` implementation |
+| `classification.py` | `ContentClassifier` interface + Claude implementation |
+| `slot_matcher.py` | Deterministic earliest-open-slot selection |
+| `content_store.py` | SQLite persistence (`videos`, `content_slots`) |
 | `requirements.txt` | Python package dependencies |
+
+Run tests with `python3 -m pytest`.
 
 ---
 

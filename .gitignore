@@ -7,3 +7,15 @@ __pycache__/
 
 # Local safety backups created during manual migrations.
 *.backup
+
+# Content processing pipeline: personal media, derived DB, and test cache.
+# Directory structure is preserved via .gitkeep; contents are user data.
+content/incoming/*
+content/processed/*
+content/failed/*
+!content/incoming/.gitkeep
+!content/processed/.gitkeep
+!content/failed/.gitkeep
+data/*.db
+data/*.db-*
+.pytest_cache/

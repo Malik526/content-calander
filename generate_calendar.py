@@ -20,7 +20,7 @@ import argparse
 import calendar
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import NamedTuple
 
 from google.oauth2.service_account import Credentials
@@ -40,6 +40,7 @@ from config import (
     TIMEZONE,
     WEEKLY_SCHEDULE,
 )
+from content_store import ContentStore
 from prompts import PROMPTS
 
 
@@ -180,16 +181,25 @@ def build_schedule(dates: list[date]) -> list[ScheduledPost]:
 # Calendar event creation
 # ---------------------------------------------------------------------------
 
+def slot_start_datetime(post: ScheduledPost) -> datetime:
+    """Naive local wall-clock start time (in TIMEZONE) for a scheduled post.
+
+    Shared by build_event_body (Google Calendar) and push_events
+    (content_slots) so both always agree on the exact scheduled_at value.
+    """
+    return datetime(
+        post.day.year, post.day.month, post.day.day,
+        EVENT_START_HOUR, 0, 0
+    )
+
+
 def build_event_body(post: ScheduledPost) -> dict:
     """
     Construct the Google Calendar event dict for a single post.
 
     Uses dateTime (not all-day) so the block shows at 9:00–9:30 AM.
     """
-    start_dt = datetime(
-        post.day.year, post.day.month, post.day.day,
-        EVENT_START_HOUR, 0, 0
-    )
+    start_dt = slot_start_datetime(post)
     end_dt = start_dt + timedelta(minutes=EVENT_DURATION_MINUTES)
 
     return {
@@ -207,18 +217,25 @@ def build_event_body(post: ScheduledPost) -> dict:
     }
 
 
-def push_events(service, calendar_id: str, schedule: list[ScheduledPost]) -> int:
+def push_events(service, calendar_id: str, schedule: list[ScheduledPost], store: ContentStore) -> tuple[int, int]:
     """
-    Insert all scheduled posts as Google Calendar events.
+    Insert all scheduled posts as Google Calendar events, and mirror each one
+    into content_slots for process_content.py to route videos against.
 
-    Returns the count of successfully created events.
+    Returns (events_created, slots_created). slots_created is smaller than
+    events_created only when re-running generate_calendar.py for a month
+    that already has persisted slots — insert_slot_if_missing skips those
+    rather than duplicating them, so content_slots stays idempotent even
+    though re-running still creates duplicate Google Calendar events (existing,
+    unchanged behavior).
     """
     created = 0
+    slots_created = 0
 
     for post in schedule:
         event_body = build_event_body(post)
         try:
-            service.events().insert(calendarId=calendar_id, body=event_body).execute()
+            event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
             created += 1
             print(
                 f"  Created: {post.day.strftime('%a %b %d')} — "
@@ -226,8 +243,19 @@ def push_events(service, calendar_id: str, schedule: list[ScheduledPost]) -> int
             )
         except HttpError as err:
             print(f"  ERROR on {post.day}: {err}", file=sys.stderr)
+            continue
 
-    return created
+        was_new = store.insert_slot_if_missing(
+            scheduled_at=slot_start_datetime(post).isoformat(),
+            pillar_key=post.content_type,
+            prompt=post.prompt,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            google_calendar_event_id=event.get("id"),
+        )
+        if was_new:
+            slots_created += 1
+
+    return created, slots_created
 
 
 # ---------------------------------------------------------------------------
@@ -300,8 +328,10 @@ def main() -> None:
         print(f"ERROR: {err}", file=sys.stderr)
         sys.exit(1)
 
-    # --- Push all events ---
-    push_events(service, args.calendar, schedule)
+    # --- Push all events and mirror them into content_slots ---
+    with ContentStore() as store:
+        events_created, slots_created = push_events(service, args.calendar, schedule, store)
+    print(f"\n  {slots_created} new content_slots persisted ({events_created} calendar events created).")
 
     # --- Final summary ---
     print_summary(schedule, args.month, args.year, args.calendar)
