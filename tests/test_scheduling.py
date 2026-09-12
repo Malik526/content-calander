@@ -1,7 +1,7 @@
 """Tests for scheduling.py: posting-date generation, pillar allocation,
-pillar sequencing, and configuration validation."""
+pillar sequencing, configuration validation, and future-only filtering."""
 
-from datetime import time
+from datetime import datetime, time
 
 import pytest
 
@@ -11,6 +11,7 @@ from scheduling import (
     allocate_pillars,
     auto_posting_weekdays,
     distribute_pillars,
+    filter_future_dates,
     generate_posting_dates,
     parse_posting_time,
     resolve_posting_weekdays,
@@ -277,3 +278,63 @@ def test_validate_schedule_config_end_to_end_valid():
 def test_validate_schedule_config_surfaces_weight_errors():
     with pytest.raises(ScheduleConfigError):
         validate_schedule_config(3, "auto", "10:00", {"a": 0.5, "b": 0.6})
+
+
+# ---------------------------------------------------------------------------
+# Future-only filtering (Milestone 1.1.1)
+# ---------------------------------------------------------------------------
+
+def test_filter_future_dates_removes_past_dates_midway_through_month():
+    dates = generate_posting_dates(2026, 9, 7, "auto", "09:00")
+    start_at = datetime(2026, 9, 12, 13, 0)  # Sep 12, 1:00 PM
+
+    future = filter_future_dates(dates, start_at)
+
+    assert all(dt >= start_at for dt in future)
+    assert len(future) == len([dt for dt in dates if dt.date() >= start_at.date() and dt >= start_at])
+    assert len(future) == 18  # Sep 13-30 inclusive, one per day at 7 posts/week
+
+
+def test_filter_future_dates_keeps_same_day_slot_when_posting_time_still_ahead():
+    dates = [datetime(2026, 9, 12, 9, 0)]
+    start_at = datetime(2026, 9, 12, 8, 0)  # now is before today's 9:00 AM slot
+
+    assert filter_future_dates(dates, start_at) == [datetime(2026, 9, 12, 9, 0)]
+
+
+def test_filter_future_dates_excludes_same_day_slot_when_posting_time_already_passed():
+    dates = [datetime(2026, 9, 12, 9, 0)]
+    start_at = datetime(2026, 9, 12, 10, 0)  # now is after today's 9:00 AM slot
+
+    assert filter_future_dates(dates, start_at) == []
+
+
+def test_filter_future_dates_boundary_is_inclusive():
+    """scheduled_at == start_at must be kept (>=, not >)."""
+    boundary = datetime(2026, 9, 12, 9, 0)
+    dates = [boundary]
+
+    assert filter_future_dates(dates, boundary) == [boundary]
+
+
+def test_filter_future_dates_future_month_is_unchanged():
+    dates = generate_posting_dates(2026, 10, 7, "auto", "09:00")
+    start_at = datetime(2026, 9, 12, 13, 0)  # "now" is entirely before October
+
+    assert filter_future_dates(dates, start_at) == dates
+
+
+def test_filter_future_dates_entirely_past_month_returns_empty():
+    dates = generate_posting_dates(2026, 8, 7, "auto", "09:00")
+    start_at = datetime(2026, 9, 12, 13, 0)  # "now" is entirely after August
+
+    assert filter_future_dates(dates, start_at) == []
+
+
+def test_filter_future_dates_preserves_ascending_order():
+    dates = generate_posting_dates(2026, 9, 7, "auto", "09:00")
+    start_at = datetime(2026, 9, 5, 0, 0)
+
+    future = filter_future_dates(dates, start_at)
+
+    assert future == sorted(future)

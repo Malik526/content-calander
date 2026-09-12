@@ -1,13 +1,22 @@
 """Tests for generate_calendar.py's composition of scheduling.py, and its
 content_slots persistence hook (idempotency + the new scheduled_at-only
-uniqueness invariant)."""
+uniqueness invariant).
+
+These pass an explicit, fixed-in-the-past start_at so full-month composition
+stays deterministic regardless of wall-clock time — the future-only
+filtering behavior itself (start_at defaulted, partial/entirely-past months)
+is covered separately in tests/test_future_only_schedule.py."""
+
+from datetime import datetime
 
 from content_store import ContentStore
 from generate_calendar import build_event_body, build_schedule, get_content_label
 
+PAST_BOUNDARY = datetime(2000, 1, 1)  # old enough that no configured month is ever "in the past" relative to it
+
 
 def test_build_schedule_matches_configured_pillar_weights():
-    schedule = build_schedule(2026, 9)  # September 2026: default POSTS_PER_WEEK=7, all pillars
+    schedule = build_schedule(2026, 9, start_at=PAST_BOUNDARY)  # September 2026: default POSTS_PER_WEEK, all pillars
     counts = {}
     for post in schedule:
         counts[post.content_type] = counts.get(post.content_type, 0) + 1
@@ -17,8 +26,8 @@ def test_build_schedule_matches_configured_pillar_weights():
 
 
 def test_build_schedule_is_deterministic():
-    first = build_schedule(2026, 6)
-    second = build_schedule(2026, 6)
+    first = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
+    second = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
 
     assert [(p.scheduled_at, p.content_type, p.prompt) for p in first] == [
         (p.scheduled_at, p.content_type, p.prompt) for p in second
@@ -26,12 +35,12 @@ def test_build_schedule_is_deterministic():
 
 
 def test_build_schedule_attaches_prompts_by_default():
-    schedule = build_schedule(2026, 6)
+    schedule = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
     assert all(post.prompt for post in schedule)
 
 
 def test_build_event_body_uses_scheduled_at_directly():
-    schedule = build_schedule(2026, 6)
+    schedule = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
     post = schedule[0]
 
     body = build_event_body(post)
@@ -42,7 +51,7 @@ def test_build_event_body_uses_scheduled_at_directly():
 
 def test_generate_calendar_persists_content_slots_idempotently(tmp_path):
     """Re-running generation for the same month must not duplicate content_slots."""
-    schedule = build_schedule(2026, 6)
+    schedule = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
 
     with ContentStore(db_path=tmp_path / "test.db") as store:
         created_first_run = sum(

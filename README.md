@@ -1,6 +1,8 @@
 # Content Calendar Generator
 
-Generates a full month of short-form video content calendar events and pushes them to Google Calendar automatically (run once at the start of each month), and automates routing recorded videos into that schedule: drop `.mov`/`.mp4` files into `content/incoming/`, run `process_content.py`, and each video is transcribed, classified into a content pillar, and assigned to the earliest matching future posting slot.
+Generates a month of short-form video content calendar events and pushes them to Google Calendar automatically, and automates routing recorded videos into that schedule: drop `.mov`/`.mp4` files into `content/incoming/`, run `process_content.py`, and each video is transcribed, classified into a content pillar, and assigned to the earliest matching future posting slot.
+
+Generation is **future-only**: run it partway through the current month and it schedules only what's left, not the whole month. See "Run Commands" below and `PROJECT_STATE.md`.
 
 See `PROJECT_STATE.md` for current architecture and `docs/decisions/` for why it's built this way.
 
@@ -10,7 +12,7 @@ See `PROJECT_STATE.md` for current architecture and `docs/decisions/` for why it
 
 ## Run Commands
 
-**Generate a month's calendar** — normal operation always targets one dedicated, app-owned "Content Automation" calendar (created on first real run, reused after that — never your primary calendar):
+**Generate a month's calendar** — normal operation always targets one dedicated, app-owned "Content Automation" calendar (created on first real run, reused after that — never your primary calendar). Only posting datetimes that haven't already passed are generated: for the current month that means whatever's left from now, not the whole month; for a past month, nothing.
 
 ```bash
 python3 generate_calendar.py --month [MM] --year [YYYY]
@@ -21,6 +23,8 @@ python3 generate_calendar.py --month [MM] --year [YYYY]
 ```bash
 python3 generate_calendar.py --month 07 --year 2026
 ```
+
+If every candidate posting datetime for the requested month has already passed, the command prints `No future posting slots remain for <Month> <Year>.` and exits cleanly — no Calendar or database writes.
 
 **Preview without creating events or touching Google Calendar at all**
 
@@ -151,6 +155,8 @@ POSTING_TIME = "10:00"                           # "HH:MM", 24-hour, local (TIME
 ```
 
 `POSTING_DAYS = "auto"` deterministically spreads `POSTS_PER_WEEK` posts across the week (`scheduling.auto_posting_weekdays`) with no randomization; an explicit list always overrides it and must have exactly `POSTS_PER_WEEK` distinct weekday names.
+
+**Future-only generation:** candidate posting datetimes before "now" (in `TIMEZONE`) are discarded *before* pillar weights are allocated — so running `generate_calendar.py` for the current month allocates the configured percentages across whatever's actually left, not the full month. A same-day slot is still generated if its `POSTING_TIME` hasn't passed yet. `build_schedule(year, month, start_at=...)` accepts an explicit boundary (mainly for tests); omitted, it resolves the real current time via the same helper `slot_matcher.py` uses for slot matching, so there's one single definition of "now" across the whole app.
 
 **Content pillars and their share of the schedule** — edit `config.py` → `CONTENT_TYPES`. Any number of pillars is supported; each needs a `label`, `color_id`, `description` (used by the classifier), and `weight`. Weights must sum to `1.0`:
 

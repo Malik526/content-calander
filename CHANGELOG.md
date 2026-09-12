@@ -2,6 +2,19 @@
 
 ## 2026-09-12
 
+### Future-Only Calendar Generation — Milestone 1.1.1
+
+Schedule generation now discards posting datetimes that have already passed *before* pillar weights are allocated, so `generate_calendar.py` run partway through the current month only schedules what's left — matching what the routing pipeline can actually assign videos into.
+
+- `scheduling.py`: added `filter_future_dates(dates, start_at)` — pure, inclusive boundary (`scheduled_at >= start_at`, so a same-day slot is kept if its `POSTING_TIME` hasn't passed yet), takes no clock reading of its own.
+- `generate_calendar.build_schedule(year, month, start_at=None)`: filters candidate dates via `filter_future_dates` immediately after `generate_posting_dates`, *before* calling `allocate_pillars`/`distribute_pillars` — pillar counts are computed against the remaining future count, not the full month. `start_at` is injectable (tests pass it explicitly); omitted, it resolves via `slot_matcher.now_in_config_timezone()` — reusing the app's one existing "what does now mean" convention rather than introducing a second one.
+- `generate_calendar.py main()`: an empty schedule (entirely past month) prints `No future posting slots remain for <Month> <Year>.` and returns before resolving/creating any calendar or opening `ContentStore` — no Calendar writes, no `content_slots` writes, in both dry-run and real mode.
+- A future month, or the future portion of the current month, is unaffected — this only ever removes candidates, never adds or reorders them.
+- Added `tests/test_future_only_schedule.py` and extended `tests/test_scheduling.py` with `filter_future_dates` coverage (past-date removal, same-day boundary inclusive/exclusive, future/entirely-past months, ascending order). Updated `tests/test_generate_calendar.py` and `tests/test_calendar_target.py` to pass an explicit fixed `start_at`/mocked "now" — those tests exercise full-month composition and calendar-targeting respectively, not this feature, so they needed to stop depending on wall-clock reality once filtering became real.
+- Transcription, classification, slot matching, OAuth/calendar ownership, and embedding behavior are unchanged, as scoped.
+
+Validation: `python3 -m pytest` (173 passed, up from 157). Manually confirmed against the real current date (2026-09-12): `--dry-run` for September 2026 correctly starts at today's still-upcoming slot and allocates 40/30/20/10 across the 11 remaining posts (5/3/2/1); July 2026 (entirely past) prints the clean message with zero side effects in both dry-run and real mode; October 2026 (entirely future) generates its full 18-post schedule unaffected.
+
 ### Dedicated App-Owned Google Calendar — Milestone 1.4
 
 Replaced the implicit "whatever calendar `DEFAULT_CALENDAR_ID`/`--calendar` names, default `primary`" target with one dedicated, app-owned Google Calendar ("Content Automation") that normal operation always uses, and that `clear_calendar.py` can safely wipe without any risk to the user's primary or other calendars.

@@ -4,12 +4,21 @@ opt-in, service-account override, and dry-run never touches Google at all.
 All Google API calls mocked."""
 
 import sys
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
 
 import calendar_manager
 import generate_calendar
+
+
+@pytest.fixture(autouse=True)
+def fixed_now(monkeypatch):
+    """These tests target month=6/year=2026 as "the full month" — fix "now"
+    to well before that so future-only filtering (see
+    tests/test_future_only_schedule.py) never empties the schedule here."""
+    monkeypatch.setattr(generate_calendar, "now_in_config_timezone", lambda: datetime(2020, 1, 1))
 
 
 def test_calendar_flag_defaults_to_none(monkeypatch):

@@ -125,6 +125,22 @@ def generate_posting_dates(
     ]
 
 
+def filter_future_dates(dates: list[datetime], start_at: datetime) -> list[datetime]:
+    """Keep only posting datetimes at or after start_at.
+
+    Inclusive (`>=`): a posting slot scheduled exactly at the boundary is
+    still valid, so a same-day slot whose configured posting time has not
+    yet arrived is kept. Callers are responsible for resolving what "now"
+    means (see generate_calendar.build_schedule) — this function is pure
+    and takes no clock reading of its own, so pillar allocation against the
+    filtered result stays fully deterministic and testable.
+
+    `dates` is expected ascending (as generate_posting_dates returns it);
+    the result preserves that order.
+    """
+    return [dt for dt in dates if dt >= start_at]
+
+
 # ---------------------------------------------------------------------------
 # WHAT: pillar allocation and distribution
 # ---------------------------------------------------------------------------

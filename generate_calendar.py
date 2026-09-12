@@ -2,12 +2,16 @@
 generate_calendar.py — Content calendar generator for MoreClientsCo.
 
 What it does:
-  Generates a full month of content calendar events from a configurable
-  posting cadence (posts/week, posting-day strategy, posting time) and
-  per-pillar percentage weights, and pushes each event to a dedicated,
-  app-owned Google Calendar (created/reused via calendar_manager.py, OAuth
-  — never "primary"). Prompts are rotated sequentially per content type so
-  no prompt repeats until all in its list have been used. See
+  Generates a month of content calendar events from a configurable posting
+  cadence (posts/week, posting-day strategy, posting time) and per-pillar
+  percentage weights, and pushes each event to a dedicated, app-owned
+  Google Calendar (created/reused via calendar_manager.py, OAuth — never
+  "primary"). Generation is future-only: posting datetimes already in the
+  past (relative to now, or an injected start_at) are discarded before
+  pillar weights are allocated, so a month already partly elapsed only
+  gets slots for what's left — see build_schedule(). Prompts are rotated
+  sequentially per content type so no prompt repeats until all in its list
+  have been used. See
   docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md
   and docs/decisions/0004-dedicated-google-calendar-ownership.md.
 
@@ -55,9 +59,11 @@ from scheduling import (
     ScheduleConfigError,
     allocate_pillars,
     distribute_pillars,
+    filter_future_dates,
     generate_posting_dates,
     validate_schedule_config,
 )
+from slot_matcher import now_in_config_timezone
 
 
 # ---------------------------------------------------------------------------
@@ -150,16 +156,26 @@ def get_content_weight_percent(content_type: str) -> int:
     return int(round(float(CONTENT_TYPES[content_type]["weight"]) * 100))
 
 
-def build_schedule(year: int, month: int) -> list[ScheduledPost]:
+def build_schedule(year: int, month: int, start_at: datetime | None = None) -> list[ScheduledPost]:
     """
     Build the month's schedule: WHEN comes from scheduling.generate_posting_dates
-    (cadence + posting days + posting time); WHAT pillar comes from
-    scheduling.allocate_pillars (largest remainder) + distribute_pillars
-    (spread pillars evenly rather than clustered). Prompts, if enabled, are
-    attached last and rotate sequentially per pillar — they never influence
-    the date or pillar decision.
+    (cadence + posting days + posting time), then scheduling.filter_future_dates
+    discards anything scheduled before start_at (defaulting to now, in
+    config.TIMEZONE — see slot_matcher.now_in_config_timezone, reused here
+    rather than introducing a second "what does now mean" convention).
+    WHAT pillar comes from scheduling.allocate_pillars (largest remainder)
+    + distribute_pillars (spread pillars evenly rather than clustered),
+    computed against the *filtered* future-only count — a month already
+    partly in the past is never allocated against its full original size.
+    Prompts, if enabled, are attached last and rotate sequentially per
+    pillar — they never influence the date or pillar decision.
+
+    start_at is injectable so this stays deterministic/testable; pass it
+    explicitly in tests, leave it None in normal use.
     """
     dates = generate_posting_dates(year, month, POSTS_PER_WEEK, POSTING_DAYS, POSTING_TIME)
+    boundary = start_at if start_at is not None else now_in_config_timezone()
+    dates = filter_future_dates(dates, boundary)
 
     pillar_weights = {key: info["weight"] for key, info in CONTENT_TYPES.items()}
     counts = allocate_pillars(len(dates), pillar_weights)
@@ -313,8 +329,13 @@ def main() -> None:
     else:
         print("Calendar target: dedicated app-owned 'Content Automation' calendar (resolved at run time)\n")
 
-    # --- Build schedule ---
+    # --- Build schedule (future-only: past-dated candidates are discarded
+    #     before pillar allocation, so weights apply only to what's left) ---
     schedule = build_schedule(args.year, args.month)
+
+    if not schedule:
+        print(f"No future posting slots remain for {calendar.month_name[args.month]} {args.year}.")
+        return
 
     if args.dry_run:
         print("Dry run enabled; no Google Calendar events were created, no calendar was resolved/created.")
