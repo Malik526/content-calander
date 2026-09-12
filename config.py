@@ -148,11 +148,64 @@ SERVICE_ACCOUNT_FILE = os.getenv(
     "~/growth_agency/credentials/service-account.json",
 )
 
-# Calendar to write events to; overrideable via --calendar flag
+# Legacy/advanced-override calendar ID. No longer used as an implicit
+# default anywhere — --calendar (generate_calendar.py, clear_calendar.py)
+# defaults to None so the dedicated app calendar (below) is always the
+# normal-operation target. Kept only so an explicit --calendar <id> without
+# a value has something sane to reference; never auto-applied. See
+# docs/decisions/0004-dedicated-google-calendar-ownership.md.
 DEFAULT_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 
 # Timezone string used for all events
 TIMEZONE = os.getenv("CONTENT_CALENDAR_TIMEZONE", "America/New_York")
+
+# ---------------------------------------------------------------------------
+# Dedicated app-owned Google Calendar
+# Added: September 2026. Normal operation (no --calendar override) always
+# targets this calendar, created/owned via user OAuth (not the shared
+# service account) so a human owns it, per Google's guidance for apps that
+# create secondary calendars. See
+# docs/decisions/0004-dedicated-google-calendar-ownership.md.
+# ---------------------------------------------------------------------------
+
+# Display name/description for the calendar the app creates on first real
+# (non-dry-run) generation, and reuses on every run after that.
+APP_CALENDAR_SUMMARY = os.getenv("CONTENT_CALENDAR_APP_CALENDAR_SUMMARY", "Content Automation")
+APP_CALENDAR_DESCRIPTION = (
+    "Managed by content-calendar (growth_agency/internal-tools/content-calendar). "
+    "Events here are created/cleared by the app — avoid adding unrelated events."
+)
+
+# Persisted identity of the dedicated calendar (calendar_id + summary), so
+# it is reused rather than recreated on every run. Not a display-name
+# lookup — display names are not unique.
+APP_CALENDAR_STATE_PATH = Path(
+    os.getenv(
+        "CONTENT_CALENDAR_APP_CALENDAR_STATE_PATH",
+        str(Path(__file__).with_name("data") / "calendar_state.json"),
+    )
+).expanduser()
+
+# OAuth (not the service account) is used specifically for creating/owning
+# the dedicated calendar and writing/clearing its events, so a human account
+# owns it. google-auth-oauthlib's InstalledAppFlow caches a refresh token
+# after one interactive browser consent, so only the very first real run
+# needs a browser. CALENDAR_OAUTH_CLIENT_SECRETS_PATH must be downloaded
+# once from Google Cloud Console (OAuth 2.0 Client ID, Desktop app type, on
+# a project with the Calendar API enabled) — see README.md setup.
+CALENDAR_OAUTH_SCOPES = ["https://www.googleapis.com/auth/calendar"]
+CALENDAR_OAUTH_CLIENT_SECRETS_PATH = Path(
+    os.getenv(
+        "CONTENT_CALENDAR_OAUTH_CLIENT_SECRETS",
+        str(Path.home() / ".config" / "content-calendar" / "calendar_oauth_client_secrets.json"),
+    )
+).expanduser()
+CALENDAR_OAUTH_TOKEN_PATH = Path(
+    os.getenv(
+        "CONTENT_CALENDAR_OAUTH_TOKEN_PATH",
+        str(Path.home() / ".config" / "content-calendar" / "calendar_oauth_token.json"),
+    )
+).expanduser()
 
 # ---------------------------------------------------------------------------
 # Event timing

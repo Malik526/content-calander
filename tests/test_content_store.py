@@ -165,3 +165,53 @@ def test_opening_a_database_missing_classifier_columns_adds_them(tmp_path):
         updated = store.get_video_by_hash("abc")
         assert updated.classification_margin == 0.12
         assert updated.classifier == "embeddings"
+
+
+def test_list_slots_by_status_filters_correctly(store):
+    store.insert_slot_if_missing("2026-09-01T09:00:00", "engineering", "p", "2026-01-01T00:00:00")
+    store.insert_slot_if_missing("2026-09-02T09:00:00", "career", "p", "2026-01-01T00:00:00")
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    slot = store.find_earliest_open_slot("career", "2000-01-01T00:00:00")
+    store.assign_slot(video.id, slot.id)
+
+    open_slots = store.list_slots_by_status(["OPEN"])
+    assigned_slots = store.list_slots_by_status(["ASSIGNED"])
+
+    assert len(open_slots) == 1
+    assert open_slots[0].pillar_key == "engineering"
+    assert len(assigned_slots) == 1
+    assert assigned_slots[0].pillar_key == "career"
+
+
+def test_delete_slot_removes_open_slot(store):
+    store.insert_slot_if_missing("2026-09-01T09:00:00", "engineering", "p", "2026-01-01T00:00:00")
+    slot = store.find_earliest_open_slot("engineering", "2000-01-01T00:00:00")
+
+    store.delete_slot(slot.id)
+
+    assert store.find_earliest_open_slot("engineering", "2000-01-01T00:00:00") is None
+
+
+def test_delete_slot_referenced_by_video_raises_without_unassign(store):
+    store.insert_slot_if_missing("2026-09-01T09:00:00", "engineering", "p", "2026-01-01T00:00:00")
+    slot = store.find_earliest_open_slot("engineering", "2000-01-01T00:00:00")
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    store.assign_slot(video.id, slot.id)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.delete_slot(slot.id)
+
+
+def test_unassign_video_for_slot_then_delete_succeeds(store):
+    store.insert_slot_if_missing("2026-09-01T09:00:00", "engineering", "p", "2026-01-01T00:00:00")
+    slot = store.find_earliest_open_slot("engineering", "2000-01-01T00:00:00")
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    store.assign_slot(video.id, slot.id)
+
+    store.unassign_video_for_slot(slot.id)
+    store.delete_slot(slot.id)  # must not raise now
+
+    updated_video = store.get_video_by_hash("h1")
+    assert updated_video.assigned_slot_id is None
+    assert updated_video.status == "CLASSIFIED"
+    assert updated_video.transcript is None  # unassign never touches transcript/classification data it doesn't own

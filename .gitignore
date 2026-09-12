@@ -18,6 +18,7 @@ content/failed/*
 !content/failed/.gitkeep
 data/*.db
 data/*.db-*
+data/calendar_state.json
 .pytest_cache/
 
 # Private golden-evaluation corpus (real creator transcripts). Only

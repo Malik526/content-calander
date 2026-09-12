@@ -2,6 +2,22 @@
 
 ## 2026-09-12
 
+### Dedicated App-Owned Google Calendar — Milestone 1.4
+
+Replaced the implicit "whatever calendar `DEFAULT_CALENDAR_ID`/`--calendar` names, default `primary`" target with one dedicated, app-owned Google Calendar ("Content Automation") that normal operation always uses, and that `clear_calendar.py` can safely wipe without any risk to the user's primary or other calendars.
+
+- Added `calendar_manager.py`: OAuth authentication (`build_oauth_calendar_service`, `google-auth-oauthlib`'s `InstalledAppFlow`, cached refresh token) and dedicated-calendar resolution (`resolve_app_calendar`) — reuse persisted `calendar_id` if accessible, recover via owner-only display-name search if not, create only if neither works. Never falls back to `"primary"` or any other calendar. Calendar identity persisted at `data/calendar_state.json` (gitignored).
+- **Authentication decision** (see `docs/decisions/0004-dedicated-google-calendar-ownership.md`): the dedicated calendar is created/owned via OAuth as the human account, not the shared service account — reviewed and confirmed appropriate per Google's guidance for apps that create secondary calendars. The shared service account is kept, but now used only for the explicit `--calendar <id>` advanced/debug override on both scripts (unchanged behavior from before this milestone); it is never reachable from any default, no-argument invocation.
+- `generate_calendar.py`: `--calendar` now defaults to `None` (was `DEFAULT_CALENDAR_ID`, i.e. `"primary"`). No value -> OAuth + dedicated calendar (normal path); a value -> service account + that exact calendar (opt-in override, unchanged). Dry-run resolves nothing and calls neither auth path — zero Google Calendar contact, as before.
+- `clear_calendar.py` rewritten: default path resolves the dedicated calendar (`create_if_missing=False` — fails closed with a clear error if none exists, never falls back to `"primary"`) and deletes only `content_slots` rows in `OPEN` status plus their exact tracked calendar event, not a calendar-wide date-range wipe. `--all` extends this to `ASSIGNED` slots too — destructive, explicit, and documented: since `videos.assigned_slot_id` has a foreign-key constraint, the referencing video is reset to `status=CLASSIFIED`/`assigned_slot_id=NULL` before its slot is deleted, without touching its transcript/classification. The calendar row itself is never deleted by either mode. `--dry-run` reports scope/count with zero mutation. The original `--calendar <id> [--start/--end]` full-range service-account clear is preserved as an explicit, opt-in override.
+- `content_store.py`: added `list_slots_by_status`, `delete_slot`, `unassign_video_for_slot` to support the above.
+- Added `tests/test_calendar_manager.py`, `tests/test_calendar_target.py`, `tests/test_clear_calendar.py`, and extended `tests/test_content_store.py` — all Google API calls mocked, no live credentials required.
+- Added `docs/decisions/0004-dedicated-google-calendar-ownership.md`. Updated `README.md` (new "Calendar Ownership" section, revised Setup steps 3-4, `.env.example`) and `PROJECT_STATE.md`.
+
+Validation: `python3 -m pytest` (157 passed, up from 129). Manually confirmed (real, unmocked): `generate_calendar.py --dry-run` performs zero Google Calendar contact; real (non-dry-run) generation with no OAuth client secrets configured yet fails immediately with a clear, actionable setup message (never falls back to the service account or "primary"); same for `clear_calendar.py`'s default path; no stray state files were created by either failure.
+
+**Not verified live in this environment**, and explicitly out of reach here: completing the one-time Google Cloud OAuth Client ID setup and the interactive browser consent flow requires the user's own Google Cloud Console access and a real browser, neither available to this session. The full manual walkthrough (real secondary calendar appears under the account, events land only there, primary/other calendars stay untouched, `clear`/regenerate reuses the same calendar id) is the user's remaining manual step — see README.md "Calendar Ownership" setup and PROJECT_STATE.md.
+
 ### Provisional Engineering-Focused Pillar Set — Milestone 1.3
 
 Configuration/content-only change: replaced the agency-oriented `CONTENT_TYPES` (acquisition/building/execution/mindset) with a provisional engineering-focused set to test classification and routing against the content strategy actually being produced now. No classifier, scheduling, persistence, or transcription architecture changed.

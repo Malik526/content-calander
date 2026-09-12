@@ -13,7 +13,7 @@ Two cooperating CLIs share one SQLite database (`data/content.db`, gitignored):
 - `generate_calendar.py` — generates a month of posts from a configurable posting cadence and weighted pillar allocation (`scheduling.py`), pushes them to Google Calendar, and persists one `content_slots` row per event.
 - `process_content.py` — discovers `.mov`/`.mp4` files in `content/incoming/`, inspects/transcribes/classifies each, and assigns confident classifications to the earliest matching open `content_slots` row.
 
-Google Calendar remains the human-facing source of truth for the schedule; `content_slots` is an internal mirror `process_content.py` queries and claims. See `docs/decisions/0001-video-ingestion-pipeline.md`, `docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md`, and `docs/decisions/0003-local-embedding-classification.md` for the full rationale.
+Google Calendar remains the human-facing source of truth for the schedule; `content_slots` is an internal mirror `process_content.py` queries and claims. See `docs/decisions/0001-video-ingestion-pipeline.md`, `docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md`, `docs/decisions/0003-local-embedding-classification.md`, and `docs/decisions/0004-dedicated-google-calendar-ownership.md` for the full rationale.
 
 The default `process_content.py` pipeline is fully local and requires no API key: ffmpeg + faster-whisper + local embedding classification (`fastembed` + `BAAI/bge-small-en-v1.5`) + SQLite. Claude remains available as an optional classifier (`config.CLASSIFIER=claude`) for comparison/benchmarking via `evaluate_classifier.py`.
 
@@ -32,9 +32,20 @@ This is a content-only change — no classifier, scheduling, persistence, or tra
 
 `EMBEDDING_MIN_SIMILARITY`/`EMBEDDING_MIN_MARGIN` were calibrated (loosely) against the old pillar set's semantics; they have **not** been re-validated against the new pillars with real transcripts. Treat them as still-uncalibrated placeholders until `evaluate_classifier.py --sweep` is run against a real labeled dataset built from the new content direction.
 
+## Calendar Ownership
+
+As of 2026-09-12, normal operation (`generate_calendar.py`/`clear_calendar.py` with no `--calendar` flag) targets exactly one dedicated, app-owned Google Calendar (`config.APP_CALENDAR_SUMMARY`, default `"Content Automation"`) — never `"primary"`, never an arbitrary calendar. Created/owned via OAuth (the human account), not the shared service account — see `docs/decisions/0004-dedicated-google-calendar-ownership.md`.
+
+- `calendar_manager.resolve_app_calendar()` reuses the calendar ID persisted in `data/calendar_state.json` (gitignored); recovers by owner-only name search if that state is lost/inaccessible; creates a new calendar only if neither works. A calendar is created at most once per account.
+- `clear_calendar.py`'s default path deletes only `content_slots` rows in `OPEN` status and their exact tracked calendar event — not a calendar-wide date-range wipe. `--all` extends this to `ASSIGNED` slots too, resetting the referencing video to `status=CLASSIFIED`/`assigned_slot_id=NULL` first (required by the FK on `videos.assigned_slot_id`) without touching its transcript/classification. The calendar itself is never deleted by either mode.
+- `--calendar <id>` remains an explicit, opt-in override on both scripts, using the shared service account exactly as before this milestone (unchanged code) — never the default.
+- **Not verified live in this environment**: creating this ADR's implementation required no Google Cloud OAuth Client ID to exist yet, and completing the interactive OAuth consent flow requires a real browser and the user's own Google Cloud Console access — neither available here. All calendar-ownership logic is verified via mocked-API tests (`tests/test_calendar_manager.py`, `tests/test_calendar_target.py`, `tests/test_clear_calendar.py`) plus real (unmocked) runs confirming dry-run touches nothing and the missing-OAuth-setup error is clear and fails closed. The one-time OAuth setup (README.md "Calendar Ownership" step) and the full live walkthrough (a real calendar actually appearing under the account, primary staying untouched) remain the user's manual step.
+
 ## Directory Ownership
 
-- `generate_calendar.py`, `config.py`, `prompts.py` — schedule generation and Google Calendar push. `config.py` defines cadence (`POSTS_PER_WEEK`, `POSTING_DAYS`, `POSTING_TIME`) and per-pillar `weight`; `generate_calendar.build_schedule()` composes `scheduling.py` to turn that into dated, pillar-assigned posts, then attaches a rotated prompt from `prompts.py` if `PROMPT_GENERATION_ENABLED`.
+- `generate_calendar.py`, `config.py`, `prompts.py` — schedule generation and Google Calendar push. `config.py` defines cadence (`POSTS_PER_WEEK`, `POSTING_DAYS`, `POSTING_TIME`) and per-pillar `weight`; `generate_calendar.build_schedule()` composes `scheduling.py` to turn that into dated, pillar-assigned posts, then attaches a rotated prompt from `prompts.py` if `PROMPT_GENERATION_ENABLED`. `--calendar` omitted (normal case) resolves the dedicated app calendar via `calendar_manager.py`; `--calendar <id>` is an explicit override via the service account.
+- `calendar_manager.py` — OAuth auth (`build_oauth_calendar_service`) and dedicated-calendar resolution/creation/persistence (`resolve_app_calendar`, `load_calendar_state`/`save_calendar_state`). No default/implicit path ever returns `"primary"`.
+- `clear_calendar.py` — clears the dedicated calendar's `content_slots`-tracked events (`OPEN`, or `OPEN`+`ASSIGNED` with `--all`); `--calendar <id>` preserves the original service-account/date-range clear as an explicit override.
 - `scheduling.py` — pure date/allocation math, no I/O: `generate_posting_dates` (WHEN), `allocate_pillars` (largest-remainder counts) + `distribute_pillars` (smooth weighted round-robin ordering) (WHAT), `validate_schedule_config`. There is no more fixed weekday→pillar table or fifth-Sunday special case — see ADR-0002.
 - `process_content.py` — thin orchestrator only: discover → inspect → transcribe → classify → confidence gate → slot match → persist → report. No vendor- or format-specific logic lives here.
 - `media.py` — ffprobe inspection, sha256 content hashing, TikTok-compatibility check (informational only — no publishing in this milestone), mono WAV audio extraction for transcription. Never transcodes video.
@@ -51,8 +62,11 @@ This is a content-only change — no classifier, scheduling, persistence, or tra
 
 ## Main Execution Paths
 
-- `python3 generate_calendar.py --month 06 --year 2026`
-- `python3 generate_calendar.py --month 06 --year 2026 --dry-run` (no Google Calendar push, no `content_slots` write)
+- `python3 generate_calendar.py --month 06 --year 2026` (targets the dedicated app calendar via OAuth)
+- `python3 generate_calendar.py --month 06 --year 2026 --dry-run` (no Google Calendar push, no `content_slots` write, no calendar resolved/created)
+- `python3 generate_calendar.py --month 06 --year 2026 --calendar <id>` (advanced/debug override, service account)
+- `python3 clear_calendar.py [--dry-run] [--all]` (clears the dedicated calendar's tracked schedule)
+- `python3 clear_calendar.py --calendar <id> [--start ...] [--end ...]` (advanced/debug override, service account)
 - `python3 process_content.py`
 - `python3 process_content.py --dry-run` (transcribes/classifies and caches results, never claims a slot or moves a file)
 - `python3 process_content.py --verbose` (prints per-video media/transcript/classification detail)
@@ -85,7 +99,8 @@ This is a content-only change — no classifier, scheduling, persistence, or tra
 
 ## External Services / Credentials
 
-- Google Calendar via the shared service account (`~/growth_agency/credentials/service-account.json`) — unchanged.
+- Google Calendar, normal path: OAuth as the human account (`config.CALENDAR_OAUTH_CLIENT_SECRETS_PATH`/`CALENDAR_OAUTH_TOKEN_PATH`, both under `~/.config/content-calendar/`) — see Calendar Ownership above.
+- Google Calendar, `--calendar` override only: the shared service account (`~/growth_agency/credentials/service-account.json`) — unchanged from before this milestone.
 - Anthropic/Claude — optional, only needed for `config.CLASSIFIER=claude` or `evaluate_classifier.py --classifier claude`. `ANTHROPIC_API_KEY` in `.env` (same pattern as `internal-tools/content-analytics`). Model: `config.CLAUDE_MODEL` (default `claude-sonnet-5`).
 - faster-whisper and the embedding model both run fully locally; no network call, no credential, after their one-time model downloads (`config.WHISPER_MODEL_SIZE`/`config.EMBEDDING_MODEL`, both from Hugging Face).
 - ffmpeg/ffprobe must be on `PATH` (system install, not a pip package). `process_content.py` checks this before touching any video and exits with install instructions if missing.
@@ -95,13 +110,16 @@ This is a content-only change — no classifier, scheduling, persistence, or tra
 `python3 -m pytest` (config: `pytest.ini`, root `conftest.py` puts the tool directory on `sys.path`).
 
 - `tests/test_media.py` — ffprobe mocked; MP4+H.264, MOV+H.264, MOV+HEVC, no-audio, corrupt, unsupported-codec, TikTok-compatibility, hashing.
+- `tests/test_calendar_manager.py` — dedicated-calendar resolution/creation/recovery/persistence and OAuth credential handling, all Google API calls mocked: reuse, create-if-missing, recovery via owner-only name search, fail-closed when `create_if_missing=False`, never adopts a merely-shared calendar, never returns `"primary"`.
+- `tests/test_calendar_target.py` — `generate_calendar.py`'s `--calendar` default is `None`; dry-run touches neither OAuth nor the service account; the default path uses OAuth + the dedicated calendar id and never the service account; the explicit override uses the service account and never OAuth.
+- `tests/test_clear_calendar.py` — dry-run performs no deletion; default clear removes only `OPEN` slots + their events and leaves `ASSIGNED` untouched; `--all` also clears `ASSIGNED` slots and resets the video; the calendar row itself is never deleted; no dedicated calendar configured fails closed (never falls back to `"primary"`); the explicit `--calendar` override still works via the service account.
 - `tests/test_scheduling.py` — posting-date generation (leap/non-leap Feb, 30/31-day months, explicit/auto days, 1-7 posts/week, posting time, ascending/in-month), auto-weekday distribution, pillar allocation (largest remainder, ties, 1..N pillars, invalid weights), pillar sequencing (exact counts, determinism, no clustering), and all section-17 validation cases.
 - `tests/test_slot_matcher.py` — earliest slot, multiple slots, occupied/past slots skipped, no slot available, two videos get different slots, double-assignment rejected.
 - `tests/test_config.py` — locks the active pillar strategy: exact key set (`engineering`/`career`/`building_in_public`/`mindset`), weights summing to 1.0, every pillar has a description and examples, default classifier is `embeddings`, `build_classifier()` initializes with no `ANTHROPIC_API_KEY`, and `EmbeddingClassifier` builds a profile for all four pillars.
 - `tests/test_classification.py` — Claude's `_validate_result` contract: confidence gating, unknown-pillar rejection, null pillar, malformed-response rejection. Uses arbitrary local pillar keys (not `config.CONTENT_TYPES`) so it stays valid regardless of the active pillar strategy. No network call.
 - `tests/test_embedding_classifier.py` — `EmbeddingClassifier` with a mocked embedding model: single/multi-pillar classification, score ordering, low-similarity and small-margin review, high-score assignment, empty transcript, 1..N pillars, pillar-vector caching, invalid pillar config, invalid thresholds, and classifier selection (`build_classifier`, unknown-value rejection).
 - `tests/test_evaluate_classifier.py` — dataset loading (incl. the committed `tests/fixtures/eval_sample/`), metrics from known predictions, confusion-pair counting, deterministic threshold-sweep math over pre-computed scores, and a static check that the harness never imports `content_store`.
-- `tests/test_content_store.py` — `content_slots`/`videos` idempotency primitives, the old→new unique-constraint migration, and the videos-table column migration.
+- `tests/test_content_store.py` — `content_slots`/`videos` idempotency primitives, the old→new unique-constraint migration, the videos-table column migration, and `list_slots_by_status`/`delete_slot`/`unassign_video_for_slot` (including the FK-enforced rule that an `ASSIGNED` slot can't be deleted until its video is unassigned).
 - `tests/test_generate_calendar.py` — `build_schedule` composition of `scheduling.py`, determinism, prompt attachment, event-body construction, `content_slots` idempotency, and the new scheduled_at-only uniqueness invariant.
 - `tests/test_process_content_integration.py` — full pipeline against a real ffmpeg-synthesized video with a fake `Transcriber`/`ContentClassifier` (no Whisper model download, no Claude/embedding call): high/low confidence, no-slot-available, dry-run caching, and rerun idempotency. `FakeClassifier` applies its own threshold internally, mirroring the real self-gating classifier contract. Skipped automatically if ffmpeg/ffprobe are not on `PATH`.
 

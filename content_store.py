@@ -303,6 +303,32 @@ class ContentStore:
         ).fetchone()
         return _row_to_slot(row) if row else None
 
+    def list_slots_by_status(self, statuses: list[str]) -> list[SlotRecord]:
+        placeholders = ", ".join("?" for _ in statuses)
+        rows = self._conn.execute(
+            f"SELECT * FROM content_slots WHERE status IN ({placeholders}) ORDER BY scheduled_at",
+            statuses,
+        ).fetchall()
+        return [_row_to_slot(row) for row in rows]
+
+    def delete_slot(self, slot_id: int) -> None:
+        """Delete a content_slot row. Raises an sqlite3 IntegrityError (FK
+        violation) if a video still references it via assigned_slot_id —
+        call unassign_video_for_slot(slot_id) first for an ASSIGNED slot."""
+        self._conn.execute("DELETE FROM content_slots WHERE id = ?", (slot_id,))
+
+    def unassign_video_for_slot(self, slot_id: int) -> None:
+        """Reset any video assigned to this slot back to CLASSIFIED with no
+        assignment, so the slot can be deleted and the video can be routed
+        to a different slot on a future process_content.py run. Used by
+        clear_calendar.py --all; does not touch the video's transcript or
+        classification, only its scheduling state."""
+        self._conn.execute(
+            "UPDATE videos SET assigned_slot_id = NULL, status = 'CLASSIFIED', processed_at = NULL "
+            "WHERE assigned_slot_id = ?",
+            (slot_id,),
+        )
+
     def assign_slot(self, video_id: int, slot_id: int) -> None:
         """Atomically claim a slot for a video. Raises if the slot is no longer OPEN."""
         with self.transaction() as conn:

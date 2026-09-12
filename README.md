@@ -10,7 +10,7 @@ See `PROJECT_STATE.md` for current architecture and `docs/decisions/` for why it
 
 ## Run Commands
 
-**Generate a month's calendar:**
+**Generate a month's calendar** — normal operation always targets one dedicated, app-owned "Content Automation" calendar (created on first real run, reused after that — never your primary calendar):
 
 ```bash
 python3 generate_calendar.py --month [MM] --year [YYYY]
@@ -22,16 +22,25 @@ python3 generate_calendar.py --month [MM] --year [YYYY]
 python3 generate_calendar.py --month 07 --year 2026
 ```
 
-**Optional: target a specific calendar by ID**
-
-```bash
-python3 generate_calendar.py --month 07 --year 2026 --calendar your_calendar_id@group.calendar.google.com
-```
-
-**Preview without creating events**
+**Preview without creating events or touching Google Calendar at all**
 
 ```bash
 python3 generate_calendar.py --month 07 --year 2026 --dry-run
+```
+
+**Clear the app's managed schedule** (only ever touches the dedicated calendar's own tracked events — see Calendar Ownership below):
+
+```bash
+python3 clear_calendar.py --dry-run   # report what would be removed
+python3 clear_calendar.py             # clear unassigned (OPEN) slots + their events
+python3 clear_calendar.py --all       # also clear ASSIGNED slots + their events (destructive; see below)
+```
+
+**Advanced/debug: target an explicit calendar by ID directly** (bypasses the dedicated-calendar boundary entirely; opt-in only, uses the shared service account):
+
+```bash
+python3 generate_calendar.py --month 07 --year 2026 --calendar your_calendar_id@group.calendar.google.com
+python3 clear_calendar.py --calendar your_calendar_id@group.calendar.google.com --start 2026-06-01 --end 2026-07-01
 ```
 
 **Process incoming videos:**
@@ -85,18 +94,19 @@ cp .env.example .env
 
 The generator reads simple `KEY=value` pairs from `.env` automatically.
 
-### 3. Add your service account key
+### 3. Set up the dedicated calendar's OAuth ownership (required for normal operation)
 
-The script authenticates via a Google service account JSON key.
-Default expected path: `~/growth_agency/credentials/service-account.json`
+Normal operation (`generate_calendar.py`/`clear_calendar.py` with no `--calendar` flag) authenticates as **you**, not the shared service account, so the dedicated "Content Automation" calendar it creates is owned by your own Google account — see `docs/decisions/0004-dedicated-google-calendar-ownership.md` for why. One-time setup:
 
-To use a different path, update `GOOGLE_SERVICE_ACCOUNT_FILE` in `.env`.
+1. In [Google Cloud Console](https://console.cloud.google.com/), on a project with the **Calendar API** enabled, create an **OAuth 2.0 Client ID** (Application type: **Desktop app**).
+2. Download its JSON and save it at `~/.config/content-calendar/calendar_oauth_client_secrets.json` (override the path via `CONTENT_CALENDAR_OAUTH_CLIENT_SECRETS` in `.env` if you want it elsewhere).
+3. Run `python3 generate_calendar.py --month MM --year YYYY` for real (not `--dry-run`). A browser window opens once for consent; after that, a cached token (`~/.config/content-calendar/calendar_oauth_token.json`) is reused automatically — no browser on later runs.
 
-### 4. Grant calendar access to the service account
+Without this, real (non-dry-run) generation fails with a clear error naming exactly what's missing — it never silently falls back to the service account or to "primary".
 
-In Google Calendar settings → "Share with specific people", add the service
-account email (found in the JSON key as `"client_email"`) with
-"Make changes to events" permission.
+### 4. Service account (only needed for the `--calendar` advanced override)
+
+The shared service account (`~/growth_agency/credentials/service-account.json`, path configurable via `GOOGLE_SERVICE_ACCOUNT_FILE`) is only used when you explicitly pass `--calendar <id>` to either script — normal operation never touches it for Calendar access. If you use the override, share that target calendar with the service account's email (found in the JSON key as `"client_email"`) with "Make changes to events" permission, the same as before this milestone.
 
 ### 5. Video processing setup
 
@@ -112,6 +122,8 @@ account email (found in the JSON key as `"client_email"`) with
 | File | Purpose |
 |---|---|
 | `generate_calendar.py` | Schedule generation, Google Calendar push, `content_slots` persistence |
+| `clear_calendar.py` | Clears the dedicated app calendar's tracked schedule (or an explicit override calendar) |
+| `calendar_manager.py` | OAuth auth + create/reuse/persist the dedicated app-owned Google Calendar |
 | `scheduling.py` | Posting-date generation and weighted pillar allocation (pure functions, no I/O) |
 | `process_content.py` | Video ingestion orchestrator (discover → inspect → transcribe → classify → route → report) |
 | `config.py` | All settings: pillar labels/descriptions/weights, posting cadence, auth paths, color IDs, pipeline config |
@@ -192,3 +204,15 @@ python3 evaluate_classifier.py --classifier embeddings --sweep
 This reports auto-assigned count, **wrong auto-assignments**, review count, and accuracy for a grid of similarity/margin combinations, without re-embedding per combination. Pick the combination with the lowest wrong-auto-assignment rate you're comfortable with, then set `EMBEDDING_MIN_SIMILARITY`/`EMBEDDING_MIN_MARGIN` accordingly. `python3 evaluate_classifier.py --classifier embeddings` (no `--sweep`) runs a normal report against the currently configured thresholds; add `--classifier claude` to compare against Claude on the exact same dataset.
 
 `ClassificationResult.confidence` is a raw cosine similarity for `embeddings`, not a calibrated probability — the CLI labels it "Similarity score" rather than "Confidence" for anything but Claude. See `docs/decisions/0003-local-embedding-classification.md`.
+
+---
+
+## Calendar Ownership
+
+Normal operation targets exactly one dedicated, app-owned Google Calendar (display name **"Content Automation"**) — never your primary calendar, never an arbitrary calendar. See `docs/decisions/0004-dedicated-google-calendar-ownership.md` for the full rationale.
+
+- **Created once, reused after that.** `calendar_manager.resolve_app_calendar()` reuses the calendar ID persisted in `data/calendar_state.json`; if that calendar is gone or access was revoked, it recovers by searching your own calendars for a name match before ever creating a new one.
+- **Owned by you, not the service account.** Created/managed via OAuth (see Setup step 3) so it shows up directly in your own Google Calendar, with no sharing step required.
+- **`clear_calendar.py` only clears what the app tracks.** Default scope is `content_slots` rows in `OPEN` status and their exact calendar events — not a calendar-wide date-range wipe. `--all` also clears `ASSIGNED` slots (and resets those videos back to `CLASSIFIED` so they can be rescheduled — their transcript/classification history is untouched). The calendar itself is never deleted by either mode.
+- **`--calendar <id>` is an explicit, opt-in override** on both scripts, using the shared service account exactly as this tool worked before this milestone — useful for advanced/debug targeting of a specific calendar, never the default.
+- **Fails closed.** If the dedicated calendar can't be resolved (missing OAuth setup, or `clear_calendar.py` finding no app calendar at all) the command exits with a clear error — it never silently falls back to any other calendar.

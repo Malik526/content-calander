@@ -4,18 +4,24 @@ generate_calendar.py — Content calendar generator for MoreClientsCo.
 What it does:
   Generates a full month of content calendar events from a configurable
   posting cadence (posts/week, posting-day strategy, posting time) and
-  per-pillar percentage weights, and pushes each event to Google Calendar
-  via a service account. Prompts are rotated sequentially per content type
-  so no prompt repeats until all in its list have been used. See
-  docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md.
+  per-pillar percentage weights, and pushes each event to a dedicated,
+  app-owned Google Calendar (created/reused via calendar_manager.py, OAuth
+  — never "primary"). Prompts are rotated sequentially per content type so
+  no prompt repeats until all in its list have been used. See
+  docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md
+  and docs/decisions/0004-dedicated-google-calendar-ownership.md.
 
 Run command:
   python3 generate_calendar.py --month 06 --year 2026
+  python3 generate_calendar.py --month 06 --year 2026 --dry-run
+
+  Advanced/debug override — targets an explicit calendar via the shared
+  service account instead of the dedicated app calendar; never the default:
   python3 generate_calendar.py --month 06 --year 2026 --calendar <calendar_id>
 
 Dependencies:
-  google-auth, google-api-python-client  (see requirements.txt)
-  config.py, prompts.py, scheduling.py, content_store.py in the same directory
+  google-auth, google-auth-oauthlib, google-api-python-client  (see requirements.txt)
+  config.py, prompts.py, scheduling.py, content_store.py, calendar_manager.py in the same directory
 """
 
 import argparse
@@ -29,9 +35,9 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+import calendar_manager
 from config import (
     CONTENT_TYPES,
-    DEFAULT_CALENDAR_ID,
     DEFAULT_MONTH,
     DEFAULT_YEAR,
     EVENT_DURATION_MINUTES,
@@ -88,8 +94,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--calendar",
-        default=DEFAULT_CALENDAR_ID,
-        help="Google Calendar ID to write events to. Default: %(default)s",
+        default=None,
+        help=(
+            "Advanced/debug override: an explicit Google Calendar ID to write events to, "
+            "via the shared service account. Not the default — with this omitted, events go "
+            "to the dedicated app-owned 'Content Automation' calendar (created/reused via OAuth)."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -298,30 +308,45 @@ def main() -> None:
         sys.exit(1)
 
     print(f"\nGenerating {calendar.month_name[args.month]} {args.year} content calendar …")
-    print(f"Calendar target: {args.calendar}\n")
+    if args.calendar:
+        print(f"Calendar target: {args.calendar} (explicit --calendar override, service account)\n")
+    else:
+        print("Calendar target: dedicated app-owned 'Content Automation' calendar (resolved at run time)\n")
 
     # --- Build schedule ---
     schedule = build_schedule(args.year, args.month)
 
     if args.dry_run:
-        print("Dry run enabled; no Google Calendar events were created.")
-        print_summary(schedule, args.month, args.year, args.calendar, dry_run=True)
+        print("Dry run enabled; no Google Calendar events were created, no calendar was resolved/created.")
+        print_summary(schedule, args.month, args.year, args.calendar or "(dedicated app calendar — not resolved during dry run)", dry_run=True)
         return
 
     # --- Connect to Google Calendar ---
-    try:
-        service = build_calendar_service(SERVICE_ACCOUNT_FILE)
-    except FileNotFoundError as err:
-        print(f"ERROR: {err}", file=sys.stderr)
-        sys.exit(1)
+    if args.calendar:
+        # Explicit advanced/debug override: existing service-account path, unchanged.
+        try:
+            service = build_calendar_service(SERVICE_ACCOUNT_FILE)
+        except FileNotFoundError as err:
+            print(f"ERROR: {err}", file=sys.stderr)
+            sys.exit(1)
+        calendar_id = args.calendar
+    else:
+        # Normal path: OAuth as the human owner, dedicated app calendar only.
+        try:
+            service = calendar_manager.build_oauth_calendar_service()
+            calendar_id = calendar_manager.resolve_app_calendar(service)
+        except calendar_manager.CalendarAuthError as err:
+            print(f"ERROR: {err}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Using dedicated app calendar: {calendar_id}\n")
 
     # --- Push all events and mirror them into content_slots ---
     with ContentStore() as store:
-        events_created, slots_created = push_events(service, args.calendar, schedule, store)
+        events_created, slots_created = push_events(service, calendar_id, schedule, store)
     print(f"\n  {slots_created} new content_slots persisted ({events_created} calendar events created).")
 
     # --- Final summary ---
-    print_summary(schedule, args.month, args.year, args.calendar)
+    print_summary(schedule, args.month, args.year, calendar_id)
 
 
 if __name__ == "__main__":
