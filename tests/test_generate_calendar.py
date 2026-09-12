@@ -13,7 +13,7 @@ def test_build_schedule_matches_configured_pillar_weights():
         counts[post.content_type] = counts.get(post.content_type, 0) + 1
 
     assert sum(counts.values()) == len(schedule)
-    assert set(counts.keys()) <= {"acquisition", "building", "execution", "mindset"}
+    assert set(counts.keys()) <= {"engineering", "career", "building_in_public", "mindset"}
 
 
 def test_build_schedule_is_deterministic():

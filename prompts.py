@@ -3,59 +3,44 @@ prompts.py — Daily short-form video prompts organised by content pillar.
 
 Structure:
   PROMPTS: dict[str, list[str]]
-    Keys match the content pillar keys used in config.CONTENT_TYPES and
-    config.WEEKLY_SCHEDULE.
+    Keys match the content pillar keys used in config.CONTENT_TYPES.
 
 Usage:
   from prompts import PROMPTS
-  prompts_for_type = PROMPTS["acquisition"]
+  prompts_for_type = PROMPTS["engineering"]
 
 Rotation note: the generator rotates through each list sequentially,
 wrapping around only after all prompts in the list have been used once.
+
+Provisional pillars (September 2026): config.CONTENT_TYPES was updated to a
+new engineering-focused pillar set (engineering, career, building_in_public,
+mindset), replacing the old agency-oriented pillars (acquisition, building,
+execution). Prompt content is optional and does not affect routing (see
+config.PROMPT_GENERATION_ENABLED and generate_calendar.build_schedule), so
+this update is intentionally minimal: "engineering", "career", and
+"building_in_public" below are short placeholder lists only, meant to keep
+prompt generation functional while the new strategy is tested — not a
+designed content plan. "mindset" is left as its original agency-era content
+because that pillar key is unchanged; its prompts do not yet reflect the new
+engineering/career framing. Designing real prompts for all four pillars is a
+separate follow-up task, not part of the pillar-swap itself.
 """
 
 PROMPTS: dict[str, list[str]] = {
-    "acquisition": [
-        "Recorded a cold call today. [X] people picked up, [Y] were interested. Here's what worked and what didn't.",
-        "Sent [X] cold emails to [category]. [Y]% reply rate. Here's the subject line that got the most opens.",
-        "Just landed my first [business type] client. Here's the free offer I used and why they said yes.",
-        "DM outreach experiment: Targeted [X] followers of [creator name]. Got [Y] responses. Here's the pitch that worked.",
-        "Cold call recording: Got a demo booked. Here's the exact hook I used when they answered.",
-        "Follow-up sequence working: Day 1 call, day 3 DM, day 7 second call. Got 1 interested lead. Here's how I tracked it.",
-        "Email automation test: Sent [X] follow-ups with 1 testimonial. [Y]% opened the follow-up. Testimonial drove the conversion.",
-        "My acquisition funnel right now: [#] warm leads, [#] demos booked, [#] closing. Here's what changed this week.",
-        "Rejection today on a cold call. 'I'll handle it myself.' Here's why that happens and how I learn from it.",
-        "Testing a new cold call hook based on their Google reviews. Got [X] more interested prospects. Here's the exact script.",
-        "Lead scoring system working: Focusing on businesses with [criteria]. [X]% better conversion rate. Here's my qualification framework.",
-        "Scaled from [X] prospects to [Y] in one scrape run. Here's what changed in the prospecting process.",
+    "engineering": [
+        "Walked through how I architected [system/feature]. Here's the tradeoff I made and why.",
+        "Hit a bug in [project] that took [X] hours to track down. Here's the root cause and the fix.",
+        "Wired up [API/tool] into [project]. Here's what it unlocked and how it works.",
     ],
-    "building": [
-        "Built [tool name] because [problem]. Here's what it does and how it saves [Y] hours per week.",
-        "Rebuilt the lead generator to handle [improvement]. Architecture walkthrough: [brief description].",
-        "New feature: Now I can [capability]. This solves [problem we had]. Quick demo: [link].",
-        "Created a [tool type] because manual [process] was killing productivity. Here's how it works.",
-        "Scraped [X] prospects in [Y] hours using [system]. 2 months ago this took [Z] hours. Here's the optimization.",
-        "Integrated [API/tool] with our pipeline. Now [new capability]. Code walkthrough on YouTube.",
-        "Building tools that I need to run the agency. Latest: [tool name]. Docs: [link].",
-        "Our tech stack for customer acquisition: [tool 1], [tool 2], [tool 3]. Here's why each one matters.",
-        "Learned [lesson] while building [system]. Rebuilt it [Y] times before it worked. Here's the final version.",
-        "Content calendar generator running. Pushes [X] events to Google Calendar monthly. Full automation setup: [link].",
-        "Research pipeline improvement: Now pulls [data type] in [time]. Before: [old way]. Here's the code pattern.",
-        "Dashboard showing real-time [metric]: [X] prospects, [Y] demos, [Z] clients. Built this to track what matters.",
+    "career": [
+        "Applied to [X] roles this week, heard back from [Y]. Here's what I changed in my approach.",
+        "Went through an interview for [role type]. Here's what I got asked and how I'd answer it differently now.",
+        "Skill I'm focused on leveling up right now: [skill]. Here's why it matters for breaking in.",
     ],
-    "execution": [
-        "Day [X] of MoreClientsCo: [metric]. This week: [wins]. Here's what I'm learning.",
-        "Lost a prospect today. They said '[reason].' Here's what I could've done differently.",
-        "First client converted. What it took: [offer], [result], [timeline]. Here's the full story.",
-        "Pipeline update: [Y] warm leads, [X] demos booked, [Z] closing. Shifted strategy this week based on [learning].",
-        "Weekly wins and losses recap. Wins: [#]. Losses: [#]. Biggest lesson: [lesson].",
-        "Changed my pitch this week. Old: [approach]. New: [approach]. Results: [improvement]%.",
-        "Booking rate improved from [X]% to [Y]%. Here's what changed in the conversation.",
-        "MoreClientsCo metrics: [MRR], [#] clients, [#] in pipeline. Here's the breakdown.",
-        "Switched [tool/process] because [reason]. Early results: [outcome]. Will report back in a week.",
-        "Client retention rate: [X]%. Why some stay, why some leave. Here's what I'm improving.",
-        "Revenue this month: [amount]. Breakdown: [#] from packages, [#] from tools. Here's the unit economics.",
-        "Outreach volume: Sent [#] cold emails, made [#] calls. Conversion rate: [X]%. Working on improving [metric].",
+    "building_in_public": [
+        "Progress update on [project]: [what changed this week]. Next up: [what's next].",
+        "Tried [approach] on [project] and it didn't work. Here's what I'm doing instead.",
+        "Shipped [feature/milestone] on [project] today. Here's a quick look.",
     ],
     "mindset": [
         "Ran this morning before cold calls. The discipline transfers. Pain now, results later.",

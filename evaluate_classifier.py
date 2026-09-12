@@ -269,8 +269,13 @@ def sweep_from_scores(
                     continue
                 top_key, top_score = scored[0]
                 second_score = scored[1][1] if len(scored) > 1 else -1.0
-                label = CONTENT_TYPES[top_key]["label"]
-                pillar, _ = classification._gate_decision(top_key, top_score, second_score, min_similarity, min_margin, label)
+                # The reason string _gate_decision would build isn't used here
+                # (sweep only needs the routing decision), so pass top_key
+                # itself rather than looking up a real CONTENT_TYPES label —
+                # sweep_from_scores works on caller-supplied scored_samples,
+                # which may use pillar keys that aren't in the live config
+                # (e.g. a saved/replayed sweep from a previous pillar strategy).
+                pillar, _ = classification._gate_decision(top_key, top_score, second_score, min_similarity, min_margin, top_key)
                 if pillar is None:
                     review += 1
                 else:

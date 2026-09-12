@@ -10,24 +10,29 @@ CLASSIFICATION_FAILED.
 import pytest
 
 from classification import ClassificationError, _validate_result
-from config import AUTO_ASSIGN_THRESHOLD, CONTENT_TYPES
+from config import AUTO_ASSIGN_THRESHOLD
 
-PILLAR_KEYS = list(CONTENT_TYPES.keys())
+# Deliberately arbitrary/generic, not imported from config.CONTENT_TYPES:
+# this file tests _validate_result's generic contract (pillar restricted to
+# a configured set, confidence clamped, malformed responses rejected), not
+# any particular pillar strategy — it must keep passing regardless of what
+# pillars are currently configured in config.py.
+PILLAR_KEYS = ["pillar_a", "pillar_b", "pillar_c"]
 
 
 def test_valid_high_confidence_result():
     result = _validate_result(
-        {"pillar": "building", "confidence": 0.94, "reason": "Discusses tool architecture."},
+        {"pillar": "pillar_a", "confidence": 0.94, "reason": "Discusses tool architecture."},
         PILLAR_KEYS,
     )
-    assert result.pillar == "building"
+    assert result.pillar == "pillar_a"
     assert result.confidence == 0.94
     assert result.confidence >= AUTO_ASSIGN_THRESHOLD  # eligible for auto-assignment
 
 
 def test_low_confidence_result_is_still_valid_but_below_threshold():
     result = _validate_result(
-        {"pillar": "mindset", "confidence": 0.43, "reason": "Ambiguous, mostly a job-search story."},
+        {"pillar": "pillar_b", "confidence": 0.43, "reason": "Ambiguous, mostly a job-search story."},
         PILLAR_KEYS,
     )
     assert result.confidence < AUTO_ASSIGN_THRESHOLD  # process_content.py routes this to NEEDS_REVIEW
@@ -51,16 +56,16 @@ def test_classifier_cannot_emit_an_arbitrary_pillar():
 
 def test_non_numeric_confidence_raises():
     with pytest.raises(ClassificationError):
-        _validate_result({"pillar": "building", "confidence": "high", "reason": "..."}, PILLAR_KEYS)
+        _validate_result({"pillar": "pillar_a", "confidence": "high", "reason": "..."}, PILLAR_KEYS)
 
 
 def test_confidence_is_clamped_to_0_1():
     result = _validate_result(
-        {"pillar": "building", "confidence": 1.5, "reason": "..."}, PILLAR_KEYS
+        {"pillar": "pillar_a", "confidence": 1.5, "reason": "..."}, PILLAR_KEYS
     )
     assert result.confidence == 1.0
 
 
 def test_empty_reason_raises():
     with pytest.raises(ClassificationError):
-        _validate_result({"pillar": "building", "confidence": 0.9, "reason": "   "}, PILLAR_KEYS)
+        _validate_result({"pillar": "pillar_a", "confidence": 0.9, "reason": "   "}, PILLAR_KEYS)

@@ -17,6 +17,21 @@ Google Calendar remains the human-facing source of truth for the schedule; `cont
 
 The default `process_content.py` pipeline is fully local and requires no API key: ffmpeg + faster-whisper + local embedding classification (`fastembed` + `BAAI/bge-small-en-v1.5`) + SQLite. Claude remains available as an optional classifier (`config.CLASSIFIER=claude`) for comparison/benchmarking via `evaluate_classifier.py`.
 
+## Active Pillar Strategy (Provisional)
+
+As of 2026-09-12, `config.CONTENT_TYPES` is a **provisional** engineering-focused pillar set, replacing the earlier agency-oriented one, to test classification/routing against the content actually being produced now:
+
+- `engineering` — **Software Engineering & Building** — 40%
+- `career` — **Early-Career Software Engineering** — 30%
+- `building_in_public` — **Building in Public** — 20%
+- `mindset` — **Mindset & Discipline** — 10% (key unchanged from the prior strategy; label/description/weight updated)
+
+This is a content-only change — no classifier, scheduling, persistence, or transcription architecture changed. The old pillar keys (`acquisition`, `building`, `execution`) no longer exist anywhere in `config.py`; `prompts.py` retired their prompt lists.
+
+`prompts.py`'s `engineering`/`career`/`building_in_public` entries are **minimal placeholders** (3 short prompts each) added only to keep `PROMPT_GENERATION_ENABLED=True` functional — not a designed content plan. `mindset`'s prompt list is unchanged from the old agency-era strategy (same key, stale content) and does not yet reflect the new framing; designing real prompts for all four pillars is separate follow-up work. Prompts remain optional and never affect routing either way.
+
+`EMBEDDING_MIN_SIMILARITY`/`EMBEDDING_MIN_MARGIN` were calibrated (loosely) against the old pillar set's semantics; they have **not** been re-validated against the new pillars with real transcripts. Treat them as still-uncalibrated placeholders until `evaluate_classifier.py --sweep` is run against a real labeled dataset built from the new content direction.
+
 ## Directory Ownership
 
 - `generate_calendar.py`, `config.py`, `prompts.py` — schedule generation and Google Calendar push. `config.py` defines cadence (`POSTS_PER_WEEK`, `POSTING_DAYS`, `POSTING_TIME`) and per-pillar `weight`; `generate_calendar.build_schedule()` composes `scheduling.py` to turn that into dated, pillar-assigned posts, then attaches a rotated prompt from `prompts.py` if `PROMPT_GENERATION_ENABLED`.
@@ -82,7 +97,8 @@ The default `process_content.py` pipeline is fully local and requires no API key
 - `tests/test_media.py` — ffprobe mocked; MP4+H.264, MOV+H.264, MOV+HEVC, no-audio, corrupt, unsupported-codec, TikTok-compatibility, hashing.
 - `tests/test_scheduling.py` — posting-date generation (leap/non-leap Feb, 30/31-day months, explicit/auto days, 1-7 posts/week, posting time, ascending/in-month), auto-weekday distribution, pillar allocation (largest remainder, ties, 1..N pillars, invalid weights), pillar sequencing (exact counts, determinism, no clustering), and all section-17 validation cases.
 - `tests/test_slot_matcher.py` — earliest slot, multiple slots, occupied/past slots skipped, no slot available, two videos get different slots, double-assignment rejected.
-- `tests/test_classification.py` — Claude's `_validate_result` contract: confidence gating, unknown-pillar rejection, null pillar, malformed-response rejection. No network call.
+- `tests/test_config.py` — locks the active pillar strategy: exact key set (`engineering`/`career`/`building_in_public`/`mindset`), weights summing to 1.0, every pillar has a description and examples, default classifier is `embeddings`, `build_classifier()` initializes with no `ANTHROPIC_API_KEY`, and `EmbeddingClassifier` builds a profile for all four pillars.
+- `tests/test_classification.py` — Claude's `_validate_result` contract: confidence gating, unknown-pillar rejection, null pillar, malformed-response rejection. Uses arbitrary local pillar keys (not `config.CONTENT_TYPES`) so it stays valid regardless of the active pillar strategy. No network call.
 - `tests/test_embedding_classifier.py` — `EmbeddingClassifier` with a mocked embedding model: single/multi-pillar classification, score ordering, low-similarity and small-margin review, high-score assignment, empty transcript, 1..N pillars, pillar-vector caching, invalid pillar config, invalid thresholds, and classifier selection (`build_classifier`, unknown-value rejection).
 - `tests/test_evaluate_classifier.py` — dataset loading (incl. the committed `tests/fixtures/eval_sample/`), metrics from known predictions, confusion-pair counting, deterministic threshold-sweep math over pre-computed scores, and a static check that the harness never imports `content_store`.
 - `tests/test_content_store.py` — `content_slots`/`videos` idempotency primitives, the old→new unique-constraint migration, and the videos-table column migration.

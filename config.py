@@ -30,74 +30,77 @@ if ENV_FILE.exists():
 
 # ---------------------------------------------------------------------------
 # Content pillar definitions
-# Updated: September 2026 — "target_percent" renamed to "weight" and the
-# weekday-mapping model retired in favor of scheduling.allocate_pillars().
-# See docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md.
+# Updated: September 2026 — replaced the agency-oriented pillar set
+# (acquisition/building/execution/mindset) with a provisional
+# engineering-focused set for testing classification/routing against the
+# current content strategy. See PROJECT_STATE.md ("Active Pillar Strategy")
+# and the 2026-09-12 CHANGELOG.md entry.
 # Weights must sum to 1.0 (validated by scheduling.validate_pillar_weights).
 # ---------------------------------------------------------------------------
 CONTENT_TYPES: dict[str, dict[str, str | float | list[str]]] = {
-    "acquisition": {
-        "label": "Customer Acquisition in Action",
-        "color_id": "9",
+    "engineering": {
+        "label": "Software Engineering & Building",
+        "color_id": "10",
         "weight": 0.40,
         "description": (
-            "Outreach and lead generation in action: cold calls, cold emails, "
-            "DM outreach, follow-up sequences, booked demos, and the results "
-            "and lessons from prospecting activity."
+            "Software engineering, technical projects, AI agents, automation, "
+            "system architecture, APIs, debugging, implementation decisions, "
+            "and lessons learned while building software."
         ),
         "classification_examples": [
-            "Discussing cold outreach results and reply rates.",
-            "Explaining a prospecting or lead-generation experiment.",
-            "Breaking down a sales conversation or cold call.",
-            "Recapping demos booked or deals closed from outreach.",
+            "Explaining how a software system or AI agent was architected.",
+            "Walking through a technical decision made while building a project.",
+            "Discussing an API integration, automation, or engineering workflow.",
+            "Sharing a bug, performance problem, or implementation lesson.",
         ],
     },
-    "building": {
-        "label": "Building Systems & Tools",
-        "color_id": "10",
-        "weight": 0.25,
+    "career": {
+        "label": "Early-Career Software Engineering",
+        "color_id": "9",
+        "weight": 0.30,
         "description": (
-            "Building or improving internal tools, automation, and the agency's "
-            "tech stack: architecture walkthroughs, new features, integrations, "
-            "and engineering decisions behind the systems that run the agency."
+            "The process of becoming a stronger early-career software engineer "
+            "and breaking into startup engineering roles: job searching, "
+            "interviews, skill development, career decisions, and lessons from "
+            "trying to enter the software industry."
         ),
         "classification_examples": [
-            "Explaining how a software tool or pipeline was architected.",
-            "Demonstrating an automation or API integration that was built.",
-            "Discussing a technical problem encountered while building a product.",
-            "Comparing engineering approaches used in a system.",
+            "Discussing how to land a first software engineering or startup role.",
+            "Reflecting on an engineering interview or job application.",
+            "Explaining what an early-career engineer should learn.",
+            "Talking about career strategy, resumes, portfolios, or engineering experience.",
         ],
     },
-    "execution": {
-        "label": "Agency Execution",
+    "building_in_public": {
+        "label": "Building in Public",
         "color_id": "5",
         "weight": 0.20,
         "description": (
-            "Day-to-day agency operating metrics and business execution: "
-            "pipeline updates, revenue/MRR, client counts, booking rates, "
-            "retention, and weekly wins/losses recaps."
+            "Documenting the real process of building projects and developing "
+            "as an engineer: progress updates, experiments, failures, changes "
+            "in direction, lessons learned, and what is currently being worked on."
         ),
         "classification_examples": [
-            "Recapping this week's business metrics or pipeline numbers.",
-            "Discussing revenue, client count, or retention rate.",
-            "Reflecting on a weekly win/loss or a lost deal.",
-            "Explaining a change in strategy based on business results.",
+            "Sharing progress on a software project currently being built.",
+            "Talking about what changed in a project this week.",
+            "Reflecting on an experiment that succeeded or failed.",
+            "Documenting the process of learning or building something publicly.",
         ],
     },
     "mindset": {
         "label": "Mindset & Discipline",
         "color_id": "3",
-        "weight": 0.15,
+        "weight": 0.10,
         "description": (
-            "Personal mindset, discipline, and reflection: handling rejection, "
-            "consistency over intensity, personal history and lessons applied "
-            "to building the agency, not business metrics."
+            "Personal development, discipline, consistency, resilience, and "
+            "reflection related to pursuing engineering, building projects, "
+            "learning, and long-term career growth."
         ),
         "classification_examples": [
-            "Reflecting on discipline, consistency, or motivation.",
-            "Discussing how a personal setback or rejection was handled.",
-            "Drawing a life lesson from personal history and applying it to work.",
-            "Personal reflection that is not about business metrics or tools.",
+            "Reflecting on discipline or consistency while learning engineering.",
+            "Talking about dealing with rejection or setbacks.",
+            "Discussing persistence while building a difficult project.",
+            "Sharing a personal lesson about growth, courage, or long-term effort.",
         ],
     },
 }

@@ -1,6 +1,20 @@
 # Content Calendar — Changelog
 
-## 2026-09-11
+## 2026-09-12
+
+### Provisional Engineering-Focused Pillar Set — Milestone 1.3
+
+Configuration/content-only change: replaced the agency-oriented `CONTENT_TYPES` (acquisition/building/execution/mindset) with a provisional engineering-focused set to test classification and routing against the content strategy actually being produced now. No classifier, scheduling, persistence, or transcription architecture changed.
+
+- `config.py`: `CONTENT_TYPES` now `engineering` (40%, Software Engineering & Building), `career` (30%, Early-Career Software Engineering), `building_in_public` (20%, Building in Public), `mindset` (10%, Mindset & Discipline — key unchanged, label/description/weight updated). Weights sum to 1.0. Each pillar keeps `label`/`color_id`/`weight`/`description`/`classification_examples` — no type-annotation or schema change.
+- `prompts.py`: retired the `acquisition`/`building`/`execution` prompt lists. Added minimal 3-item placeholder prompt lists for `engineering`/`career`/`building_in_public` (functional, not a designed content plan — see the module docstring). `mindset`'s prompt list is unchanged (same key, old agency-era content); reconciling it with the new framing is separate follow-up work, out of scope here.
+- Fixed a latent bug in `evaluate_classifier.sweep_from_scores` surfaced by this change: it looked up `config.CONTENT_TYPES[top_key]["label"]` purely to build a `_gate_decision` reason string that sweep mode already discards, so any scored sample using a pillar key outside the *current* live config (e.g., a saved sweep from a prior pillar strategy) raised `KeyError`. Now passes `top_key` directly instead of resolving a real label — sweep math no longer depends on the live `CONTENT_TYPES` at all.
+- Updated `tests/test_generate_calendar.py` (`test_build_schedule_matches_configured_pillar_weights` now checks against the new key set — this test asserts real `config.CONTENT_TYPES` output, so it must track whatever strategy is active) and `tests/test_classification.py` (decoupled from `config.CONTENT_TYPES`: now uses a fully arbitrary local `PILLAR_KEYS` list, since that file tests `_validate_result`'s generic contract, not any particular pillar strategy, and had been silently depending on old pillar keys existing).
+- Other tests referencing `"building"`/`"acquisition"`/`"execution"` as example keys (`test_scheduling.py`, `test_slot_matcher.py`, `test_content_store.py`, `test_embedding_classifier.py`, `test_evaluate_classifier.py`, and the remaining `test_generate_calendar.py` cases) were left unchanged — they pass their own local pillar-key dicts/fixtures and never import `config.CONTENT_TYPES`, so they test generic mechanisms independent of whichever pillar strategy is currently configured.
+- Added `tests/test_config.py`: locks the active pillar key set and weight sum, confirms every pillar has a description and examples, and confirms `build_classifier()`/`EmbeddingClassifier` initialize with no `ANTHROPIC_API_KEY`.
+- Updated `README.md` (provisional-strategy notice, refreshed `CONTENT_TYPES` examples) and `PROJECT_STATE.md` (new "Active Pillar Strategy (Provisional)" section, noting `EMBEDDING_MIN_SIMILARITY`/`MIN_MARGIN` have not been re-calibrated against the new pillars).
+
+Validation: `python3 -m pytest` (129 passed, up from the 123 baseline — 5 tests failed immediately after the config swap as expected, all traced to genuine dependencies on the old keys and fixed above). Manually confirmed: `config.py` imports cleanly with the new keys; `EmbeddingClassifier` builds semantic profiles for all four new pillars with no `ANTHROPIC_API_KEY` set; `generate_calendar.py --month 9 --year 2026 --dry-run` produces a 40/30/20/10 schedule (September 2026: 12/9/6/3 of 30 posts) containing only the new pillar labels; `process_content.py --dry-run` (with and without a real ffmpeg-synthesized video) initializes and runs cleanly with no API key.
 
 ### Local Embedding Classifier & Evaluation Harness — Milestone 1.2
 

@@ -4,6 +4,8 @@ Generates a full month of short-form video content calendar events and pushes th
 
 See `PROJECT_STATE.md` for current architecture and `docs/decisions/` for why it's built this way.
 
+> **Current pillar strategy is provisional.** `config.CONTENT_TYPES` is currently set to an engineering-focused pillar set (Software Engineering & Building, Early-Career Software Engineering, Building in Public, Mindset & Discipline) for testing classification/routing against the current content direction — not a finalized long-term strategy. See "Customising" below and `PROJECT_STATE.md`.
+
 ---
 
 ## Run Commands
@@ -142,15 +144,16 @@ POSTING_TIME = "10:00"                           # "HH:MM", 24-hour, local (TIME
 
 ```python
 CONTENT_TYPES = {
-    "building": {"label": "Building Systems & Tools", "color_id": "10", "weight": 0.50, "description": "..."},
-    "acquisition": {"label": "Customer Acquisition in Action", "color_id": "9", "weight": 0.30, "description": "..."},
-    "mindset": {"label": "Mindset & Discipline", "color_id": "3", "weight": 0.20, "description": "..."},
+    "engineering": {"label": "Software Engineering & Building", "color_id": "10", "weight": 0.40, "description": "..."},
+    "career": {"label": "Early-Career Software Engineering", "color_id": "9", "weight": 0.30, "description": "..."},
+    "building_in_public": {"label": "Building in Public", "color_id": "5", "weight": 0.20, "description": "..."},
+    "mindset": {"label": "Mindset & Discipline", "color_id": "3", "weight": 0.10, "description": "..."},
 }
 ```
 
 Monthly counts are computed from real calendar dates and the largest-remainder method (`scheduling.allocate_pillars`), then interleaved across the month (`scheduling.distribute_pillars`) rather than clustered — see `docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md`. Invalid configuration (weights not summing to 1.0, a bad posting time, mismatched posting-day count, etc.) fails clearly at startup rather than silently normalizing.
 
-**Prompts** — edit `prompts.py` → the `PROMPTS` dict; each key must match a pillar key in `CONTENT_TYPES`. Prompts are optional: set `PROMPT_GENERATION_ENABLED = False` in `config.py` to generate a schedule with no prompt text at all (`content_slots.prompt` will be `NULL`). Either way, prompts never affect which date or pillar a slot gets.
+**Prompts** — edit `prompts.py` → the `PROMPTS` dict; each key must match a pillar key in `CONTENT_TYPES`. Prompts are optional: set `PROMPT_GENERATION_ENABLED = False` in `config.py` to generate a schedule with no prompt text at all (`content_slots.prompt` will be `NULL`). Either way, prompts never affect which date or pillar a slot gets. (Current prompt lists for `engineering`/`career`/`building_in_public` are minimal placeholders to keep generation functional during pillar testing, not a designed content plan — see `prompts.py`'s module docstring.)
 
 > Changing the strategy and re-running `generate_calendar.py` for a month that already has persisted slots only *adds* slots for newly-covered dates — it never rewrites an existing slot's pillar or prompt. Mixing two strategies within one already-generated month is a known limitation; regenerate the whole month fresh (see ADR-0002) if you need a clean re-strategize.
 
@@ -167,10 +170,10 @@ Add representative examples per pillar in `config.py` to improve embedding accur
 
 ```python
 CONTENT_TYPES = {
-    "building": {
-        "label": "Building Systems & Tools",
+    "engineering": {
+        "label": "Software Engineering & Building",
         "description": "...",
-        "weight": 0.25,
+        "weight": 0.40,
         "classification_examples": [
             "Explaining how a software tool was architected.",
             "Demonstrating an automation or API integration.",
