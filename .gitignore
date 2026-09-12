@@ -26,3 +26,6 @@ data/calendar_state.json
 evaluation/labels.csv
 evaluation/transcripts/*
 !evaluation/transcripts/.gitkeep
+
+#ignore virtual environment folder 
+.venv/
