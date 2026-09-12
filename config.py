@@ -120,7 +120,7 @@ DEFAULT_YEAR = int(os.getenv("CONTENT_CALENDAR_DEFAULT_YEAR", "2026"))
 
 # Posts per week, 1-7. The month's actual slot count is derived from real
 # calendar dates (scheduling.generate_posting_dates), not posts_per_week * 4.
-POSTS_PER_WEEK = 7
+POSTS_PER_WEEK = 4
 
 # "auto" (scheduling.auto_posting_weekdays picks evenly-spaced weekdays) or an
 # explicit list of exactly POSTS_PER_WEEK distinct weekday names, e.g.
