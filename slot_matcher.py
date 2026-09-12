@@ -32,3 +32,11 @@ def select_slot(store: ContentStore, pillar_key: str, now: datetime | None = Non
     """Return the earliest OPEN content_slot for pillar_key scheduled after now, if any."""
     after = now or now_in_config_timezone()
     return store.find_earliest_open_slot(pillar_key, after.isoformat())
+
+
+def select_slot_fifo(store: ContentStore, now: datetime | None = None) -> SlotRecord | None:
+    """Return the earliest OPEN content_slot scheduled at/after now, ignoring
+    pillar entirely — the FIFO routing mode matcher. No AI/classifier
+    involvement, same as select_slot."""
+    after = now or now_in_config_timezone()
+    return store.find_earliest_open_slot_fifo(after.isoformat())

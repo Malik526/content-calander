@@ -27,7 +27,21 @@ WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturd
 
 
 class ScheduleConfigError(ValueError):
-    """Raised for invalid posting-cadence, posting-day, posting-time, or pillar-weight configuration."""
+    """Raised for invalid posting-cadence, posting-day, posting-time, pillar-weight, or routing-mode configuration."""
+
+
+VALID_ROUTING_MODES = {"fifo", "pillar"}
+
+
+def validate_routing_mode(mode: str) -> None:
+    """Raise ScheduleConfigError for an unsupported config.ROUTING_MODE
+    value. Mirrors classification.UnsupportedClassifierError's message
+    style. Called at first use (generate_calendar.main(),
+    process_content.main()), not at config.py import time."""
+    if mode not in VALID_ROUTING_MODES:
+        raise ScheduleConfigError(
+            f"Unsupported ROUTING_MODE={mode!r}. Valid values: {', '.join(sorted(VALID_ROUTING_MODES))}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -219,10 +233,18 @@ def distribute_pillars(pillar_counts: dict[str, int]) -> list[str]:
     return sequence
 
 
+def validate_cadence_config(posts_per_week, posting_days, posting_time) -> None:
+    """Raise ScheduleConfigError for invalid posting-cadence/day/time
+    configuration only — no pillar weights involved. FIFO mode needs only
+    this (WHEN), not validate_pillar_weights (WHAT); pillar mode needs both
+    (see validate_schedule_config)."""
+    resolve_posting_weekdays(posts_per_week, posting_days)
+    parse_posting_time(posting_time)
+
+
 def validate_schedule_config(posts_per_week, posting_days, posting_time, pillar_weights: dict[str, float]) -> None:
     """Raise ScheduleConfigError with a clear message for any invalid
     posting-cadence/day/time/weight configuration. Called once, before any
-    schedule is generated or persisted."""
-    resolve_posting_weekdays(posts_per_week, posting_days)
-    parse_posting_time(posting_time)
+    schedule is generated or persisted (pillar mode)."""
+    validate_cadence_config(posts_per_week, posting_days, posting_time)
     validate_pillar_weights(pillar_weights)

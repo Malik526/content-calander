@@ -1,12 +1,17 @@
 # Content Calendar Generator
 
-Generates a month of short-form video content calendar events and pushes them to Google Calendar automatically, and automates routing recorded videos into that schedule: drop `.mov`/`.mp4` files into `content/incoming/`, run `process_content.py`, and each video is transcribed, classified into a content pillar, and assigned to the earliest matching future posting slot.
+Generates a month of short-form video content calendar events and pushes them to Google Calendar automatically, and automates routing recorded videos into that schedule: drop `.mov`/`.mp4` files into `content/incoming/`, run `process_content.py`, and each video is transcribed, given a caption candidate, and assigned to the earliest matching future posting slot.
 
-Generation is **future-only**: run it partway through the current month and it schedules only what's left, not the whole month. See "Run Commands" below and `PROJECT_STATE.md`.
+**Two routing modes** (`config.ROUTING_MODE`, default **`fifo`**):
 
-See `PROJECT_STATE.md` for current architecture and `docs/decisions/` for why it's built this way.
+- **`fifo`** (default) — no content pillar or classifier required. Videos are scheduled deterministically in ingestion order into untyped posting slots. Transcription still runs (for the transcript/caption and future intelligence), but a transcription failure does not block scheduling — it's recorded and the video is scheduled anyway.
+- **`pillar`** — the original strategy: each video is classified into a `config.CONTENT_TYPES` pillar and routed to the earliest open slot for that pillar, with weighted allocation across the month.
 
-> **Current pillar strategy is provisional.** `config.CONTENT_TYPES` is currently set to an engineering-focused pillar set (Software Engineering & Building, Early-Career Software Engineering, Building in Public, Mindset & Discipline) for testing classification/routing against the current content direction — not a finalized long-term strategy. See "Customising" below and `PROJECT_STATE.md`.
+See "Routing Mode" below, `PROJECT_STATE.md` for current architecture, and `docs/decisions/` for why it's built this way.
+
+Generation is **future-only** in both modes: run it partway through the current month and it schedules only what's left, not the whole month. See "Run Commands" below.
+
+> **The pillar strategy itself is provisional.** `config.CONTENT_TYPES` is currently set to an engineering-focused pillar set (Software Engineering & Building, Early-Career Software Engineering, Building in Public, Mindset & Discipline) — relevant only when `ROUTING_MODE=pillar`. See "Customising" below and `PROJECT_STATE.md`.
 
 ---
 
@@ -55,7 +60,7 @@ python3 process_content.py --dry-run    # classify/transcribe and cache, but nev
 python3 process_content.py --verbose    # print media/transcript/classification detail per video
 ```
 
-Place `.mov`/`.mp4` files in `content/incoming/` first. A video is only auto-assigned once you have generated a month whose slots are still in the future — see "Video Processing Setup" below. This runs **fully locally by default** — no Anthropic API key required (see Classification below).
+Place `.mov`/`.mp4` files in `content/incoming/` first. A video is only auto-assigned once you have generated a month whose slots are still in the future — see "Video Processing Setup" below. This runs **fully locally by default** — no Anthropic API key required, and in the default `fifo` routing mode no classifier is constructed at all (see Routing Mode and Classification below).
 
 **Benchmark or calibrate the classifier:**
 
@@ -128,19 +133,43 @@ The shared service account (`~/growth_agency/credentials/service-account.json`, 
 | `generate_calendar.py` | Schedule generation, Google Calendar push, `content_slots` persistence |
 | `clear_calendar.py` | Clears the dedicated app calendar's tracked schedule (or an explicit override calendar) |
 | `calendar_manager.py` | OAuth auth + create/reuse/persist the dedicated app-owned Google Calendar |
-| `scheduling.py` | Posting-date generation and weighted pillar allocation (pure functions, no I/O) |
-| `process_content.py` | Video ingestion orchestrator (discover → inspect → transcribe → classify → route → report) |
-| `config.py` | All settings: pillar labels/descriptions/weights, posting cadence, auth paths, color IDs, pipeline config |
-| `prompts.py` | Every daily short-form video prompt organised by pillar (optional; see Customising) |
+| `scheduling.py` | Posting-date generation, routing-mode validation, weighted pillar allocation (pure functions, no I/O) |
+| `process_content.py` | Video ingestion orchestrator — branches on `ROUTING_MODE` (discover → inspect → transcribe → [caption] → [classify, pillar mode only] → route → report) |
+| `config.py` | All settings: routing/caption mode, pillar labels/descriptions/weights, posting cadence, auth paths, color IDs, pipeline config |
+| `prompts.py` | Every daily short-form video prompt organised by pillar (pillar mode only; see Customising) |
 | `media.py` | ffprobe inspection, TikTok-compatibility check, audio extraction |
 | `transcription.py` | `Transcriber` interface + local `faster-whisper` implementation |
-| `classification.py` | `ContentClassifier` interface, `EmbeddingClassifier` (default, local), `ClaudeClassifier` (optional), `build_classifier()` |
+| `caption.py` | Caption-mode validation + deterministic transcript-to-caption-candidate derivation |
+| `classification.py` | `ContentClassifier` interface, `EmbeddingClassifier` (default, local), `ClaudeClassifier` (optional), `build_classifier()` — pillar mode only |
 | `evaluate_classifier.py` | Offline benchmark harness for classifiers against a local labeled dataset |
-| `slot_matcher.py` | Deterministic earliest-open-slot selection |
+| `slot_matcher.py` | Deterministic earliest-open-slot selection — `select_slot_fifo` (no pillar) and `select_slot` (pillar mode) |
 | `content_store.py` | SQLite persistence (`videos`, `content_slots`) |
 | `requirements.txt` | Python package dependencies |
 
 Run tests with `python3 -m pytest`.
+
+---
+
+## Routing Mode
+
+`config.ROUTING_MODE` (`CONTENT_CALENDAR_ROUTING_MODE` in `.env`) picks the scheduling strategy. An unrecognized value fails immediately with a clear error — it's never inferred from whether `CONTENT_TYPES` happens to be configured.
+
+- **`fifo`** (default) — `generate_calendar.py` creates untyped `OPEN` slots (`pillar_key = NULL`) straight from the posting cadence, with no weighted pillar allocation at all. `process_content.py` never constructs a classifier in this mode — an invalid/unset `CONTENT_CALENDAR_CLASSIFIER` simply doesn't matter. Every valid, inspected video is eligible for the earliest open slot in ingestion order (`slot_matcher.select_slot_fifo`), regardless of transcript content. Prompts are not generated in this mode (`content_slots.prompt` stays `NULL`) and the Google Calendar event title is the fixed `"Content Post"`.
+- **`pillar`** — unchanged classify-then-match strategy: weighted allocation at generation time, classification + confidence gate + pillar-specific slot matching at ingestion time. See "Customising" and "Classification" below.
+
+**Transcription is decoupled from scheduling in `fifo` mode, not in `pillar` mode.** A video still needs to pass basic media validation (a real, readable file with an audio stream) to be scheduled in either mode — that's a precondition, not "intelligence". But if `faster-whisper` itself fails on a video that *did* pass validation: in `fifo` mode the video is still scheduled (`videos.status = "TRANSCRIPTION_FAILED"`, `transcription_status = "FAILED"`, caption falls back to `caption_source = "none"`); in `pillar` mode this is still a hard failure (classification has nothing to classify), same as before this milestone. See `docs/decisions/0005-fifo-baseline-and-optional-strategy-routing.md`.
+
+**FIFO ordering** is oldest-first: a video already known to the database (still waiting in `content/incoming/` from a prior run) keeps its original position via its immutable `videos.created_at`, even if the file is later touched or copied — it does **not** survive the file being renamed, which is treated as a new video. A genuinely new file sorts by filesystem mtime.
+
+---
+
+## Captions
+
+`config.CAPTION_MODE` (`CONTENT_CALENDAR_CAPTION_MODE` in `.env`) controls how `videos.caption_text`/`caption_source` get populated — in **both** routing modes:
+
+- **`transcript_auto`** (default) — `caption.build_caption_from_transcript()` normalizes the transcript's whitespace and stores it as the caption candidate (no truncation — platform-specific length limits belong at the future per-platform publisher, not in the canonical stored caption). Falls back to `caption_source = "none"` if transcription never produced a transcript.
+- **`manual`** — reserved for a future editing UI; this pipeline never writes `caption_text` in this mode, only records `caption_source = "manual"` so the stage doesn't re-run. An existing manual caption is never overwritten.
+- **`none`** — no caption is generated.
 
 ---
 
@@ -158,7 +187,7 @@ POSTING_TIME = "10:00"                           # "HH:MM", 24-hour, local (TIME
 
 **Future-only generation:** candidate posting datetimes before "now" (in `TIMEZONE`) are discarded *before* pillar weights are allocated — so running `generate_calendar.py` for the current month allocates the configured percentages across whatever's actually left, not the full month. A same-day slot is still generated if its `POSTING_TIME` hasn't passed yet. `build_schedule(year, month, start_at=...)` accepts an explicit boundary (mainly for tests); omitted, it resolves the real current time via the same helper `slot_matcher.py` uses for slot matching, so there's one single definition of "now" across the whole app.
 
-**Content pillars and their share of the schedule** — edit `config.py` → `CONTENT_TYPES`. Any number of pillars is supported; each needs a `label`, `color_id`, `description` (used by the classifier), and `weight`. Weights must sum to `1.0`:
+**Content pillars and their share of the schedule** (`ROUTING_MODE=pillar` only) — edit `config.py` → `CONTENT_TYPES`. Any number of pillars is supported; each needs a `label`, `color_id`, `description` (used by the classifier), and `weight`. Weights must sum to `1.0`:
 
 ```python
 CONTENT_TYPES = {
@@ -179,7 +208,7 @@ Monthly counts are computed from real calendar dates and the largest-remainder m
 
 ## Classification
 
-`config.CLASSIFIER` selects which `ContentClassifier` runs (`config.py`, or `CONTENT_CALENDAR_CLASSIFIER` in `.env`):
+Only relevant when `ROUTING_MODE=pillar` — in `fifo` mode (the default) no classifier is constructed or called at all. `config.CLASSIFIER` selects which `ContentClassifier` runs (`config.py`, or `CONTENT_CALENDAR_CLASSIFIER` in `.env`):
 
 - **`embeddings`** (default) — fully local, no API key. Compares a transcript's embedding to each pillar's semantic profile (`label` + `description` + `classification_examples`, from `CONTENT_TYPES`) via cosine similarity, using `fastembed` + `BAAI/bge-small-en-v1.5`. Auto-assigns only if the top pillar clears **both** `EMBEDDING_MIN_SIMILARITY` and `EMBEDDING_MIN_MARGIN` (margin over the second-best pillar) — otherwise the video goes to `NEEDS_REVIEW`. These two thresholds ship as **explicitly uncalibrated placeholders**; see below for calibrating them.
 - **`claude`** — the Anthropic implementation from Milestone 1, requires `ANTHROPIC_API_KEY`. Useful as a stronger reference/benchmark, not required for normal operation.

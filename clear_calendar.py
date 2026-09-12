@@ -64,7 +64,7 @@ def _clear_dedicated_calendar(*, dry_run: bool, include_assigned: bool) -> None:
 
         if dry_run:
             for slot in slots:
-                print(f"  would remove: {slot.scheduled_at} [{slot.pillar_key}] status={slot.status}")
+                print(f"  would remove: {slot.scheduled_at} [{slot.pillar_key or 'fifo'}] status={slot.status}")
             print("\nDry run: nothing was deleted.")
             return
 
@@ -83,7 +83,7 @@ def _clear_dedicated_calendar(*, dry_run: bool, include_assigned: bool) -> None:
                     if exc.resp.status not in (404, 410):  # already gone is fine
                         print(f"  WARNING: could not delete calendar event for {slot.scheduled_at}: {exc}", file=sys.stderr)
             store.delete_slot(slot.id)
-            print(f"  Cleared: {slot.scheduled_at} [{slot.pillar_key}]")
+            print(f"  Cleared: {slot.scheduled_at} [{slot.pillar_key or 'fifo'}]")
             cleared += 1
 
         print(f"\nCleared {cleared} slot(s) and their calendar events.")

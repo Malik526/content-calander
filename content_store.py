@@ -66,7 +66,7 @@ SCHEMA_CONTENT_SLOTS = """
 CREATE TABLE IF NOT EXISTS content_slots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scheduled_at TEXT NOT NULL UNIQUE,
-    pillar_key TEXT NOT NULL,
+    pillar_key TEXT,
     prompt TEXT,
     status TEXT NOT NULL DEFAULT 'OPEN',
     assigned_video_id INTEGER REFERENCES videos(id),
@@ -79,12 +79,17 @@ _SLOT_STATUS_PRIORITY = {"OPEN": 0, "FAILED": 0, "ASSIGNED": 1, "PUBLISHED": 2}
 
 # New nullable videos columns added for Milestone 1.2 (local embedding
 # classification observability — see
-# docs/decisions/0003-local-embedding-classification.md). Adding a nullable
-# column is a simple ALTER TABLE, unlike the content_slots rebuild above.
+# docs/decisions/0003-local-embedding-classification.md) and Milestone 1.3
+# (first-class caption state — see
+# docs/decisions/0005-fifo-baseline-and-optional-strategy-routing.md).
+# Adding a nullable column is a simple ALTER TABLE, unlike the content_slots
+# rebuild below.
 _VIDEOS_MIGRATION_COLUMNS = {
     "classification_second_score": "REAL",
     "classification_margin": "REAL",
     "classifier": "TEXT",
+    "caption_text": "TEXT",
+    "caption_source": "TEXT",
 }
 
 
@@ -96,14 +101,21 @@ def _ensure_videos_columns(conn: sqlite3.Connection) -> None:
 
 
 def _content_slots_needs_migration(conn: sqlite3.Connection) -> bool:
+    """True if content_slots was created under either pre-Milestone-1.3
+    schema this rebuilds away from: the old UNIQUE(scheduled_at, pillar_key)
+    constraint (Milestone 1.1), or a NOT NULL pillar_key (pre-Milestone 1.3 —
+    FIFO slots need pillar_key nullable). Both are fixed by the same rebuild
+    pass below, run at most once regardless of which (or both) applied."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'content_slots'"
     ).fetchone()
-    return row is not None and "UNIQUE(scheduled_at, pillar_key)" in (row["sql"] or "")
+    sql = (row["sql"] or "") if row is not None else ""
+    return "UNIQUE(scheduled_at, pillar_key)" in sql or "pillar_key TEXT NOT NULL" in sql
 
 
 def _migrate_content_slots_unique_constraint(conn: sqlite3.Connection) -> None:
-    """Rebuild content_slots under the new UNIQUE(scheduled_at) constraint.
+    """Rebuild content_slots under the current schema (UNIQUE(scheduled_at)
+    alone, pillar_key nullable).
 
     SQLite cannot alter a table's constraints in place, so this renames the
     old table, creates the new one, and copies rows across — keeping at most
@@ -111,7 +123,9 @@ def _migrate_content_slots_unique_constraint(conn: sqlite3.Connection) -> None:
     under the old (scheduled_at, pillar_key) constraint, the row with the
     most "advanced" status wins (PUBLISHED > ASSIGNED > OPEN/FAILED), tied
     by lowest id, so an already-assigned/published slot is never silently
-    discarded in favor of a still-open duplicate.
+    discarded in favor of a still-open duplicate. Existing rows already have
+    non-null pillar_key values, so relaxing that constraint doesn't change
+    any copied data — it only makes the column newly insertable as NULL.
     """
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("ALTER TABLE content_slots RENAME TO content_slots_old")
@@ -180,13 +194,15 @@ class VideoRecord:
     assigned_slot_id: int | None
     created_at: str
     processed_at: str | None
+    caption_text: str | None
+    caption_source: str | None
 
 
 @dataclass
 class SlotRecord:
     id: int
     scheduled_at: str
-    pillar_key: str
+    pillar_key: str | None
     prompt: str | None
     status: str
     assigned_video_id: int | None
@@ -245,6 +261,21 @@ class ContentStore:
         ).fetchone()
         return _row_to_video(row) if row else None
 
+    def get_video_by_path(self, original_path: str) -> VideoRecord | None:
+        """Look up a video by its original discovery path.
+
+        Used only for FIFO ordering (see process_content.discover_videos):
+        a video already known to the store sorts by its immutable
+        created_at instead of the current (possibly touched/copied) file
+        mtime. Scoped to path stability — a renamed file is not matched
+        here and is treated as newly discovered; see
+        docs/decisions/0005-fifo-baseline-and-optional-strategy-routing.md.
+        """
+        row = self._conn.execute(
+            "SELECT * FROM videos WHERE original_path = ?", (original_path,)
+        ).fetchone()
+        return _row_to_video(row) if row else None
+
     def insert_video(self, file_hash: str, original_filename: str, original_path: str, created_at: str) -> VideoRecord:
         cur = self._conn.execute(
             """
@@ -267,7 +298,7 @@ class ContentStore:
     def insert_slot_if_missing(
         self,
         scheduled_at: str,
-        pillar_key: str,
+        pillar_key: str | None,
         prompt: str | None,
         created_at: str,
         google_calendar_event_id: str | None = None,
@@ -300,6 +331,23 @@ class ContentStore:
             LIMIT 1
             """,
             (pillar_key, after_iso),
+        ).fetchone()
+        return _row_to_slot(row) if row else None
+
+    def find_earliest_open_slot_fifo(self, after_iso: str) -> SlotRecord | None:
+        """Earliest OPEN slot at or after after_iso, regardless of pillar_key.
+        Inclusive (>=), matching the FIFO matching contract in
+        docs/decisions/0005-fifo-baseline-and-optional-strategy-routing.md —
+        deliberately different from find_earliest_open_slot's exclusive (>),
+        which stays unchanged for pillar mode."""
+        row = self._conn.execute(
+            """
+            SELECT * FROM content_slots
+            WHERE status = 'OPEN' AND scheduled_at >= ?
+            ORDER BY scheduled_at ASC
+            LIMIT 1
+            """,
+            (after_iso,),
         ).fetchone()
         return _row_to_slot(row) if row else None
 

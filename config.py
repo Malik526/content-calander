@@ -112,6 +112,27 @@ DEFAULT_MONTH = int(os.getenv("CONTENT_CALENDAR_DEFAULT_MONTH", "6"))
 DEFAULT_YEAR = int(os.getenv("CONTENT_CALENDAR_DEFAULT_YEAR", "2026"))
 
 # ---------------------------------------------------------------------------
+# Routing strategy
+# Added: Milestone 1.3 — "fifo" (default) schedules videos deterministically
+# in ingestion order into untyped slots, with no pillar/classifier involved.
+# "pillar" preserves the prior classify-then-match strategy as an opt-in
+# mode. Validated by scheduling.validate_routing_mode() at first use (same
+# pattern as CLASSIFIER/classification.build_classifier()), not at import
+# time. See docs/decisions/0005-fifo-baseline-and-optional-strategy-routing.md.
+# ---------------------------------------------------------------------------
+ROUTING_MODE = os.getenv("CONTENT_CALENDAR_ROUTING_MODE", "fifo")
+
+# ---------------------------------------------------------------------------
+# Caption strategy
+# Added: Milestone 1.3. "transcript_auto" derives a caption candidate from
+# the video's transcript (caption.build_caption_from_transcript); "manual"
+# never writes caption_text itself (reserved for a future editing UI) but
+# still records caption_source so the stage is idempotent; "none" produces
+# no caption. Validated by caption.validate_caption_mode() at first use.
+# ---------------------------------------------------------------------------
+CAPTION_MODE = os.getenv("CONTENT_CALENDAR_CAPTION_MODE", "transcript_auto")
+
+# ---------------------------------------------------------------------------
 # Posting cadence and pillar allocation strategy
 # Replaces the old fixed WEEKLY_SCHEDULE / FIFTH_SUNDAY_CONTENT_TYPE mapping,
 # which coupled "when to post" to "what pillar" through weekday alone.

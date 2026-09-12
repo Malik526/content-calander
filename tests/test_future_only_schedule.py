@@ -38,7 +38,7 @@ def test_build_schedule_reallocates_against_remaining_future_count():
     future_dates = [dt for dt in full_dates if dt >= start_at]
     assert len(future_dates) < len(full_dates)  # sanity: this month really is partly elapsed here
 
-    schedule = build_schedule(2026, 9, start_at=start_at)
+    schedule = build_schedule(2026, 9, start_at=start_at, routing_mode="pillar")
 
     assert len(schedule) == len(future_dates)
     pillar_weights = {key: info["weight"] for key, info in CONTENT_TYPES.items()}

@@ -100,6 +100,31 @@ def test_calendar_itself_is_never_deleted(store, oauth_and_calendar):
     oauth_and_calendar.calendars().delete.assert_not_called()
 
 
+def test_dry_run_prints_fifo_label_for_null_pillar_slot(store, oauth_and_calendar, capsys):
+    """A FIFO slot (pillar_key=None) must not print the literal '[None]'."""
+    calendar_manager.save_calendar_state("cal-1", calendar_manager.APP_CALENDAR_SUMMARY)
+    oauth_and_calendar.calendars().get.return_value.execute.return_value = {"id": "cal-1"}
+    store.insert_slot_if_missing("2026-09-14T09:00:00", None, None, "2026-01-01T00:00:00", google_calendar_event_id="evt-fifo")
+
+    clear_calendar._clear_dedicated_calendar(dry_run=True, include_assigned=False)
+
+    out = capsys.readouterr().out
+    assert "[fifo]" in out
+    assert "[None]" not in out
+
+
+def test_clear_prints_fifo_label_for_null_pillar_slot(store, oauth_and_calendar, capsys):
+    calendar_manager.save_calendar_state("cal-1", calendar_manager.APP_CALENDAR_SUMMARY)
+    oauth_and_calendar.calendars().get.return_value.execute.return_value = {"id": "cal-1"}
+    store.insert_slot_if_missing("2026-09-14T09:00:00", None, None, "2026-01-01T00:00:00", google_calendar_event_id="evt-fifo")
+
+    clear_calendar._clear_dedicated_calendar(dry_run=False, include_assigned=False)
+
+    out = capsys.readouterr().out
+    assert "[fifo]" in out
+    assert "[None]" not in out
+
+
 def test_no_dedicated_calendar_fails_closed_not_primary(store, oauth_and_calendar):
     """No persisted/discoverable app calendar -> fail safely; must never
     fall back to clearing 'primary' or any other calendar."""

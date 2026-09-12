@@ -15,7 +15,9 @@ from scheduling import (
     generate_posting_dates,
     parse_posting_time,
     resolve_posting_weekdays,
+    validate_cadence_config,
     validate_pillar_weights,
+    validate_routing_mode,
     validate_schedule_config,
 )
 
@@ -338,3 +340,36 @@ def test_filter_future_dates_preserves_ascending_order():
     future = filter_future_dates(dates, start_at)
 
     assert future == sorted(future)
+
+
+# ---------------------------------------------------------------------------
+# Routing mode (Milestone 1.3)
+# ---------------------------------------------------------------------------
+
+def test_validate_routing_mode_accepts_fifo_and_pillar():
+    validate_routing_mode("fifo")  # must not raise
+    validate_routing_mode("pillar")  # must not raise
+
+
+def test_validate_routing_mode_rejects_unknown_value():
+    with pytest.raises(ScheduleConfigError, match="Unsupported ROUTING_MODE='bogus'"):
+        validate_routing_mode("bogus")
+
+
+def test_validate_cadence_config_ignores_pillar_weights():
+    """FIFO mode needs only WHEN (cadence) validated, not WHAT (pillar
+    weights) — validate_cadence_config takes no pillar_weights argument at
+    all, so an invalid/empty pillar configuration can never block it."""
+    validate_cadence_config(3, "auto", "09:00")  # must not raise
+
+
+def test_validate_cadence_config_rejects_invalid_cadence():
+    with pytest.raises(ScheduleConfigError):
+        validate_cadence_config(9, "auto", "09:00")
+
+
+def test_validate_schedule_config_still_validates_both_cadence_and_weights():
+    """Pillar mode keeps the original combined validation."""
+    validate_schedule_config(3, "auto", "09:00", {"a": 1.0})  # must not raise
+    with pytest.raises(ScheduleConfigError):
+        validate_schedule_config(3, "auto", "09:00", {"a": 0.5})

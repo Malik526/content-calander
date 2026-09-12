@@ -16,7 +16,8 @@ PAST_BOUNDARY = datetime(2000, 1, 1)  # old enough that no configured month is e
 
 
 def test_build_schedule_matches_configured_pillar_weights():
-    schedule = build_schedule(2026, 9, start_at=PAST_BOUNDARY)  # September 2026: default POSTS_PER_WEEK, all pillars
+    # September 2026, pillar mode: default POSTS_PER_WEEK, all pillars.
+    schedule = build_schedule(2026, 9, start_at=PAST_BOUNDARY, routing_mode="pillar")
     counts = {}
     for post in schedule:
         counts[post.content_type] = counts.get(post.content_type, 0) + 1
@@ -26,8 +27,8 @@ def test_build_schedule_matches_configured_pillar_weights():
 
 
 def test_build_schedule_is_deterministic():
-    first = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
-    second = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
+    first = build_schedule(2026, 6, start_at=PAST_BOUNDARY, routing_mode="pillar")
+    second = build_schedule(2026, 6, start_at=PAST_BOUNDARY, routing_mode="pillar")
 
     assert [(p.scheduled_at, p.content_type, p.prompt) for p in first] == [
         (p.scheduled_at, p.content_type, p.prompt) for p in second
@@ -35,12 +36,12 @@ def test_build_schedule_is_deterministic():
 
 
 def test_build_schedule_attaches_prompts_by_default():
-    schedule = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
+    schedule = build_schedule(2026, 6, start_at=PAST_BOUNDARY, routing_mode="pillar")
     assert all(post.prompt for post in schedule)
 
 
 def test_build_event_body_uses_scheduled_at_directly():
-    schedule = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
+    schedule = build_schedule(2026, 6, start_at=PAST_BOUNDARY, routing_mode="pillar")
     post = schedule[0]
 
     body = build_event_body(post)

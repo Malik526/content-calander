@@ -49,6 +49,7 @@ from config import (
     POSTING_TIME,
     POSTS_PER_WEEK,
     PROMPT_GENERATION_ENABLED,
+    ROUTING_MODE,
     SCOPES,
     SERVICE_ACCOUNT_FILE,
     TIMEZONE,
@@ -61,9 +62,16 @@ from scheduling import (
     distribute_pillars,
     filter_future_dates,
     generate_posting_dates,
-    validate_schedule_config,
+    validate_cadence_config,
+    validate_pillar_weights,
+    validate_routing_mode,
 )
 from slot_matcher import now_in_config_timezone
+
+# Event title/description for an untyped FIFO slot — no pillar label exists
+# yet to build one from. See
+# docs/decisions/0005-fifo-baseline-and-optional-strategy-routing.md.
+FIFO_EVENT_SUMMARY = "Content Post"
 
 
 # ---------------------------------------------------------------------------
@@ -71,9 +79,11 @@ from slot_matcher import now_in_config_timezone
 # ---------------------------------------------------------------------------
 
 class ScheduledPost(NamedTuple):
-    """One posting slot: the datetime, content pillar key, and optional prompt."""
+    """One posting slot: the datetime, an optional content pillar key (None
+    in FIFO mode — a posting opportunity doesn't inherently have a content
+    category), and an optional prompt (always None in FIFO mode)."""
     scheduled_at: datetime
-    content_type: str
+    content_type: str | None
     prompt: str | None
 
 
@@ -156,26 +166,45 @@ def get_content_weight_percent(content_type: str) -> int:
     return int(round(float(CONTENT_TYPES[content_type]["weight"]) * 100))
 
 
-def build_schedule(year: int, month: int, start_at: datetime | None = None) -> list[ScheduledPost]:
+def build_schedule(
+    year: int,
+    month: int,
+    start_at: datetime | None = None,
+    routing_mode: str | None = None,
+) -> list[ScheduledPost]:
     """
-    Build the month's schedule: WHEN comes from scheduling.generate_posting_dates
-    (cadence + posting days + posting time), then scheduling.filter_future_dates
-    discards anything scheduled before start_at (defaulting to now, in
-    config.TIMEZONE — see slot_matcher.now_in_config_timezone, reused here
-    rather than introducing a second "what does now mean" convention).
-    WHAT pillar comes from scheduling.allocate_pillars (largest remainder)
-    + distribute_pillars (spread pillars evenly rather than clustered),
-    computed against the *filtered* future-only count — a month already
-    partly in the past is never allocated against its full original size.
-    Prompts, if enabled, are attached last and rotate sequentially per
-    pillar — they never influence the date or pillar decision.
+    Build the month's schedule: WHEN always comes from
+    scheduling.generate_posting_dates (cadence + posting days + posting
+    time), then scheduling.filter_future_dates discards anything scheduled
+    before start_at (defaulting to now, in config.TIMEZONE — see
+    slot_matcher.now_in_config_timezone, reused here rather than
+    introducing a second "what does now mean" convention).
 
-    start_at is injectable so this stays deterministic/testable; pass it
-    explicitly in tests, leave it None in normal use.
+    In "fifo" mode (the default), that's the whole schedule — every post
+    gets content_type=None and prompt=None (prompts are explicitly not
+    generated in FIFO mode; see
+    docs/decisions/0005-fifo-baseline-and-optional-strategy-routing.md).
+
+    In "pillar" mode, WHAT pillar comes from scheduling.allocate_pillars
+    (largest remainder) + distribute_pillars (spread pillars evenly rather
+    than clustered), computed against the *filtered* future-only count — a
+    month already partly in the past is never allocated against its full
+    original size. Prompts, if enabled, are attached last and rotate
+    sequentially per pillar — they never influence the date or pillar
+    decision.
+
+    start_at/routing_mode are injectable so this stays deterministic/
+    testable; pass them explicitly in tests, leave both None in normal use
+    (routing_mode then defaults to config.ROUTING_MODE).
     """
+    mode = routing_mode if routing_mode is not None else ROUTING_MODE
+
     dates = generate_posting_dates(year, month, POSTS_PER_WEEK, POSTING_DAYS, POSTING_TIME)
     boundary = start_at if start_at is not None else now_in_config_timezone()
     dates = filter_future_dates(dates, boundary)
+
+    if mode == "fifo":
+        return [ScheduledPost(scheduled_at=dt, content_type=None, prompt=None) for dt in dates]
 
     pillar_weights = {key: info["weight"] for key, info in CONTENT_TYPES.items()}
     counts = allocate_pillars(len(dates), pillar_weights)
@@ -202,11 +231,16 @@ def build_schedule(year: int, month: int, start_at: datetime | None = None) -> l
 # ---------------------------------------------------------------------------
 
 def build_event_body(post: ScheduledPost) -> dict:
-    """Construct the Google Calendar event dict for a single post."""
+    """Construct the Google Calendar event dict for a single post.
+
+    A FIFO post (content_type is None) has no pillar label or color to draw
+    on: title is the fixed FIFO_EVENT_SUMMARY and colorId is omitted
+    entirely (the calendar's default color applies) rather than passed as
+    None, which the Calendar API would reject."""
     end_dt = post.scheduled_at + timedelta(minutes=EVENT_DURATION_MINUTES)
 
-    return {
-        "summary": f"POST — {get_content_label(post.content_type)}",
+    body = {
+        "summary": f"POST — {get_content_label(post.content_type)}" if post.content_type else FIFO_EVENT_SUMMARY,
         "description": post.prompt or "",
         "start": {
             "dateTime": post.scheduled_at.isoformat(),
@@ -216,8 +250,10 @@ def build_event_body(post: ScheduledPost) -> dict:
             "dateTime": end_dt.isoformat(),
             "timeZone": TIMEZONE,
         },
-        "colorId": get_content_color_id(post.content_type),
     }
+    if post.content_type:
+        body["colorId"] = get_content_color_id(post.content_type)
+    return body
 
 
 def push_events(service, calendar_id: str, schedule: list[ScheduledPost], store: ContentStore) -> tuple[int, int]:
@@ -242,10 +278,8 @@ def push_events(service, calendar_id: str, schedule: list[ScheduledPost], store:
         try:
             event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
             created += 1
-            print(
-                f"  Created: {post.scheduled_at.strftime('%a %b %d, %I:%M %p')} — "
-                f"{get_content_label(post.content_type)}"
-            )
+            label = get_content_label(post.content_type) if post.content_type else FIFO_EVENT_SUMMARY
+            print(f"  Created: {post.scheduled_at.strftime('%a %b %d, %I:%M %p')} — {label}")
         except HttpError as err:
             print(f"  ERROR on {post.scheduled_at}: {err}", file=sys.stderr)
             continue
@@ -274,13 +308,29 @@ def print_summary(
     calendar_id: str,
     dry_run: bool = False,
 ) -> None:
-    """Print a formatted post-count summary reflecting the configured allocation."""
+    """Print a formatted post-count summary. FIFO schedules (content_type is
+    None throughout) have no pillar allocation to report, only a total;
+    pillar schedules keep the existing per-pillar breakdown."""
+    month_name = calendar.month_name[month]
+    total = len(schedule)
+    is_fifo = total == 0 or all(post.content_type is None for post in schedule)
+
+    if is_fifo:
+        print(f"\n{month_name} {year} Content Calendar — FIFO")
+        print("=" * 49)
+        print(f"  {'Total:':<28} {total:2d} posts")
+        print()
+        print(f"  Cadence: {POSTS_PER_WEEK} post(s)/week, posting days: {POSTING_DAYS}, time: {POSTING_TIME}.")
+        if dry_run:
+            print(f"  Dry run only; no events were pushed to {calendar_id}.")
+        else:
+            print(f"  Events pushed to {calendar_id} calendar.")
+        return
+
     counts: dict[str, int] = {}
     for post in schedule:
         counts[post.content_type] = counts.get(post.content_type, 0) + 1
 
-    month_name = calendar.month_name[month]
-    total = sum(counts.values())
     allocation_label = "/".join(str(get_content_weight_percent(ct)) for ct in CONTENT_TYPES)
 
     print(f"\n{month_name} {year} Content Calendar — {allocation_label} Allocation")
@@ -315,15 +365,19 @@ def main() -> None:
         print(f"ERROR: --year looks wrong (got {args.year})", file=sys.stderr)
         sys.exit(1)
 
-    # --- Validate posting-cadence/pillar-weight configuration up front ---
-    pillar_weights = {key: info["weight"] for key, info in CONTENT_TYPES.items()}
+    # --- Validate routing mode + posting-cadence configuration up front;
+    #     pillar weights only matter (and are only validated) in pillar mode ---
     try:
-        validate_schedule_config(POSTS_PER_WEEK, POSTING_DAYS, POSTING_TIME, pillar_weights)
+        validate_routing_mode(ROUTING_MODE)
+        validate_cadence_config(POSTS_PER_WEEK, POSTING_DAYS, POSTING_TIME)
+        if ROUTING_MODE == "pillar":
+            pillar_weights = {key: info["weight"] for key, info in CONTENT_TYPES.items()}
+            validate_pillar_weights(pillar_weights)
     except ScheduleConfigError as err:
         print(f"ERROR: invalid scheduling configuration: {err}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"\nGenerating {calendar.month_name[args.month]} {args.year} content calendar …")
+    print(f"\nGenerating {calendar.month_name[args.month]} {args.year} content calendar ({ROUTING_MODE} mode) …")
     if args.calendar:
         print(f"Calendar target: {args.calendar} (explicit --calendar override, service account)\n")
     else:

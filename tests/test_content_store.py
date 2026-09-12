@@ -215,3 +215,91 @@ def test_unassign_video_for_slot_then_delete_succeeds(store):
     assert updated_video.assigned_slot_id is None
     assert updated_video.status == "CLASSIFIED"
     assert updated_video.transcript is None  # unassign never touches transcript/classification data it doesn't own
+
+
+# ---------------------------------------------------------------------------
+# FIFO slots: nullable pillar_key (Milestone 1.3)
+# ---------------------------------------------------------------------------
+
+def test_insert_slot_if_missing_accepts_null_pillar_key(store):
+    created = store.insert_slot_if_missing("2026-09-01T09:00:00", None, None, "2026-01-01T00:00:00")
+    assert created is True
+
+    slot = store.find_earliest_open_slot_fifo("2000-01-01T00:00:00")
+    assert slot is not None
+    assert slot.pillar_key is None
+
+
+def test_find_earliest_open_slot_fifo_ignores_pillar(store):
+    store.insert_slot_if_missing("2026-09-01T09:00:00", "engineering", "p", "2026-01-01T00:00:00")
+    store.insert_slot_if_missing("2026-09-02T09:00:00", None, None, "2026-01-01T00:00:00")
+
+    slot = store.find_earliest_open_slot_fifo("2000-01-01T00:00:00")
+
+    assert slot.scheduled_at == "2026-09-01T09:00:00"  # earliest wins regardless of pillar_key
+
+
+def test_find_earliest_open_slot_fifo_inclusive_boundary(store):
+    """FIFO matching is scheduled_at >= after (inclusive), unlike the
+    pillar matcher's exclusive >."""
+    store.insert_slot_if_missing("2026-09-01T09:00:00", None, None, "2026-01-01T00:00:00")
+
+    slot = store.find_earliest_open_slot_fifo("2026-09-01T09:00:00")  # exactly at boundary
+
+    assert slot is not None
+
+
+def test_find_earliest_open_slot_fifo_returns_none_when_nothing_open(store):
+    assert store.find_earliest_open_slot_fifo("2000-01-01T00:00:00") is None
+
+
+def test_opening_a_database_with_not_null_pillar_key_migrates_it(tmp_path):
+    """Pre-Milestone-1.3 databases have pillar_key TEXT NOT NULL. Opening
+    one must relax that constraint (so FIFO slots can be inserted) without
+    losing any existing rows."""
+    db_path = tmp_path / "legacy_not_null.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE content_slots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scheduled_at TEXT NOT NULL UNIQUE,
+            pillar_key TEXT NOT NULL,
+            prompt TEXT,
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            assigned_video_id INTEGER,
+            google_calendar_event_id TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO content_slots (scheduled_at, pillar_key, prompt, status, created_at) "
+        "VALUES ('2026-09-14T09:00:00', 'building', 'old prompt', 'OPEN', '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    with ContentStore(db_path=db_path) as store:
+        rows = store._conn.execute("SELECT * FROM content_slots").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["pillar_key"] == "building"  # existing row preserved
+
+        created = store.insert_slot_if_missing("2026-09-21T09:00:00", None, None, "2026-02-01T00:00:00")
+        assert created is True  # NULL pillar_key now accepted
+
+
+# ---------------------------------------------------------------------------
+# FIFO ordering: get_video_by_path (Milestone 1.3)
+# ---------------------------------------------------------------------------
+
+def test_get_video_by_path_returns_none_when_absent(store):
+    assert store.get_video_by_path("/incoming/does-not-exist.mp4") is None
+
+
+def test_get_video_by_path_finds_video_by_original_path(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+
+    found = store.get_video_by_path("/incoming/v.mp4")
+
+    assert found.id == video.id

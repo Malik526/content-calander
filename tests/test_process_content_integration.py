@@ -87,7 +87,7 @@ def test_high_confidence_video_is_assigned_and_moved(store, synthetic_video, rou
     classifier = FakeClassifier(confidence=0.94)
 
     outcome = process_content.process_one(
-        store, FakeTranscriber(), classifier, synthetic_video, dry_run=False
+        store, FakeTranscriber(), classifier, synthetic_video, dry_run=False, routing_mode="pillar"
     )
 
     assert outcome.kind == "ASSIGNED"
@@ -101,7 +101,7 @@ def test_low_confidence_video_becomes_needs_review(store, synthetic_video, route
     classifier = FakeClassifier(confidence=0.43, reason="Ambiguous content.")
 
     outcome = process_content.process_one(
-        store, FakeTranscriber(), classifier, synthetic_video, dry_run=False
+        store, FakeTranscriber(), classifier, synthetic_video, dry_run=False, routing_mode="pillar"
     )
 
     assert outcome.kind == "NEEDS_REVIEW"
@@ -115,7 +115,7 @@ def test_no_matching_slot_leaves_video_classified_and_waiting(store, synthetic_v
     classifier = FakeClassifier(confidence=0.94)
 
     outcome = process_content.process_one(
-        store, FakeTranscriber(), classifier, synthetic_video, dry_run=False
+        store, FakeTranscriber(), classifier, synthetic_video, dry_run=False, routing_mode="pillar"
     )
 
     assert outcome.kind == "WAITING_FOR_SLOT"
@@ -132,13 +132,13 @@ def test_rerun_does_not_duplicate_assignment_or_reclassify(store, synthetic_vide
     classifier = FakeClassifier(confidence=0.94)
     transcriber = FakeTranscriber()
 
-    first = process_content.process_one(store, transcriber, classifier, synthetic_video, dry_run=False)
+    first = process_content.process_one(store, transcriber, classifier, synthetic_video, dry_run=False, routing_mode="pillar")
     assert first.kind == "ASSIGNED"
     assert classifier.calls == 1
 
     # Simulate the file being placed back into incoming/ (e.g. duplicate drop).
     moved_path = processed_dir / "video_001.mp4"
-    second = process_content.process_one(store, transcriber, classifier, moved_path, dry_run=False)
+    second = process_content.process_one(store, transcriber, classifier, moved_path, dry_run=False, routing_mode="pillar")
 
     assert second.kind == "ALREADY_ASSIGNED"
     assert classifier.calls == 1  # not called again
@@ -153,7 +153,7 @@ def test_dry_run_does_not_mutate_slot_or_move_file(store, synthetic_video, route
     classifier = FakeClassifier(confidence=0.94)
 
     outcome = process_content.process_one(
-        store, FakeTranscriber(), classifier, synthetic_video, dry_run=True
+        store, FakeTranscriber(), classifier, synthetic_video, dry_run=True, routing_mode="pillar"
     )
 
     assert outcome.kind == "WOULD_ASSIGN"
@@ -165,7 +165,7 @@ def test_dry_run_does_not_mutate_slot_or_move_file(store, synthetic_video, route
     # Cached transcript/classification should be reused on a real run next.
     rerun_classifier = FakeClassifier(confidence=0.94)
     second = process_content.process_one(
-        store, FakeTranscriber(), rerun_classifier, synthetic_video, dry_run=False
+        store, FakeTranscriber(), rerun_classifier, synthetic_video, dry_run=False, routing_mode="pillar"
     )
     assert second.kind == "ASSIGNED"
     assert rerun_classifier.calls == 0  # classification result was cached from the dry run
