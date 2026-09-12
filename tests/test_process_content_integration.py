@@ -12,6 +12,7 @@ import pytest
 
 import process_content
 from classification import ClassificationResult
+from config import AUTO_ASSIGN_THRESHOLD
 from content_store import ContentStore
 from transcription import TranscriptResult
 
@@ -26,15 +27,22 @@ class FakeTranscriber:
 
 
 class FakeClassifier:
-    def __init__(self, pillar="building", confidence=0.94, reason="Discusses building a tool."):
+    """Stands in for a real ContentClassifier. Per the interface contract
+    (see classification.py), a classifier applies its own auto-assign policy
+    and returns pillar=None to abstain — this fake mimics that with a single
+    confidence threshold, same as ClaudeClassifier does internally."""
+
+    def __init__(self, pillar="building", confidence=0.94, reason="Discusses building a tool.", threshold=AUTO_ASSIGN_THRESHOLD):
         self.pillar = pillar
         self.confidence = confidence
         self.reason = reason
+        self.threshold = threshold
         self.calls = 0
 
     def classify(self, transcript, pillars):
         self.calls += 1
-        return ClassificationResult(pillar=self.pillar, confidence=self.confidence, reason=self.reason)
+        eligible_pillar = self.pillar if self.confidence >= self.threshold else None
+        return ClassificationResult(pillar=eligible_pillar, confidence=self.confidence, reason=self.reason, classifier="fake")
 
 
 @pytest.fixture

@@ -1,0 +1,1 @@
+So I rebuilt the scraper today because it kept timing out on larger zip codes. I switched it over to a connection pool and added retry logic with backoff, and now it handles ten times the volume without falling over. Here's a quick walkthrough of the architecture change.

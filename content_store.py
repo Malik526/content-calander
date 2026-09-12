@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS videos (
     classified_pillar TEXT,
     classification_confidence REAL,
     classification_reason TEXT,
+    classification_second_score REAL,
+    classification_margin REAL,
+    classifier TEXT,
     status TEXT NOT NULL DEFAULT 'DISCOVERED',
     failure_reason TEXT,
     assigned_slot_id INTEGER REFERENCES content_slots(id),
@@ -73,6 +76,23 @@ CREATE TABLE IF NOT EXISTS content_slots (
 """
 
 _SLOT_STATUS_PRIORITY = {"OPEN": 0, "FAILED": 0, "ASSIGNED": 1, "PUBLISHED": 2}
+
+# New nullable videos columns added for Milestone 1.2 (local embedding
+# classification observability — see
+# docs/decisions/0003-local-embedding-classification.md). Adding a nullable
+# column is a simple ALTER TABLE, unlike the content_slots rebuild above.
+_VIDEOS_MIGRATION_COLUMNS = {
+    "classification_second_score": "REAL",
+    "classification_margin": "REAL",
+    "classifier": "TEXT",
+}
+
+
+def _ensure_videos_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()}
+    for column, sql_type in _VIDEOS_MIGRATION_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE videos ADD COLUMN {column} {sql_type}")
 
 
 def _content_slots_needs_migration(conn: sqlite3.Connection) -> bool:
@@ -152,6 +172,9 @@ class VideoRecord:
     classified_pillar: str | None
     classification_confidence: float | None
     classification_reason: str | None
+    classification_second_score: float | None
+    classification_margin: float | None
+    classifier: str | None
     status: str
     failure_reason: str | None
     assigned_slot_id: int | None
@@ -189,6 +212,7 @@ class ContentStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(SCHEMA_VIDEOS)
+        _ensure_videos_columns(self._conn)
         if _content_slots_needs_migration(self._conn):
             _migrate_content_slots_unique_constraint(self._conn)
         self._conn.executescript(SCHEMA_CONTENT_SLOTS)

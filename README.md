@@ -40,7 +40,17 @@ python3 process_content.py --dry-run    # classify/transcribe and cache, but nev
 python3 process_content.py --verbose    # print media/transcript/classification detail per video
 ```
 
-Place `.mov`/`.mp4` files in `content/incoming/` first. A video is only auto-assigned once you have generated a month whose slots are still in the future — see "Video Processing Setup" below.
+Place `.mov`/`.mp4` files in `content/incoming/` first. A video is only auto-assigned once you have generated a month whose slots are still in the future — see "Video Processing Setup" below. This runs **fully locally by default** — no Anthropic API key required (see Classification below).
+
+**Benchmark or calibrate the classifier:**
+
+```bash
+python3 evaluate_classifier.py --classifier embeddings
+python3 evaluate_classifier.py --classifier claude          # requires ANTHROPIC_API_KEY
+python3 evaluate_classifier.py --classifier embeddings --sweep
+```
+
+Reads your local labeled dataset in `evaluation/` (see Classification below); never touches `data/content.db`.
 
 ---
 
@@ -88,8 +98,9 @@ account email (found in the JSON key as `"client_email"`) with
 
 ### 5. Video processing setup
 
-- Set `ANTHROPIC_API_KEY` in `.env` (used for pillar classification via Claude).
-- First transcription run downloads the local `faster-whisper` model weights (`base` by default, `CONTENT_CALENDAR_WHISPER_MODEL` to change it) — no API key needed for transcription, it runs fully offline after that.
+- Default classifier is fully local (`fastembed` + `BAAI/bge-small-en-v1.5`) — **no API key needed**. First classification run downloads the ~65MB model to `~/.cache/content-calendar/fastembed` (`CONTENT_CALENDAR_EMBEDDING_CACHE_DIR` to change it); every run after that is offline.
+- To use Claude instead (for comparison or benchmarking), set `CONTENT_CALENDAR_CLASSIFIER=claude` and `ANTHROPIC_API_KEY` in `.env`.
+- First transcription run downloads the local `faster-whisper` model weights (`base` by default, `CONTENT_CALENDAR_WHISPER_MODEL` to change it) — no API key needed for transcription either; it runs fully offline after that.
 - `process_content.py` only routes videos into **internally persisted** `content_slots`, written by `generate_calendar.py`. If you already generated upcoming months before this feature existed, re-run `generate_calendar.py` for those months so their slots get persisted — there is no automatic import from existing Google Calendar events.
 
 ---
@@ -105,7 +116,8 @@ account email (found in the JSON key as `"client_email"`) with
 | `prompts.py` | Every daily short-form video prompt organised by pillar (optional; see Customising) |
 | `media.py` | ffprobe inspection, TikTok-compatibility check, audio extraction |
 | `transcription.py` | `Transcriber` interface + local `faster-whisper` implementation |
-| `classification.py` | `ContentClassifier` interface + Claude implementation |
+| `classification.py` | `ContentClassifier` interface, `EmbeddingClassifier` (default, local), `ClaudeClassifier` (optional), `build_classifier()` |
+| `evaluate_classifier.py` | Offline benchmark harness for classifiers against a local labeled dataset |
 | `slot_matcher.py` | Deterministic earliest-open-slot selection |
 | `content_store.py` | SQLite persistence (`videos`, `content_slots`) |
 | `requirements.txt` | Python package dependencies |
@@ -141,3 +153,39 @@ Monthly counts are computed from real calendar dates and the largest-remainder m
 **Prompts** — edit `prompts.py` → the `PROMPTS` dict; each key must match a pillar key in `CONTENT_TYPES`. Prompts are optional: set `PROMPT_GENERATION_ENABLED = False` in `config.py` to generate a schedule with no prompt text at all (`content_slots.prompt` will be `NULL`). Either way, prompts never affect which date or pillar a slot gets.
 
 > Changing the strategy and re-running `generate_calendar.py` for a month that already has persisted slots only *adds* slots for newly-covered dates — it never rewrites an existing slot's pillar or prompt. Mixing two strategies within one already-generated month is a known limitation; regenerate the whole month fresh (see ADR-0002) if you need a clean re-strategize.
+
+---
+
+## Classification
+
+`config.CLASSIFIER` selects which `ContentClassifier` runs (`config.py`, or `CONTENT_CALENDAR_CLASSIFIER` in `.env`):
+
+- **`embeddings`** (default) — fully local, no API key. Compares a transcript's embedding to each pillar's semantic profile (`label` + `description` + `classification_examples`, from `CONTENT_TYPES`) via cosine similarity, using `fastembed` + `BAAI/bge-small-en-v1.5`. Auto-assigns only if the top pillar clears **both** `EMBEDDING_MIN_SIMILARITY` and `EMBEDDING_MIN_MARGIN` (margin over the second-best pillar) — otherwise the video goes to `NEEDS_REVIEW`. These two thresholds ship as **explicitly uncalibrated placeholders**; see below for calibrating them.
+- **`claude`** — the Anthropic implementation from Milestone 1, requires `ANTHROPIC_API_KEY`. Useful as a stronger reference/benchmark, not required for normal operation.
+
+Add representative examples per pillar in `config.py` to improve embedding accuracy:
+
+```python
+CONTENT_TYPES = {
+    "building": {
+        "label": "Building Systems & Tools",
+        "description": "...",
+        "weight": 0.25,
+        "classification_examples": [
+            "Explaining how a software tool was architected.",
+            "Demonstrating an automation or API integration.",
+        ],
+    },
+    ...
+}
+```
+
+**Calibrating the thresholds:** build a labeled dataset of your own real transcripts in `evaluation/` (see `evaluation/README.md` for the exact format — it's gitignored, your transcripts never enter source control), then:
+
+```bash
+python3 evaluate_classifier.py --classifier embeddings --sweep
+```
+
+This reports auto-assigned count, **wrong auto-assignments**, review count, and accuracy for a grid of similarity/margin combinations, without re-embedding per combination. Pick the combination with the lowest wrong-auto-assignment rate you're comfortable with, then set `EMBEDDING_MIN_SIMILARITY`/`EMBEDDING_MIN_MARGIN` accordingly. `python3 evaluate_classifier.py --classifier embeddings` (no `--sweep`) runs a normal report against the currently configured thresholds; add `--classifier claude` to compare against Claude on the exact same dataset.
+
+`ClassificationResult.confidence` is a raw cosine similarity for `embeddings`, not a calibrated probability — the CLI labels it "Similarity score" rather than "Confidence" for anything but Claude. See `docs/decisions/0003-local-embedding-classification.md`.

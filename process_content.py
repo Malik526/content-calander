@@ -4,10 +4,17 @@ process_content.py — Ingest, transcribe, classify, and schedule incoming video
 What it does:
   Discovers videos in content/incoming/, inspects them with ffprobe, extracts
   a small audio derivative and transcribes it locally, classifies the
-  transcript against the pillars in config.CONTENT_TYPES via Claude, and
-  routes sufficiently confident classifications to the earliest open
+  transcript against the pillars in config.CONTENT_TYPES (local embeddings by
+  default; Claude optionally via config.CLASSIFIER — see classification.py),
+  and routes sufficiently confident classifications to the earliest open
   content_slot for that pillar (written by generate_calendar.py). See
-  docs/decisions/0001-video-ingestion-pipeline.md for the architecture.
+  docs/decisions/0001-video-ingestion-pipeline.md and
+  docs/decisions/0003-local-embedding-classification.md for the architecture.
+
+  This module depends only on classification.ContentClassifier — the active
+  classifier already applies its own auto-assign policy before returning
+  (pillar=None means "abstain"), so this file never re-applies a
+  classifier-specific confidence threshold itself.
 
 Run command:
   python3 process_content.py
@@ -41,9 +48,7 @@ import classification
 import media
 import slot_matcher
 import transcription
-from classification import ClaudeClassifier
 from config import (
-    AUTO_ASSIGN_THRESHOLD,
     CONTENT_TYPES,
     FAILED_DIR,
     INCOMING_DIR,
@@ -173,12 +178,18 @@ def process_one(
             _move_file(path, FAILED_DIR)
             return Outcome(path, store.get_video_by_hash(file_hash), "FAILED")
 
-        eligible = result.pillar is not None and result.confidence >= AUTO_ASSIGN_THRESHOLD
+        # The classifier already applied its own auto-assign policy: pillar
+        # is None whenever it decided to abstain (low confidence, low
+        # similarity/margin, empty transcript, out-of-pillar content, ...).
+        eligible = result.pillar is not None
         store.update_video(
             video.id,
             classified_pillar=result.pillar,
             classification_confidence=result.confidence,
             classification_reason=result.reason,
+            classification_second_score=result.second_score,
+            classification_margin=result.margin,
+            classifier=result.classifier,
             status="CLASSIFIED" if eligible else "NEEDS_REVIEW",
         )
         video = store.get_video_by_hash(file_hash)
@@ -232,8 +243,11 @@ def _print_progress(outcome: Outcome, verbose: bool) -> None:
             snippet = v.transcript[:160] + ("…" if len(v.transcript) > 160 else "")
             print(f"      transcript ({v.transcript_language}): {snippet!r}")
         if v.classified_pillar is not None or v.classification_confidence is not None:
-            print(f"      classification: pillar={v.classified_pillar} "
-                  f"confidence={v.classification_confidence} reason={v.classification_reason!r}")
+            extra = ""
+            if v.classification_margin is not None:
+                extra = f" second={v.classification_second_score} margin={v.classification_margin}"
+            print(f"      classification[{v.classifier}]: pillar={v.classified_pillar} "
+                  f"score={v.classification_confidence}{extra} reason={v.classification_reason!r}")
         if outcome.slot is not None:
             print(f"      slot: {outcome.slot.scheduled_at}")
         if v.failure_reason:
@@ -269,7 +283,12 @@ def _print_summary(outcomes: list[Outcome], dry_run: bool) -> None:
             label = get_content_label(o.video.classified_pillar)
             when = datetime.fromisoformat(o.slot.scheduled_at).strftime("%b %d, %I:%M %p").replace(" 0", " ")
             pct = round(o.video.classification_confidence * 100)
-            print(f"{o.path.name}\n{label}\n{when}\nConfidence: {pct}%\n")
+            # "Confidence" only for Claude, whose score is a genuine
+            # self-reported confidence; embeddings report raw cosine
+            # similarity, which is not a calibrated probability — see
+            # docs/decisions/0003-local-embedding-classification.md.
+            score_label = "Confidence" if o.video.classifier == "claude" else "Similarity score"
+            print(f"{o.path.name}\n{label}\n{when}\n{score_label}: {pct}%\n")
 
     if dry_run:
         print("Dry run: no content_slots were mutated and no files were moved.")
@@ -308,6 +327,12 @@ def main() -> None:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    try:
+        classifier = classification.build_classifier()
+    except classification.ClassificationError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     videos = discover_videos(INCOMING_DIR)
     if not videos:
         print(f"No videos found in {INCOMING_DIR}")
@@ -320,7 +345,6 @@ def main() -> None:
         print()
 
     transcriber = FasterWhisperTranscriber()
-    classifier = ClaudeClassifier()
     outcomes: list[Outcome] = []
 
     with ContentStore() as store:

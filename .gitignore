@@ -19,3 +19,9 @@ content/failed/*
 data/*.db
 data/*.db-*
 .pytest_cache/
+
+# Private golden-evaluation corpus (real creator transcripts). Only
+# evaluation/README.md is committed — see that file for the format.
+evaluation/labels.csv
+evaluation/transcripts/*
+!evaluation/transcripts/.gitkeep

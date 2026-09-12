@@ -108,3 +108,60 @@ def test_opening_a_database_with_the_old_unique_constraint_migrates_it(tmp_path)
             "2026-09-21T09:00:00", "building", "new prompt", "2026-02-01T00:00:00"
         )
         assert created is False
+
+
+def test_opening_a_database_missing_classifier_columns_adds_them(tmp_path):
+    """Milestone 1.2 added classification_second_score/classification_margin/
+    classifier to videos. A database created before that must gain these
+    columns (nullable, existing rows unaffected) the first time it's opened,
+    without losing any existing data."""
+    db_path = tmp_path / "legacy_videos.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_hash TEXT NOT NULL UNIQUE,
+            original_filename TEXT NOT NULL,
+            original_path TEXT NOT NULL,
+            canonical_media_path TEXT,
+            container TEXT,
+            video_codec TEXT,
+            audio_codec TEXT,
+            width INTEGER,
+            height INTEGER,
+            fps REAL,
+            duration_seconds REAL,
+            file_size_bytes INTEGER,
+            transcript TEXT,
+            transcript_language TEXT,
+            transcription_status TEXT,
+            classified_pillar TEXT,
+            classification_confidence REAL,
+            classification_reason TEXT,
+            status TEXT NOT NULL DEFAULT 'DISCOVERED',
+            failure_reason TEXT,
+            assigned_slot_id INTEGER,
+            created_at TEXT NOT NULL,
+            processed_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO videos (file_hash, original_filename, original_path, status, created_at) "
+        "VALUES ('abc', 'video.mp4', '/incoming/video.mp4', 'DISCOVERED', '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    with ContentStore(db_path=db_path) as store:
+        video = store.get_video_by_hash("abc")
+
+        assert video.classification_second_score is None
+        assert video.classification_margin is None
+        assert video.classifier is None
+
+        store.update_video(video.id, classification_second_score=0.4, classification_margin=0.12, classifier="embeddings")
+        updated = store.get_video_by_hash("abc")
+        assert updated.classification_margin == 0.12
+        assert updated.classifier == "embeddings"

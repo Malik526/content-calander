@@ -35,7 +35,7 @@ if ENV_FILE.exists():
 # See docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md.
 # Weights must sum to 1.0 (validated by scheduling.validate_pillar_weights).
 # ---------------------------------------------------------------------------
-CONTENT_TYPES: dict[str, dict[str, str | float]] = {
+CONTENT_TYPES: dict[str, dict[str, str | float | list[str]]] = {
     "acquisition": {
         "label": "Customer Acquisition in Action",
         "color_id": "9",
@@ -45,6 +45,12 @@ CONTENT_TYPES: dict[str, dict[str, str | float]] = {
             "DM outreach, follow-up sequences, booked demos, and the results "
             "and lessons from prospecting activity."
         ),
+        "classification_examples": [
+            "Discussing cold outreach results and reply rates.",
+            "Explaining a prospecting or lead-generation experiment.",
+            "Breaking down a sales conversation or cold call.",
+            "Recapping demos booked or deals closed from outreach.",
+        ],
     },
     "building": {
         "label": "Building Systems & Tools",
@@ -55,6 +61,12 @@ CONTENT_TYPES: dict[str, dict[str, str | float]] = {
             "tech stack: architecture walkthroughs, new features, integrations, "
             "and engineering decisions behind the systems that run the agency."
         ),
+        "classification_examples": [
+            "Explaining how a software tool or pipeline was architected.",
+            "Demonstrating an automation or API integration that was built.",
+            "Discussing a technical problem encountered while building a product.",
+            "Comparing engineering approaches used in a system.",
+        ],
     },
     "execution": {
         "label": "Agency Execution",
@@ -65,6 +77,12 @@ CONTENT_TYPES: dict[str, dict[str, str | float]] = {
             "pipeline updates, revenue/MRR, client counts, booking rates, "
             "retention, and weekly wins/losses recaps."
         ),
+        "classification_examples": [
+            "Recapping this week's business metrics or pipeline numbers.",
+            "Discussing revenue, client count, or retention rate.",
+            "Reflecting on a weekly win/loss or a lost deal.",
+            "Explaining a change in strategy based on business results.",
+        ],
     },
     "mindset": {
         "label": "Mindset & Discipline",
@@ -75,6 +93,12 @@ CONTENT_TYPES: dict[str, dict[str, str | float]] = {
             "consistency over intensity, personal history and lessons applied "
             "to building the agency, not business metrics."
         ),
+        "classification_examples": [
+            "Reflecting on discipline, consistency, or motivation.",
+            "Discussing how a personal setback or rejection was handled.",
+            "Drawing a life lesson from personal history and applying it to work.",
+            "Personal reflection that is not about business metrics or tools.",
+        ],
     },
 }
 
@@ -156,8 +180,12 @@ FAILED_DIR = CONTENT_DIR / "failed"
 # Video file extensions process_content.py will discover in INCOMING_DIR.
 SUPPORTED_VIDEO_EXTENSIONS = {".mov", ".mp4"}
 
-# Classification confidence required for automatic slot routing.
-# Below this, a video is marked NEEDS_REVIEW instead of being assigned.
+# Claude-classifier-specific confidence threshold for automatic slot routing
+# (ClaudeClassifier applies this itself before returning a result). Below
+# this, ClaudeClassifier reports pillar=None and process_content.py treats it
+# as NEEDS_REVIEW. EmbeddingClassifier uses its own two-gate policy instead
+# (EMBEDDING_MIN_SIMILARITY / EMBEDDING_MIN_MARGIN below) — see
+# docs/decisions/0003-local-embedding-classification.md.
 AUTO_ASSIGN_THRESHOLD = float(os.getenv("CONTENT_CALENDAR_AUTO_ASSIGN_THRESHOLD", "0.80"))
 
 # --- Transcription (classification.transcription.FasterWhisperTranscriber) ---
@@ -165,9 +193,37 @@ WHISPER_MODEL_SIZE = os.getenv("CONTENT_CALENDAR_WHISPER_MODEL", "base")
 WHISPER_DEVICE = os.getenv("CONTENT_CALENDAR_WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = os.getenv("CONTENT_CALENDAR_WHISPER_COMPUTE_TYPE", "int8")
 
-# --- Classification (classification.ClaudeClassifier) ---
+# --- Classification ---
+# Added: September 2026 — local embedding classification, with Claude kept as
+# an optional comparison/reference implementation. See
+# docs/decisions/0003-local-embedding-classification.md.
+# Valid values: "embeddings" (default, fully local, no API key) or "claude".
+CLASSIFIER = os.getenv("CONTENT_CALENDAR_CLASSIFIER", "embeddings")
+
+# classification.ClaudeClassifier
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.getenv("CONTENT_CALENDAR_CLAUDE_MODEL", "claude-sonnet-5")
+
+# classification.EmbeddingClassifier — local, CPU-only sentence embeddings via
+# fastembed (ONNX runtime backend; no torch, no CUDA). Default model is
+# BAAI/bge-small-en-v1.5: 384-dim, ~65MB quantized ONNX weights, downloaded
+# once to EMBEDDING_CACHE_DIR on first use (a few seconds), then runs fully
+# offline. CPU-only; fastembed does not require a GPU.
+EMBEDDING_MODEL = os.getenv("CONTENT_CALENDAR_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+EMBEDDING_CACHE_DIR = Path(
+    os.getenv("CONTENT_CALENDAR_EMBEDDING_CACHE_DIR", str(Path.home() / ".cache" / "content-calendar" / "fastembed"))
+).expanduser()
+
+# Two-gate auto-assign policy for EmbeddingClassifier: the top pillar's cosine
+# similarity must clear EMBEDDING_MIN_SIMILARITY, AND its margin over the
+# second-best pillar must clear EMBEDDING_MIN_MARGIN. Below either gate, the
+# video is marked NEEDS_REVIEW rather than auto-assigned.
+#
+# THESE ARE UNCALIBRATED PLACEHOLDER DEFAULTS, not production-quality values —
+# use evaluate_classifier.py --sweep against a real labeled transcript corpus
+# to pick real thresholds before relying on this for unattended scheduling.
+EMBEDDING_MIN_SIMILARITY = float(os.getenv("CONTENT_CALENDAR_EMBEDDING_MIN_SIMILARITY", "0.50"))
+EMBEDDING_MIN_MARGIN = float(os.getenv("CONTENT_CALENDAR_EMBEDDING_MIN_MARGIN", "0.03"))
 
 # --- TikTok generic compatibility targets (informational in V1; no publishing) ---
 # https://developers.tiktok.com/docs/en/content-posting-api-media-transfer-guide

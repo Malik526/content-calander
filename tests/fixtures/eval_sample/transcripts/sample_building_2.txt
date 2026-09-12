@@ -1,0 +1,1 @@
+Built a new internal dashboard this week to track prospects, demos booked, and closed deals in one place. It pulls straight from the database and refreshes automatically. Took about two days to wire up the API integration.
