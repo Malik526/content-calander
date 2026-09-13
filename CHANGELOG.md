@@ -2,6 +2,16 @@
 
 ## 2026-09-13
 
+### Fix — download_shofo_samples.py torchcodec Decode Error
+
+`iter_dataset_rows()` failed before any row was yielded with `"To support decoding videos, please install torchcodec."` — a real run surfaced this immediately, contradicting the milestone's explicit requirement to never decode video or add a torch/torchcodec dependency during acquisition.
+
+- Root cause: `getattr(ds, "features", {})` (used to decide whether to drop the `"video"` column) is not safe on a streaming `IterableDataset` whose schema isn't already known — accessing `.features` peeks one real example to infer types, and that peek decodes the `"video"` field, invoking the same decoder backend a full iteration would.
+- Fix: added `_disable_video_decoding()`, which never touches `.features`. It calls `IterableDataset.decode(False)` — the documented, version-supported way to disable decoding for every Audio/Image/Video feature before any row is pulled — when available, falls back to explicitly recasting the `"video"` column to `Video(decode=False)` on older `datasets` versions without `.decode()`, and then drops the `"video"` column entirely either way (wrapped in try/except `ValueError` so a dataset/config without that column is a no-op, not a crash). No torch or torchcodec dependency was added; `requirements-eval.txt` bumped to `datasets>=3.0.0` (where `Video`/`.decode(False)` support is available) with a comment explaining why.
+- Added `tests/test_download_shofo_samples.py::test_iter_dataset_rows_never_decodes_video` (and two focused `_disable_video_decoding` tests for the `.decode()` and `Video(decode=False)`-fallback paths) against a fake streaming dataset that raises the real error text the moment a `"video"` value is actually decoded — this is a genuine regression test, not just a shape check, and would have caught the original bug.
+
+Validation: `python3 -m pytest` (282 passed). Manually ran `python3 download_shofo_samples.py --count 1` for real in this environment — `datasets` (5.0.1) and `huggingface_hub` were both already installed in `.venv` with a cached Hugging Face token in place (pre-existing local setup, not created by this fix), so this exercised the real streaming path end to end: iteration completed with no torchcodec error, confirming the fix. It reported zero candidates passed filtering, which is a separate, not-yet-investigated question (likely the real dataset's column names differ from the ones assumed from the dataset card) — flagged to the user rather than guessed at here, since it wasn't the reported bug and confirming it means another real call against the live gated dataset.
+
 ### Shofo Real-Video Evaluation Corpus — Milestone 1.3.1
 
 Added a test/evaluation utility for exercising the pipeline against real short-form social video instead of only synthetic fixtures: video download → ffprobe inspection → audio extraction → faster-whisper transcription → transcript comparison → transcript-derived caption → FIFO assignment → Google Calendar scheduling. This is a mechanical pipeline test, not a production feature — it does not change scheduling behavior, and it explicitly does not evaluate pillar-classification accuracy (the sampled clips' topics are unrelated to `config.CONTENT_TYPES`).

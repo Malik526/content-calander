@@ -8,6 +8,12 @@
 # huggingface_hub is often already present transitively (faster-whisper and
 # fastembed both depend on it), but is declared explicitly here since
 # download_shofo_samples.py imports it directly.
+#
+# datasets>=3.0.0: this version range is where the Video feature and the
+# IterableDataset.decode(False) toggle (used to disable Video decoding
+# before streaming, so torchcodec is never required just to read dataset
+# metadata — see download_shofo_samples._disable_video_decoding) are
+# available together. Do not add torchcodec or torch — decoding stays off.
 
-datasets>=2.19.0
+datasets>=3.0.0
 huggingface_hub>=0.23.0

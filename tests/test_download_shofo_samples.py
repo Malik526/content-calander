@@ -185,29 +185,99 @@ def test_iter_dataset_rows_missing_datasets_package_gives_actionable_error(monke
     assert "requirements-eval.txt" in str(exc_info.value)
 
 
+class _VideoDecodeError(Exception):
+    """Stands in for the real error this fixes: `datasets` raising
+    "To support decoding videos, please install torchcodec." whenever a
+    row's "video" feature is actually decoded."""
+
+
 class _FakeStreamingDataset:
-    def __init__(self, rows, features):
+    """Models the real failure mode precisely: iterating a row containing
+    a "video" key raises _VideoDecodeError *unless* decoding has been
+    disabled (.decode(False)) or the "video" column has been removed first
+    — either mitigation alone is enough, matching the real Video feature's
+    behavior. Deliberately has no `.features` property: the fix must not
+    depend on accessing it (that access is what caused the original bug —
+    see _disable_video_decoding's docstring)."""
+
+    def __init__(self, rows, decode_enabled=True, has_video_column=True):
         self._rows = rows
-        self.features = features
+        self._decode_enabled = decode_enabled
+        self._has_video_column = has_video_column
+
+    def decode(self, enable):
+        return _FakeStreamingDataset(self._rows, decode_enabled=enable, has_video_column=self._has_video_column)
+
+    def cast_column(self, name, feature):
+        # Real cast_column raises ValueError for an unknown column name.
+        if name == "video" and not self._has_video_column:
+            raise ValueError(f"Column {name} not in the dataset")
+        return self
 
     def remove_columns(self, columns):
+        if "video" in columns and not self._has_video_column:
+            raise ValueError("Column video not in the dataset")
         remaining_rows = [{k: v for k, v in row.items() if k not in columns} for row in self._rows]
-        remaining_features = {k: v for k, v in self.features.items() if k not in columns}
-        return _FakeStreamingDataset(remaining_rows, remaining_features)
+        return _FakeStreamingDataset(remaining_rows, decode_enabled=self._decode_enabled, has_video_column=False)
 
     def __iter__(self):
-        return iter(self._rows)
+        for row in self._rows:
+            if "video" in row and self._decode_enabled:
+                raise _VideoDecodeError("To support decoding videos, please install torchcodec.")
+            yield row
 
 
-def test_iter_dataset_rows_drops_video_column_before_iterating(monkeypatch):
-    rows = [{"video": b"binary-bytes-should-not-appear", "video_id": "v1", "language": "en"}]
-    fake_ds = _FakeStreamingDataset(rows, features={"video": object(), "video_id": object(), "language": object()})
+def test_iter_dataset_rows_never_decodes_video(monkeypatch):
+    """The core regression test: iterating must succeed and yield clean
+    metadata rows even though the fake dataset would raise the real
+    torchcodec error the moment a "video" value is actually decoded."""
+    rows = [{"video": "would raise if decoded", "video_id": "v1", "language": "en"}]
+    fake_ds = _FakeStreamingDataset(rows)
     monkeypatch.setattr(dss, "load_dataset", lambda *a, **k: fake_ds)
 
     result = list(dss.iter_dataset_rows("Shofo/shofo-talking-head-en"))
 
     assert result == [{"video_id": "v1", "language": "en"}]
     assert "video" not in result[0]
+
+
+def test_disable_video_decoding_prefers_decode_method_when_available():
+    fake_ds = _FakeStreamingDataset([{"video": "x", "video_id": "v1"}])
+    result_ds = dss._disable_video_decoding(fake_ds)
+    assert list(result_ds) == [{"video_id": "v1"}]
+
+
+def test_disable_video_decoding_falls_back_to_video_cast_without_decode_method(monkeypatch):
+    """Older `datasets` versions lack IterableDataset.decode() entirely —
+    confirm the Video(decode=False) cast_column fallback is used instead."""
+
+    # hasattr(ds, "decode") must be False for the fallback path to trigger,
+    # so build a dataset class with everything _FakeStreamingDataset has
+    # except that one method, rather than making it raise (raising would
+    # still leave hasattr() True).
+    no_decode_cls = type(
+        "NoDecodeStreamingDataset", (),
+        {k: v for k, v in _FakeStreamingDataset.__dict__.items() if k != "decode"},
+    )
+    fake_ds = no_decode_cls([{"video": "x", "video_id": "v1"}], decode_enabled=True, has_video_column=True)
+    assert not hasattr(fake_ds, "decode")
+
+    fake_video_cls = type("FakeVideo", (), {"__init__": lambda self, decode: None})
+    monkeypatch.setattr(dss, "_HfVideo", fake_video_cls)
+
+    # cast_column on the real fake still just returns self (decode stays
+    # "on" in the fake's own bookkeeping) — the fix must therefore also
+    # remove the "video" column so iteration never sees a "video" key at
+    # all, proving remove_columns runs even when the decode() fast path
+    # isn't available.
+    result_ds = dss._disable_video_decoding(fake_ds)
+    assert list(result_ds) == [{"video_id": "v1"}]
+
+
+def test_disable_video_decoding_handles_dataset_with_no_video_column():
+    fake_ds = _FakeStreamingDataset([{"video_id": "v1", "language": "en"}], has_video_column=False)
+    result_ds = dss._disable_video_decoding(fake_ds)
+    assert list(result_ds) == [{"video_id": "v1", "language": "en"}]
 
 
 # ---------------------------------------------------------------------------

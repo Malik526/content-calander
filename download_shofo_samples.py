@@ -12,8 +12,11 @@ What it does (and does NOT do):
   via huggingface_hub.hf_hub_download(row["file_name"]) — never the full
   ~104GB / ~10k-row dataset, and never through the "video" decode feature
   (which would pull in a heavy decoder dependency like torchcodec just to
-  get bytes back out). Metadata streaming explicitly drops the "video"
-  column before iterating so no video is decoded during selection either.
+  get bytes back out). Metadata streaming explicitly disables Video-feature
+  decoding (IterableDataset.decode(False), or Video(decode=False) on older
+  `datasets` versions) before pulling any row, then drops the "video"
+  column entirely — see _disable_video_decoding for why merely checking
+  `ds.features` is not safe here.
 
   This is a test/evaluation acquisition utility, not part of the production
   pipeline. It must not import content_store, slot_matcher, classification,
@@ -61,6 +64,11 @@ except ImportError:
     load_dataset = None
 
 try:
+    from datasets import Video as _HfVideo
+except ImportError:
+    _HfVideo = None
+
+try:
     from huggingface_hub import hf_hub_download
 except ImportError:
     hf_hub_download = None
@@ -101,10 +109,48 @@ class DownloadResult:
 # Dataset metadata access (no video decode)
 # ---------------------------------------------------------------------------
 
+def _disable_video_decoding(ds):
+    """Disable Video-feature decoding before any row is pulled, so reading
+    dataset metadata never requires a video decoder backend (torchcodec).
+    Row selection only needs file_name and the scalar metadata columns —
+    the actual MP4 bytes are fetched later via
+    hf_hub_download(row["file_name"]), never through this "video" feature.
+
+    Checking `ds.features` directly (the original approach here) is NOT
+    safe: for a streaming dataset whose schema isn't already known, that
+    property access peeks one real example to infer types, and that peek
+    decodes the "video" field — raising "To support decoding videos, please
+    install torchcodec." before iteration even starts, not during it. This
+    function never touches `.features`.
+
+    Uses IterableDataset.decode(False) — the documented, version-supported
+    way to disable decoding for every Audio/Image/Video feature at once —
+    when available; falls back to explicitly recasting the "video" column
+    to Video(decode=False) on older `datasets` versions that predate
+    .decode(). Either way, the "video" column is then dropped entirely
+    since nothing here uses it.
+    """
+    if hasattr(ds, "decode"):
+        ds = ds.decode(False)
+    elif _HfVideo is not None:
+        try:
+            ds = ds.cast_column("video", _HfVideo(decode=False))
+        except ValueError:
+            pass  # no "video" column under this name/config
+
+    try:
+        ds = ds.remove_columns(["video"])
+    except ValueError:
+        pass  # no "video" column under this name/config
+
+    return ds
+
+
 def iter_dataset_rows(dataset_name: str, split: str = DEFAULT_SPLIT):
-    """Stream dataset rows as plain dicts, dropping the "video" feature
-    column before iterating so no frame/video decoding — and no torch/
-    torchcodec dependency — is ever required just to read metadata."""
+    """Stream dataset rows as plain dicts. Video decoding is disabled
+    before any row is pulled (see _disable_video_decoding) so metadata-only
+    streaming never requires torchcodec/decord, and no such dependency is
+    ever needed just to read metadata."""
     if load_dataset is None:
         raise DatasetAccessError(
             "The 'datasets' package is required to read Shofo dataset metadata.\n"
@@ -113,8 +159,7 @@ def iter_dataset_rows(dataset_name: str, split: str = DEFAULT_SPLIT):
 
     try:
         ds = load_dataset(dataset_name, split=split, streaming=True)
-        if "video" in getattr(ds, "features", {}) or {}:
-            ds = ds.remove_columns(["video"])
+        ds = _disable_video_decoding(ds)
         for row in ds:
             yield row
     except DatasetAccessError:
