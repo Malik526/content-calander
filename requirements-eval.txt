@@ -1,0 +1,13 @@
+# Optional dependencies for the Shofo real-video evaluation corpus
+# (download_shofo_samples.py, evaluate_transcription.py). Deliberately kept
+# out of requirements.txt so the production pipeline's dependency set is
+# untouched — install this file only when acquiring/evaluating the corpus.
+#
+#   pip install -r requirements-eval.txt
+#
+# huggingface_hub is often already present transitively (faster-whisper and
+# fastembed both depend on it), but is declared explicitly here since
+# download_shofo_samples.py imports it directly.
+
+datasets>=2.19.0
+huggingface_hub>=0.23.0

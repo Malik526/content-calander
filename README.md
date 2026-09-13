@@ -242,6 +242,26 @@ This reports auto-assigned count, **wrong auto-assignments**, review count, and 
 
 ---
 
+## Shofo Real-Video Evaluation Corpus
+
+A separate, optional test/evaluation utility (Milestone 1.3.1) for exercising this pipeline against real short-form social video instead of only synthetic fixtures. It never touches production scheduling behavior.
+
+```bash
+pip install -r requirements-eval.txt          # kept out of requirements.txt on purpose
+python3 download_shofo_samples.py --count 12  # ~12 real MP4s + reference metadata, not the full dataset
+python3 evaluate_transcription.py             # faster-whisper vs. the dataset's reference transcript (WER/CER)
+```
+
+Notes:
+
+- Pulls from the gated [`Shofo/shofo-talking-head-en`](https://huggingface.co/datasets/Shofo/shofo-talking-head-en) dataset (~10k clips, ~104GB) — this never downloads the full dataset, only ~12 selected raw MP4s via `huggingface_hub.hf_hub_download`, and never decodes video during selection.
+- Dataset access requires accepting Hugging Face's access conditions for that dataset and authenticating locally (`huggingface-cli login` or `HF_TOKEN`) — never a token in source code.
+- Downloaded videos, metadata, and results are gitignored and never committed — see `evaluation/video_pipeline/README.md`.
+- The dataset's supplied transcript is a **reference** ASR output (from another model), not human ground truth — `evaluate_transcription.py` reports WER/CER differences, it does not assume every mismatch is faster-whisper's fault.
+- Tests media/transcription/FIFO-scheduling — **not** pillar-classification accuracy; the clips' topics are unrelated to this project's content pillars.
+
+See `evaluation/video_pipeline/README.md` for the full workflow, including copying a subset into `content/incoming/` for a real FIFO pipeline test.
+
 ## Calendar Ownership
 
 Normal operation targets exactly one dedicated, app-owned Google Calendar (display name **"Content Automation"**) — never your primary calendar, never an arbitrary calendar. See `docs/decisions/0004-dedicated-google-calendar-ownership.md` for the full rationale.

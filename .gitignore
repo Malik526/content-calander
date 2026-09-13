@@ -27,5 +27,14 @@ evaluation/labels.csv
 evaluation/transcripts/*
 !evaluation/transcripts/.gitkeep
 
+# Shofo real-video evaluation corpus (Milestone 1.3.1) — downloaded MP4s,
+# reference metadata, and benchmark results. Only
+# evaluation/video_pipeline/README.md is committed — see that file for
+# dataset access/format. Never commit downloaded Shofo videos or transcripts.
+evaluation/video_pipeline/videos/*
+evaluation/video_pipeline/metadata.jsonl
+evaluation/video_pipeline/results.jsonl
+!evaluation/video_pipeline/videos/.gitkeep
+
 #ignore virtual environment folder 
 .venv/
