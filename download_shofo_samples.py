@@ -6,17 +6,28 @@ real media instead of synthetic test fixtures.
 
 What it does (and does NOT do):
   Selects a small number of rows (default 12) from the dataset's metadata,
-  filtered for usability (has_audio, English, a real transcript) and
-  stratified across short/medium/long duration and has_music for practical
-  variety, then downloads only the underlying raw MP4 for each selected row
-  via huggingface_hub.hf_hub_download(row["file_name"]) — never the full
-  ~104GB / ~10k-row dataset, and never through the "video" decode feature
-  (which would pull in a heavy decoder dependency like torchcodec just to
-  get bytes back out). Metadata streaming explicitly disables Video-feature
-  decoding (IterableDataset.decode(False), or Video(decode=False) on older
-  `datasets` versions) before pulling any row, then drops the "video"
-  column entirely — see _disable_video_decoding for why merely checking
-  `ds.features` is not safe here.
+  filtered for usability (has_audio, English, a real downloadable file
+  reference, a real transcript) and stratified across short/medium/long
+  duration and has_music for practical variety, then downloads only the
+  underlying raw MP4 for each selected row via
+  huggingface_hub.hf_hub_download() — never the full ~104GB / ~10k-row
+  dataset, and never through the "video" decode feature (which would pull
+  in a heavy decoder dependency like torchcodec just to get bytes back
+  out). Metadata streaming explicitly disables Video-feature decoding
+  (IterableDataset.decode(False), or Video(decode=False) on older
+  `datasets` versions) before pulling any row — see _disable_video_decoding
+  for why merely checking `ds.features` is not safe here.
+
+  IMPORTANT — verified real schema vs. the dataset card: the dataset has NO
+  "file_name" column (unlike what the card's field list suggests). The
+  downloadable reference lives inside the raw (non-decoded) "video" feature
+  value instead, as an hf://datasets/<repo>@<revision>/<path> URI — see
+  normalize_row() / _relative_path_from_video_field() and
+  evaluation/video_pipeline/README.md ("Observed Schema") for the verified
+  row shape. normalize_row() is the one place Shofo-specific field names
+  are translated to this project's internal names; every other function in
+  this file (filtering, stratification, download, manifest) only ever sees
+  the normalized shape.
 
   This is a test/evaluation acquisition utility, not part of the production
   pipeline. It must not import content_store, slot_matcher, classification,
@@ -53,6 +64,7 @@ Output:
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -112,9 +124,14 @@ class DownloadResult:
 def _disable_video_decoding(ds):
     """Disable Video-feature decoding before any row is pulled, so reading
     dataset metadata never requires a video decoder backend (torchcodec).
-    Row selection only needs file_name and the scalar metadata columns —
-    the actual MP4 bytes are fetched later via
-    hf_hub_download(row["file_name"]), never through this "video" feature.
+
+    The "video" column is deliberately KEPT (not removed): its raw,
+    non-decoded value is where the downloadable file reference actually
+    lives for this dataset (see normalize_row) — there is no separate
+    "file_name" column, unlike what the dataset card's field list
+    suggests. With decoding disabled, that raw value is just a small dict
+    (a path string and a null "bytes"), not actual video bytes, so keeping
+    the column costs nothing extra over a metadata-only scan.
 
     Checking `ds.features` directly (the original approach here) is NOT
     safe: for a streaming dataset whose schema isn't already known, that
@@ -127,27 +144,93 @@ def _disable_video_decoding(ds):
     way to disable decoding for every Audio/Image/Video feature at once —
     when available; falls back to explicitly recasting the "video" column
     to Video(decode=False) on older `datasets` versions that predate
-    .decode(). Either way, the "video" column is then dropped entirely
-    since nothing here uses it.
+    .decode().
     """
     if hasattr(ds, "decode"):
-        ds = ds.decode(False)
-    elif _HfVideo is not None:
+        return ds.decode(False)
+
+    if _HfVideo is not None:
         try:
-            ds = ds.cast_column("video", _HfVideo(decode=False))
+            return ds.cast_column("video", _HfVideo(decode=False))
         except ValueError:
             pass  # no "video" column under this name/config
-
-    try:
-        ds = ds.remove_columns(["video"])
-    except ValueError:
-        pass  # no "video" column under this name/config
 
     return ds
 
 
+# Real Shofo/shofo-talking-head-en row schema, verified empirically
+# (2026-09-13) against a real streamed row with decoding disabled — the
+# dataset card does not document field names directly, and does NOT have a
+# "file_name" column at all (an assumption an earlier version of this file
+# made without verifying, which silently filtered out every row). See
+# evaluation/video_pipeline/README.md "Observed Schema" for the full
+# verified shape, including the "video" feature's raw structure.
+#
+# Direct-passthrough fields: source column name -> our internal name.
+# "file_name" is NOT in this map — it is derived, not copied (see
+# _relative_path_from_video_field / normalize_row below).
+_DIRECT_FIELD_MAP = {
+    "video_id": "video_id",
+    "tiktok_url": "tiktok_url",
+    "duration_ms": "duration_ms",
+    "resolution": "resolution",
+    "width": "width",
+    "height": "height",
+    "fps": "fps",
+    "codec": "codec",
+    "bitrate": "bitrate",
+    "has_audio": "has_audio",
+    "language": "language",
+    "has_music": "has_music",
+    "transcript": "reference_transcript",
+}
+
+# Matches the raw "video" feature's non-decoded path value, e.g.:
+#   hf://datasets/Shofo/shofo-talking-head-en@<revision>/videos/70/<id>.mp4
+_HF_DATASET_PATH_RE = re.compile(r"^hf://datasets/(?P<repo_id>[^@]+)@(?P<revision>[^/]+)/(?P<path_in_repo>.+)$")
+
+
+def _relative_path_from_video_field(video_field, dataset_name: str) -> str | None:
+    """Extract the path-in-repo needed for hf_hub_download(filename=...)
+    from the raw (non-decoded) "video" feature value. Returns None — never
+    raises — for anything that isn't a usable reference (missing field,
+    wrong type, empty path, or a URI naming a different repo than expected)
+    so a row with no usable video is correctly filtered out downstream
+    rather than crashing acquisition."""
+    if not isinstance(video_field, dict):
+        return None
+    path = video_field.get("path")
+    if not path:
+        return None
+    match = _HF_DATASET_PATH_RE.match(path)
+    if match:
+        return match.group("path_in_repo") if match.group("repo_id") == dataset_name else None
+    if not path.startswith("hf://"):
+        return path  # already a plain relative path
+    return None
+
+
+def normalize_row(raw_row: dict, dataset_name: str) -> dict:
+    """Translate one raw Shofo dataset row into this project's internal
+    field names/shape (see _DIRECT_FIELD_MAP and module docstring). Every
+    other function in this file — filtering, stratification, download,
+    manifest building — operates only on this normalized shape, so
+    Shofo-specific naming never leaks past this one boundary function.
+
+    A field the source row doesn't have comes through as None here (via
+    dict.get's default), distinct from a field the source row has with a
+    valid falsy value (has_audio=False, has_music=False, bitrate=0) —
+    is_valid_candidate relies on that distinction rather than treating
+    both the same."""
+    normalized = {internal: raw_row.get(source) for source, internal in _DIRECT_FIELD_MAP.items()}
+    normalized["file_name"] = _relative_path_from_video_field(raw_row.get("video"), dataset_name)
+    return normalized
+
+
 def iter_dataset_rows(dataset_name: str, split: str = DEFAULT_SPLIT):
-    """Stream dataset rows as plain dicts. Video decoding is disabled
+    """Stream raw dataset rows as plain dicts (Shofo's own field names,
+    including the still-present but non-decoded "video" feature — see
+    normalize_row for the translation boundary). Video decoding is disabled
     before any row is pulled (see _disable_video_decoding) so metadata-only
     streaming never requires torchcodec/decord, and no such dependency is
     ever needed just to read metadata."""
@@ -182,8 +265,12 @@ def iter_dataset_rows(dataset_name: str, split: str = DEFAULT_SPLIT):
 # ---------------------------------------------------------------------------
 
 def is_valid_candidate(row: dict) -> bool:
-    """Required filters: usable audio, English, a real file to download, and
-    a non-empty reference transcript to compare against later."""
+    """Required filters, applied to a *normalized* row (see normalize_row):
+    usable audio, English, a real downloadable file reference, and a
+    non-empty reference transcript to compare against later. These are
+    never loosened just to produce candidates — a row failing any of them
+    (whether the field is missing entirely or genuinely falsy/empty) is
+    correctly excluded, not coerced into passing."""
     if row.get("has_audio") is not True:
         return False
     language = (row.get("language") or "").strip().lower()
@@ -191,7 +278,7 @@ def is_valid_candidate(row: dict) -> bool:
         return False
     if not (row.get("file_name") or "").strip():
         return False
-    if not (row.get("transcript") or "").strip():
+    if not (row.get("reference_transcript") or "").strip():
         return False
     return True
 
@@ -342,6 +429,9 @@ def download_sample(
 
 
 def build_manifest_record(row: dict, sample_index: int, local_path: Path, output_dir: Path, dataset_name: str) -> dict:
+    """`row` must already be normalize_row()'s output — this only adds
+    acquisition-run bookkeeping (sample_index, local_path, dataset); it does
+    not translate any more Shofo-specific fields."""
     video_id = _video_id_for(row)
     return {
         "sample_index": sample_index,
@@ -359,7 +449,7 @@ def build_manifest_record(row: dict, sample_index: int, local_path: Path, output
         "has_audio": row.get("has_audio"),
         "language": row.get("language"),
         "has_music": row.get("has_music"),
-        "reference_transcript": row.get("transcript"),
+        "reference_transcript": row.get("reference_transcript"),
         "dataset": dataset_name,
     }
 
@@ -388,6 +478,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Reproducible sampling seed (default 42).")
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--split", default=DEFAULT_SPLIT)
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Print the discovered raw source schema (column names) before filtering — useful if the dataset's field names ever change.",
+    )
     return parser.parse_args()
 
 
@@ -398,12 +492,18 @@ def main() -> None:
     manifest_path = output_dir / "metadata.jsonl"
 
     try:
-        rows = list(iter_dataset_rows(args.dataset, args.split))
+        raw_rows = list(iter_dataset_rows(args.dataset, args.split))
     except DatasetAccessError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    candidates = [row for row in rows if is_valid_candidate(row)]
+    if args.verbose:
+        if raw_rows:
+            print(f"Discovered source keys (first row): {sorted(raw_rows[0].keys())}")
+        else:
+            print("Discovered source keys: <no rows returned by the dataset>")
+
+    candidates = [row for row in (normalize_row(r, args.dataset) for r in raw_rows) if is_valid_candidate(row)]
     if not candidates:
         print(
             "ERROR: no candidate rows passed filtering "

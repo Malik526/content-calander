@@ -12,17 +12,48 @@ import download_shofo_samples as dss
 import media
 
 
+DATASET_NAME = "Shofo/shofo-talking-head-en"
+
+
 def _row(
-    video_id="v1", file_name="v1.mp4", has_audio=True, language="en",
-    transcript="WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello.\n",
+    video_id="v1", file_name="videos/70/v1.mp4", has_audio=True, language="en",
+    reference_transcript="WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello.\n",
     duration_ms=15_000, has_music=False, **extra,
 ):
+    """A normalized row — i.e. normalize_row()'s output shape — for testing
+    everything downstream of the acquisition boundary (filtering,
+    stratification, download, manifest). See _raw_shofo_row() below for the
+    real, pre-translation Shofo schema."""
     row = {
         "video_id": video_id, "file_name": file_name, "has_audio": has_audio,
-        "language": language, "transcript": transcript, "duration_ms": duration_ms,
-        "has_music": has_music, "tiktok_url": f"https://tiktok.com/{video_id}",
-        "resolution": "576x1024", "width": 576, "height": 1024, "fps": 30,
+        "language": language, "reference_transcript": reference_transcript, "duration_ms": duration_ms,
+        "has_music": has_music, "tiktok_url": f"https://www.tiktok.com/@i/video/{video_id}",
+        "resolution": "576x1024", "width": 576, "height": 1024, "fps": 30.0,
         "codec": "h264", "bitrate": 850000,
+    }
+    row.update(extra)
+    return row
+
+
+def _raw_shofo_row(
+    video_id="7084695981018582315", has_audio=True, language="en",
+    transcript="WEBVTT\n\n00:00:00.140 --> 00:00:00.200\nHey,\n",
+    duration_ms=20_501, has_music=False, video_path=None, dataset_name=DATASET_NAME, **extra,
+):
+    """A row shaped exactly like a real streamed Shofo row (verified
+    empirically 2026-09-13, decoding disabled) — see
+    evaluation/video_pipeline/README.md "Observed Schema". Notably: no
+    "file_name" column at all; the downloadable reference lives inside the
+    raw, non-decoded "video" feature value instead."""
+    if video_path is None:
+        video_path = f"hf://datasets/{dataset_name}@1eadfc5e47590f3fb67ec3f01376b6ed81c24016/videos/70/{video_id}.mp4"
+    row = {
+        "video_id": video_id, "has_audio": has_audio, "language": language,
+        "transcript": transcript, "duration_ms": duration_ms, "has_music": has_music,
+        "tiktok_url": f"https://www.tiktok.com/@i/video/{video_id}",
+        "resolution": "576x1024", "width": 576, "height": 1024, "fps": 30.0,
+        "codec": "h264", "bitrate": 1449790,
+        "video": {"path": video_path, "bytes": None} if video_path is not False else None,
     }
     row.update(extra)
     return row
@@ -49,8 +80,26 @@ def test_is_valid_candidate_rejects_missing_file_name():
 
 
 def test_is_valid_candidate_rejects_empty_transcript():
-    assert dss.is_valid_candidate(_row(transcript="")) is False
-    assert dss.is_valid_candidate(_row(transcript="   ")) is False
+    assert dss.is_valid_candidate(_row(reference_transcript="")) is False
+    assert dss.is_valid_candidate(_row(reference_transcript="   ")) is False
+
+
+def test_is_valid_candidate_rejects_missing_field_distinctly_from_falsy_value():
+    """A field that's genuinely absent (None, via normalize_row on a raw
+    row lacking it) must be rejected exactly like a validly-present falsy
+    value — neither should accidentally pass."""
+    missing_audio = _row()
+    del missing_audio["has_audio"]
+    assert dss.is_valid_candidate(missing_audio) is False  # KeyError-safe via .get()
+    assert dss.is_valid_candidate(_row(has_audio=None)) is False
+    assert dss.is_valid_candidate(_row(has_audio=False)) is False
+
+
+def test_is_valid_candidate_does_not_loosen_on_a_falsy_but_valid_bitrate():
+    """A real, valid 0 (or otherwise falsy) metadata value on a field that
+    isn't itself a required filter must never affect candidacy."""
+    assert dss.is_valid_candidate(_row(bitrate=0)) is True
+    assert dss.is_valid_candidate(_row(has_music=False)) is True
 
 
 # ---------------------------------------------------------------------------
@@ -133,16 +182,78 @@ def test_stratify_sample_empty_candidates_returns_empty():
 # ---------------------------------------------------------------------------
 
 def test_build_manifest_record_preserves_transcript_unmodified(tmp_path):
-    row = _row(transcript="WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nRaw text kept as-is.\n")
+    row = _row(reference_transcript="WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nRaw text kept as-is.\n")
     output_dir = tmp_path
     local_path = output_dir / "videos" / "v1.mp4"
-    record = dss.build_manifest_record(row, 1, local_path, output_dir, "Shofo/shofo-talking-head-en")
+    record = dss.build_manifest_record(row, 1, local_path, output_dir, DATASET_NAME)
 
-    assert record["reference_transcript"] == row["transcript"]
+    assert record["reference_transcript"] == row["reference_transcript"]
+    assert record["file_name"] == row["file_name"]
     assert record["sample_index"] == 1
     assert record["video_id"] == "v1"
     assert record["local_path"] == "videos/v1.mp4"
-    assert record["dataset"] == "Shofo/shofo-talking-head-en"
+    assert record["dataset"] == DATASET_NAME
+
+
+# ---------------------------------------------------------------------------
+# normalize_row / _relative_path_from_video_field — the real acquisition
+# boundary between Shofo's actual schema and our internal field names
+# ---------------------------------------------------------------------------
+
+def test_relative_path_from_video_field_parses_hf_dataset_uri():
+    video_field = {"path": f"hf://datasets/{DATASET_NAME}@abc123/videos/70/7084695981018582315.mp4", "bytes": None}
+    assert dss._relative_path_from_video_field(video_field, DATASET_NAME) == "videos/70/7084695981018582315.mp4"
+
+
+def test_relative_path_from_video_field_rejects_mismatched_repo_id():
+    video_field = {"path": "hf://datasets/someone-else/other-dataset@abc123/videos/x.mp4", "bytes": None}
+    assert dss._relative_path_from_video_field(video_field, DATASET_NAME) is None
+
+
+def test_relative_path_from_video_field_passes_through_plain_relative_path():
+    video_field = {"path": "videos/70/x.mp4", "bytes": None}
+    assert dss._relative_path_from_video_field(video_field, DATASET_NAME) == "videos/70/x.mp4"
+
+
+def test_relative_path_from_video_field_handles_missing_or_malformed_input():
+    assert dss._relative_path_from_video_field(None, DATASET_NAME) is None
+    assert dss._relative_path_from_video_field({}, DATASET_NAME) is None
+    assert dss._relative_path_from_video_field({"path": None, "bytes": None}, DATASET_NAME) is None
+    assert dss._relative_path_from_video_field({"path": "", "bytes": None}, DATASET_NAME) is None
+    assert dss._relative_path_from_video_field("not-a-dict", DATASET_NAME) is None
+
+
+def test_normalize_row_maps_real_schema_to_internal_names():
+    raw = _raw_shofo_row(video_id="v1", has_music=True, duration_ms=42_000)
+    normalized = dss.normalize_row(raw, DATASET_NAME)
+
+    assert normalized["video_id"] == "v1"
+    assert normalized["file_name"] == "videos/70/v1.mp4"
+    assert normalized["reference_transcript"] == raw["transcript"]
+    assert normalized["duration_ms"] == 42_000
+    assert normalized["has_music"] is True
+    assert normalized["has_audio"] is True
+    assert normalized["language"] == "en"
+    assert normalized["resolution"] == "576x1024"
+    assert normalized["width"] == 576
+    assert normalized["height"] == 1024
+    assert normalized["fps"] == 30.0
+    assert normalized["codec"] == "h264"
+    assert normalized["bitrate"] == 1449790
+    assert normalized["tiktok_url"] == raw["tiktok_url"]
+
+
+def test_normalize_row_missing_video_field_yields_none_file_name():
+    raw = _raw_shofo_row(video_path=False)  # no "video" key at all
+    normalized = dss.normalize_row(raw, DATASET_NAME)
+    assert normalized["file_name"] is None
+    assert dss.is_valid_candidate(normalized) is False  # correctly filtered, not a crash
+
+
+def test_normalize_row_output_is_a_valid_candidate_for_a_well_formed_real_row():
+    raw = _raw_shofo_row()
+    normalized = dss.normalize_row(raw, DATASET_NAME)
+    assert dss.is_valid_candidate(normalized) is True
 
 
 def test_write_manifest_writes_one_json_object_per_line(tmp_path):
@@ -194,11 +305,13 @@ class _VideoDecodeError(Exception):
 class _FakeStreamingDataset:
     """Models the real failure mode precisely: iterating a row containing
     a "video" key raises _VideoDecodeError *unless* decoding has been
-    disabled (.decode(False)) or the "video" column has been removed first
-    — either mitigation alone is enough, matching the real Video feature's
-    behavior. Deliberately has no `.features` property: the fix must not
-    depend on accessing it (that access is what caused the original bug —
-    see _disable_video_decoding's docstring)."""
+    disabled first (.decode(False) or the Video(decode=False) cast_column
+    fallback) — matching the real Video feature's behavior. The "video"
+    column itself is never removed by the fix under test (it's needed
+    downstream to derive file_name — see normalize_row), only its decoding
+    is disabled. Deliberately has no `.features` property: the fix must
+    not depend on accessing it (that access is what caused the original
+    bug — see _disable_video_decoding's docstring)."""
 
     def __init__(self, rows, decode_enabled=True, has_video_column=True):
         self._rows = rows
@@ -212,13 +325,7 @@ class _FakeStreamingDataset:
         # Real cast_column raises ValueError for an unknown column name.
         if name == "video" and not self._has_video_column:
             raise ValueError(f"Column {name} not in the dataset")
-        return self
-
-    def remove_columns(self, columns):
-        if "video" in columns and not self._has_video_column:
-            raise ValueError("Column video not in the dataset")
-        remaining_rows = [{k: v for k, v in row.items() if k not in columns} for row in self._rows]
-        return _FakeStreamingDataset(remaining_rows, decode_enabled=self._decode_enabled, has_video_column=False)
+        return _FakeStreamingDataset(self._rows, decode_enabled=False, has_video_column=self._has_video_column)
 
     def __iter__(self):
         for row in self._rows:
@@ -228,28 +335,30 @@ class _FakeStreamingDataset:
 
 
 def test_iter_dataset_rows_never_decodes_video(monkeypatch):
-    """The core regression test: iterating must succeed and yield clean
-    metadata rows even though the fake dataset would raise the real
-    torchcodec error the moment a "video" value is actually decoded."""
+    """The core regression test: iterating must succeed and yield rows
+    that still carry the raw (non-decoded) "video" value — needed
+    downstream to derive file_name — even though the fake dataset would
+    raise the real torchcodec error the moment that value is decoded."""
     rows = [{"video": "would raise if decoded", "video_id": "v1", "language": "en"}]
     fake_ds = _FakeStreamingDataset(rows)
     monkeypatch.setattr(dss, "load_dataset", lambda *a, **k: fake_ds)
 
-    result = list(dss.iter_dataset_rows("Shofo/shofo-talking-head-en"))
+    result = list(dss.iter_dataset_rows(DATASET_NAME))
 
-    assert result == [{"video_id": "v1", "language": "en"}]
-    assert "video" not in result[0]
+    assert result == [{"video": "would raise if decoded", "video_id": "v1", "language": "en"}]
 
 
 def test_disable_video_decoding_prefers_decode_method_when_available():
     fake_ds = _FakeStreamingDataset([{"video": "x", "video_id": "v1"}])
     result_ds = dss._disable_video_decoding(fake_ds)
-    assert list(result_ds) == [{"video_id": "v1"}]
+    assert list(result_ds) == [{"video": "x", "video_id": "v1"}]
 
 
 def test_disable_video_decoding_falls_back_to_video_cast_without_decode_method(monkeypatch):
     """Older `datasets` versions lack IterableDataset.decode() entirely —
-    confirm the Video(decode=False) cast_column fallback is used instead."""
+    confirm the Video(decode=False) cast_column fallback is used instead,
+    and that it alone is enough to stop decoding (the "video" column stays
+    present, just no longer decoded)."""
 
     # hasattr(ds, "decode") must be False for the fallback path to trigger,
     # so build a dataset class with everything _FakeStreamingDataset has
@@ -265,13 +374,8 @@ def test_disable_video_decoding_falls_back_to_video_cast_without_decode_method(m
     fake_video_cls = type("FakeVideo", (), {"__init__": lambda self, decode: None})
     monkeypatch.setattr(dss, "_HfVideo", fake_video_cls)
 
-    # cast_column on the real fake still just returns self (decode stays
-    # "on" in the fake's own bookkeeping) — the fix must therefore also
-    # remove the "video" column so iteration never sees a "video" key at
-    # all, proving remove_columns runs even when the decode() fast path
-    # isn't available.
     result_ds = dss._disable_video_decoding(fake_ds)
-    assert list(result_ds) == [{"video_id": "v1"}]
+    assert list(result_ds) == [{"video": "x", "video_id": "v1"}]
 
 
 def test_disable_video_decoding_handles_dataset_with_no_video_column():

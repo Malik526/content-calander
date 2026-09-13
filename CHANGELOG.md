@@ -2,6 +2,20 @@
 
 ## 2026-09-13
 
+### Fix — download_shofo_samples.py Real Schema Mismatch (No `file_name` Column)
+
+A real `--count 1` run after the torchcodec fix below completed with no decode error but reported **zero candidates passed filtering**. Investigated with one minimal authenticated, decode-disabled read of a real streamed row (no video download, no decode): the dataset has **no `file_name` column at all** — an assumption made from the dataset card, never verified, that silently filtered out every row. The downloadable reference actually lives inside the raw (non-decoded) `video` feature value as an `hf://datasets/<repo>@<revision>/<path>` URI. Every other assumed field name/type (`video_id`, `tiktok_url`, `duration_ms`, `resolution`, `width`, `height`, `fps`, `codec`, `bitrate`, `has_audio`, `language`, `transcript`) matched the dataset card exactly.
+
+- `_disable_video_decoding()` no longer removes the `"video"` column (it only disables decoding on it) — the column is needed downstream to derive the file reference. With decoding off, its value is a small `{"path": ..., "bytes": None}` dict, not actual video bytes, so keeping it costs nothing extra.
+- Added `_relative_path_from_video_field()`: parses the `hf://datasets/<repo>@<revision>/<path>` URI down to the plain repo-relative path `hf_hub_download(filename=...)` needs, rejecting a URI naming a different repo and passing through an already-relative path unchanged; returns `None` (never raises) for anything unusable.
+- Added `normalize_row()` and an explicit `_DIRECT_FIELD_MAP`: the one place Shofo's real field names are translated to this project's internal manifest names (`transcript` → `reference_transcript`; everything else passes through 1:1; `file_name` is derived, not mapped). Every other function — `is_valid_candidate`, `stratify_sample`, `download_sample`, `build_manifest_record` — now operates only on this normalized shape; Shofo-specific naming no longer leaks past this one boundary.
+- `is_valid_candidate()` still applies the same required filters (`has_audio=True`, `language=en`, a real `file_name`, a non-empty `reference_transcript`) with no loosening — a missing field and a validly-falsy field are both still correctly rejected, not conflated.
+- Added `--verbose` to `download_shofo_samples.py`: prints the discovered raw source column names before filtering, so a future schema drift is visible immediately instead of silently producing zero candidates again.
+- Documented the verified real schema in `evaluation/video_pipeline/README.md` ("Observed Schema"), including a second real finding from scanning the full metadata stream: **`has_music` is `False` for all 10,000 rows** in this dataset release (not a sampling bug — `stratify_sample`'s music alternation is a no-op today but will pick up `True` rows automatically if a future revision adds any).
+- Added `tests/test_download_shofo_samples.py` fixtures/tests shaped like the real verified row (`_raw_shofo_row`) covering `_relative_path_from_video_field` (matching/mismatched repo, plain-path fallback, missing/malformed input) and `normalize_row` (full field mapping, derived `file_name`, missing-video-field handling), plus explicit missing-vs-falsy-value filter tests. No Torch/TorchCodec added; no production pipeline dependency changed.
+
+Validation: `python3 -m pytest` (291 passed). Ran the real, live acquisition end to end in this environment: `--count 1 --verbose` succeeded (1 downloaded, 0 failed, real MP4 confirmed valid via `media.inspect_media()` — h264/aac, 576x1024, 25.5s); `--count 12 --seed 42` then succeeded (12 downloaded, 0 failed, 112.9MB total) with a clean 4/4/4 short/medium/long spread (all `has_music=False`, matching the now-documented real dataset property, not a bug).
+
 ### Fix — download_shofo_samples.py torchcodec Decode Error
 
 `iter_dataset_rows()` failed before any row was yielded with `"To support decoding videos, please install torchcodec."` — a real run surfaced this immediately, contradicting the milestone's explicit requirement to never decode video or add a torch/torchcodec dependency during acquisition.

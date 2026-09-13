@@ -48,13 +48,46 @@ python3 download_shofo_samples.py --count 12 --output evaluation/video_pipeline 
 ```
 
 This does **not** download the full dataset. It streams dataset metadata
-only (the `video` feature column is dropped before iterating, so nothing is
-decoded), filters candidates (`has_audio=True`, `language=en`, a real
-`file_name`, a non-empty `transcript`), stratifies a sample across
-short/medium/long duration and `has_music`, and downloads only the selected
-rows' raw MP4s via `huggingface_hub.hf_hub_download(file_name)` — the exact
-original file, no transcoding. `--seed` (default 42) makes the selection
-reproducible across runs against the same dataset revision.
+only, with Video-feature decoding disabled before any row is pulled (so
+nothing is ever decoded — see "Observed Schema" below for why merely
+dropping/checking the `video` column is not enough), filters candidates
+(`has_audio=True`, `language=en`, a real downloadable file reference, a
+non-empty `transcript`), stratifies a sample across short/medium/long
+duration and `has_music`, and downloads only the selected rows' raw MP4s
+via `huggingface_hub.hf_hub_download()` — the exact original file, no
+transcoding. `--seed` (default 42) makes the selection reproducible across
+runs against the same dataset revision. Pass `--verbose` to print the
+discovered raw source column names before filtering.
+
+## Observed Schema
+
+The dataset card's field list does not exactly match the real streamed row
+schema — verified empirically (2026-09-13) against a real row with decoding
+disabled. Two things to know before touching `download_shofo_samples.py`:
+
+- **There is no `file_name` column.** The downloadable reference lives
+  inside the raw (non-decoded) `video` feature value instead, as
+  `{"path": "hf://datasets/<repo>@<revision>/videos/<xx>/<video_id>.mp4", "bytes": None}`.
+  `download_shofo_samples._relative_path_from_video_field()` parses that
+  URI down to the `hf_hub_download(filename=...)`-compatible relative path
+  (`videos/<xx>/<video_id>.mp4`); `normalize_row()` is the one place this
+  translation (and every other Shofo→internal field rename) happens —
+  nothing downstream of it ever sees Shofo's raw field names.
+- **`has_music` is `False` for all 10,000 rows in this dataset release.**
+  Confirmed by scanning the full metadata stream, not just the 12-sample
+  pool. `stratify_sample()`'s has_music alternation is therefore a no-op in
+  practice today (every bucket's "musical" pool is empty, so every
+  selection falls back to non-musical candidates) — this is a real
+  property of the current dataset, not a sampling bug. If a future dataset
+  revision adds `has_music=True` rows, the existing alternation logic picks
+  them up automatically with no code change.
+
+Every other field (`video_id`, `tiktok_url`, `duration_ms`, `resolution`,
+`width`, `height`, `fps`, `codec`, `bitrate`, `has_audio`, `language`,
+`transcript`) matches its name/type on the dataset card. All 10,000 rows
+passed `has_audio`/`language`/`file_name`/`transcript` filtering in the same
+scan — this is a clean, well-formed dataset once the `file_name` derivation
+above is correct.
 
 Output:
 
