@@ -143,7 +143,11 @@ The shared service account (`~/growth_agency/credentials/service-account.json`, 
 | `classification.py` | `ContentClassifier` interface, `EmbeddingClassifier` (default, local), `ClaudeClassifier` (optional), `build_classifier()` — pillar mode only |
 | `evaluate_classifier.py` | Offline benchmark harness for classifiers against a local labeled dataset |
 | `slot_matcher.py` | Deterministic earliest-open-slot selection — `select_slot_fifo` (no pillar) and `select_slot` (pillar mode) |
-| `content_store.py` | SQLite persistence (`videos`, `content_slots`) |
+| `content_store.py` | SQLite persistence (`videos`, `content_slots`, `platform_posts`) |
+| `publisher.py` | Platform-neutral `Publisher` interface + `build_publisher()` (Milestone 2.0) |
+| `tiktok_auth.py` | TikTok OAuth: manual authorization flow, token refresh/persistence (Milestone 2.0) |
+| `tiktok_publisher.py` | `TikTokPublisher` — Content Posting API v2 (init/upload/status) (Milestone 2.0) |
+| `publish_tiktok.py` | Standalone manual CLI: publish one video to TikTok (Milestone 2.0) |
 | `requirements.txt` | Python package dependencies |
 
 Run tests with `python3 -m pytest`.
@@ -261,6 +265,37 @@ Notes:
 - Tests media/transcription/FIFO-scheduling — **not** pillar-classification accuracy; the clips' topics are unrelated to this project's content pillars.
 
 See `evaluation/video_pipeline/README.md` for the full workflow, including copying a subset into `content/incoming/` for a real FIFO pipeline test.
+
+## TikTok Publishing (Milestone 2.0)
+
+Proves one already-processed video can be published to a **dedicated TikTok test account** — a standalone manual CLI, deliberately not wired into `process_content.py` or any scheduled/automatic execution yet. See `docs/decisions/0006-tiktok-publisher-foundation.md`.
+
+### One-time setup
+
+1. Create an app in the [TikTok Developer Portal](https://developers.tiktok.com/) with **Login Kit** and the **Content Posting API** enabled. Note its client key/secret, and register a redirect URI.
+2. Set `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REDIRECT_URI` in `.env` — never commit real values.
+3. Authorize as the dedicated test account (TikTok's OAuth has no automated loopback-server flow to rely on here, so this is a deliberate two-step manual process, not automated around):
+   ```bash
+   python3 tiktok_auth.py --print-auth-url
+   # open the printed URL, log in as the dedicated TikTok test account, approve
+   # copy the `code` query parameter from the redirect URL, then:
+   python3 tiktok_auth.py --exchange-code <code>
+   ```
+   The resulting access/refresh token pair is cached at `~/.config/content-calendar/tiktok_token.json` (outside the repo, like the Calendar OAuth token) and refreshed automatically after that — no browser needed again until the refresh token itself expires (~365 days).
+
+### Publishing one video
+
+```bash
+python3 publish_tiktok.py --video-id 3
+python3 publish_tiktok.py --video-id 3 --privacy-level SELF_ONLY
+python3 publish_tiktok.py --video-id 3 --poll-only   # re-check an in-flight submission only, never resubmits
+```
+
+`--video-id` is a `videos.id` from `data/content.db` — a video already processed (has a `canonical_media_path` and `caption_text`). Every post created by this milestone uses `SELF_ONLY` (private) by default — see `config.TIKTOK_DEFAULT_PRIVACY_LEVEL`.
+
+Idempotent: exactly one `platform_posts` row exists per (video, platform), enforced by the schema. Once TikTok has returned a real `publish_id` for a video, this script never submits it again — it only re-checks status, even if that status comes back `FAILED`. Only a video that never got a `publish_id` at all (a true submission failure — missing file, bad credentials, network error) is safe to retry, and retrying reuses the same record rather than creating a second one.
+
+Non-goals for this milestone (see the ADR): automatic publishing when a slot's `scheduled_at` arrives, background workers, retry/backoff, Instagram/YouTube, object storage. Those come after one real TikTok publish is proven.
 
 ## Calendar Ownership
 

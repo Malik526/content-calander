@@ -575,3 +575,236 @@ def test_fk_repair_is_idempotent_on_reopen(tmp_path, capsys):
 
         new_video = store.insert_video("h4", "v4.mp4", "/incoming/v4.mp4", "2026-04-01T00:00:00")
         assert new_video.status == "DISCOVERED"
+
+
+# ---------------------------------------------------------------------------
+# platform_posts (Milestone 2.0 — TikTok Publisher Foundation)
+# ---------------------------------------------------------------------------
+
+def test_get_platform_post_returns_none_when_absent(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    assert store.get_platform_post(video.id, "tiktok") is None
+
+
+def test_insert_platform_post_creates_pending_record(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+
+    assert record.video_id == video.id
+    assert record.platform == "tiktok"
+    assert record.status == "PENDING"
+    assert record.platform_post_id is None
+    assert record.published_at is None
+    assert record.created_at == "2026-02-01T00:00:00"
+    assert record.updated_at == "2026-02-01T00:00:00"
+
+    found = store.get_platform_post(video.id, "tiktok")
+    assert found == record
+
+
+def test_insert_platform_post_carries_optional_scheduled_at(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+
+    record = store.insert_platform_post(
+        video.id, "tiktok", created_at="2026-02-01T00:00:00", scheduled_at="2026-09-16T09:00:00"
+    )
+
+    assert record.scheduled_at == "2026-09-16T09:00:00"
+
+
+def test_insert_platform_post_rejects_duplicate_video_platform_pair(store):
+    """UNIQUE(video_id, platform) is the schema-level idempotency guard —
+    a caller cannot accidentally create two publishing records for the
+    same video on the same platform, even if it forgets to check first."""
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.insert_platform_post(video.id, "tiktok", created_at="2026-02-02T00:00:00")
+
+
+def test_insert_platform_post_allows_same_video_different_platform(store):
+    """The uniqueness is per (video, platform), not per video alone — a
+    future second platform must be able to coexist with an existing
+    tiktok row for the same video."""
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+
+    other = store.insert_platform_post(video.id, "instagram", created_at="2026-02-01T00:00:00")
+    assert other.platform == "instagram"
+
+
+def test_update_platform_post_persists_fields(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+
+    store.update_platform_post(
+        record.id, updated_at="2026-02-02T00:00:00", status="PUBLISHING", platform_post_id="pub_123"
+    )
+
+    updated = store.get_platform_post(video.id, "tiktok")
+    assert updated.status == "PUBLISHING"
+    assert updated.platform_post_id == "pub_123"
+    assert updated.updated_at == "2026-02-02T00:00:00"
+    assert updated.created_at == "2026-02-01T00:00:00"  # untouched
+
+
+def test_update_platform_post_records_published_outcome(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+    store.update_platform_post(record.id, updated_at="2026-02-01T00:01:00", platform_post_id="pub_123", status="PUBLISHING")
+
+    store.update_platform_post(
+        record.id, updated_at="2026-02-01T00:05:00", status="PUBLISHED", published_at="2026-02-01T00:05:00"
+    )
+
+    updated = store.get_platform_post(video.id, "tiktok")
+    assert updated.status == "PUBLISHED"
+    assert updated.published_at == "2026-02-01T00:05:00"
+
+
+def test_update_platform_post_records_failure_reason(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+
+    store.update_platform_post(record.id, updated_at="2026-02-01T00:01:00", status="FAILED", failure_reason="LOCAL_FILE_MISSING")
+
+    updated = store.get_platform_post(video.id, "tiktok")
+    assert updated.status == "FAILED"
+    assert updated.failure_reason == "LOCAL_FILE_MISSING"
+
+
+def test_get_video_by_id(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    assert store.get_video(video.id).file_hash == "h1"
+    assert store.get_video(999999) is None
+
+
+def test_get_slot_by_id(store):
+    store.insert_slot_if_missing("2026-09-16T09:00:00", None, None, "2026-01-01T00:00:00")
+    slot = store.find_earliest_open_slot_fifo("2000-01-01T00:00:00")
+
+    assert store.get_slot(slot.id).scheduled_at == "2026-09-16T09:00:00"
+    assert store.get_slot(999999) is None
+
+
+def test_opening_a_database_missing_platform_posts_table_creates_it(tmp_path):
+    """A database created before Milestone 2.0 has no platform_posts table
+    at all. Opening ContentStore must create it (plain additive
+    CREATE TABLE IF NOT EXISTS — no rebuild needed, since nothing
+    pre-existing ever referenced it) without disturbing existing videos/
+    content_slots data."""
+    db_path = tmp_path / "pre_2_0.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_hash TEXT NOT NULL UNIQUE,
+            original_filename TEXT NOT NULL,
+            original_path TEXT NOT NULL,
+            canonical_media_path TEXT,
+            container TEXT,
+            video_codec TEXT,
+            audio_codec TEXT,
+            width INTEGER,
+            height INTEGER,
+            fps REAL,
+            duration_seconds REAL,
+            file_size_bytes INTEGER,
+            transcript TEXT,
+            transcript_language TEXT,
+            transcription_status TEXT,
+            classified_pillar TEXT,
+            classification_confidence REAL,
+            classification_reason TEXT,
+            status TEXT NOT NULL DEFAULT 'DISCOVERED',
+            failure_reason TEXT,
+            assigned_slot_id INTEGER REFERENCES content_slots(id),
+            created_at TEXT NOT NULL,
+            processed_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE content_slots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scheduled_at TEXT NOT NULL UNIQUE,
+            pillar_key TEXT,
+            prompt TEXT,
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            assigned_video_id INTEGER REFERENCES videos(id),
+            google_calendar_event_id TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO videos (file_hash, original_filename, original_path, status, created_at) "
+        "VALUES ('h1', 'v.mp4', '/incoming/v.mp4', 'DISCOVERED', '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    with ContentStore(db_path=db_path) as store:
+        tables = {row["name"] for row in store._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "platform_posts" in tables
+
+        # pre-existing data untouched
+        video = store.get_video_by_hash("h1")
+        assert video is not None
+
+        record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+        assert record.status == "PENDING"
+
+
+def test_videos_fk_repair_preserves_platform_posts_fk(tmp_path):
+    """Regression guard for the class of bug fixed under "Migration
+    Safety": _repair_videos_assigned_slot_fk renames videos mid-repair
+    under PRAGMA legacy_alter_table=ON specifically so sibling tables'
+    FKs (assigned_video_id on content_slots, and now video_id on
+    platform_posts) are never corrupted as a side effect. Constructs the
+    same broken-FK fixture as the videos.assigned_slot_id repair tests,
+    but with a platform_posts row already present, and confirms its FK
+    still points at videos (not videos_old) afterward."""
+    db_path = tmp_path / "broken_fk_with_platform_posts.db"
+    _make_broken_videos_fk_db(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE platform_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER NOT NULL REFERENCES videos(id),
+            platform TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            platform_post_id TEXT,
+            scheduled_at TEXT,
+            published_at TEXT,
+            failure_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(video_id, platform)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO platform_posts (video_id, platform, status, created_at, updated_at) "
+        "VALUES (1, 'tiktok', 'PENDING', '2026-02-01T00:00:00', '2026-02-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    with ContentStore(db_path=db_path) as store:
+        fk_rows = store._conn.execute("PRAGMA foreign_key_list(platform_posts)").fetchall()
+        video_id_fk = [r for r in fk_rows if r["from"] == "video_id"]
+        assert len(video_id_fk) == 1
+        assert video_id_fk[0]["table"] == "videos"
+
+        assert store._conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+        record = store.get_platform_post(1, "tiktok")
+        assert record is not None
+        assert record.status == "PENDING"

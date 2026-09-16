@@ -1,11 +1,19 @@
 """
-content_store.py — SQLite persistence for videos and content_slots.
+content_store.py — SQLite persistence for videos, content_slots, and
+platform_posts.
 
 What it does:
-  Owns the two tables that make the content-processing pipeline restart-safe
-  and idempotent: `videos` (one row per ingested file, keyed by content hash)
-  and `content_slots` (one row per calendar posting slot, written by
-  generate_calendar.py and consumed by process_content.py / slot_matcher.py).
+  Owns the three tables that make the content-processing/publishing
+  pipeline restart-safe and idempotent: `videos` (one row per ingested
+  file, keyed by content hash), `content_slots` (one row per calendar
+  posting slot, written by generate_calendar.py and consumed by
+  process_content.py / slot_matcher.py), and `platform_posts` (one row per
+  video-platform publishing attempt, written/read by publish_tiktok.py —
+  see docs/decisions/0006-tiktok-publisher-foundation.md). Each owns a
+  distinct concern: videos is canonical content/media metadata,
+  content_slots is scheduling assignment, platform_posts is external
+  publishing state/result — never cram one concern's state into another
+  table's columns.
 
   Google Calendar remains the source of truth for what gets posted when;
   content_slots is an internal mirror that lets process_content.py query and
@@ -80,6 +88,33 @@ CREATE TABLE IF NOT EXISTS content_slots (
     assigned_video_id INTEGER REFERENCES videos(id),
     google_calendar_event_id TEXT,
     created_at TEXT NOT NULL
+);
+"""
+
+# Added Milestone 2.0 (TikTok Publisher Foundation — see
+# docs/decisions/0006-tiktok-publisher-foundation.md). Deliberately its own
+# table rather than columns on `videos`: `videos` is canonical content/media
+# metadata, `content_slots` is scheduling assignment, `platform_posts` is
+# external publishing state/result — one video can eventually have zero or
+# more platform_posts rows (one per platform), so this could never be a
+# 1:1 column addition to `videos` even for a single platform today.
+# UNIQUE(video_id, platform) is the idempotency primitive: a video can have
+# at most one publishing record per platform, so a repeated manual publish
+# attempt must look that row up (get_platform_post) rather than ever being
+# able to insert a second one.
+SCHEMA_PLATFORM_POSTS = """
+CREATE TABLE IF NOT EXISTS platform_posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER NOT NULL REFERENCES videos(id),
+    platform TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    platform_post_id TEXT,
+    scheduled_at TEXT,
+    published_at TEXT,
+    failure_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(video_id, platform)
 );
 """
 
@@ -327,12 +362,30 @@ class SlotRecord:
     created_at: str
 
 
+@dataclass
+class PlatformPostRecord:
+    id: int
+    video_id: int
+    platform: str
+    status: str
+    platform_post_id: str | None
+    scheduled_at: str | None
+    published_at: str | None
+    failure_reason: str | None
+    created_at: str
+    updated_at: str
+
+
 def _row_to_video(row: sqlite3.Row) -> VideoRecord:
     return VideoRecord(**dict(row))
 
 
 def _row_to_slot(row: sqlite3.Row) -> SlotRecord:
     return SlotRecord(**dict(row))
+
+
+def _row_to_platform_post(row: sqlite3.Row) -> PlatformPostRecord:
+    return PlatformPostRecord(**dict(row))
 
 
 class ContentStore:
@@ -351,6 +404,7 @@ class ContentStore:
         if _content_slots_needs_migration(self._conn):
             _migrate_content_slots_unique_constraint(self._conn)
         self._conn.executescript(SCHEMA_CONTENT_SLOTS)
+        self._conn.executescript(SCHEMA_PLATFORM_POSTS)
 
     def close(self) -> None:
         self._conn.close()
@@ -378,6 +432,10 @@ class ContentStore:
         row = self._conn.execute(
             "SELECT * FROM videos WHERE file_hash = ?", (file_hash,)
         ).fetchone()
+        return _row_to_video(row) if row else None
+
+    def get_video(self, video_id: int) -> VideoRecord | None:
+        row = self._conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
         return _row_to_video(row) if row else None
 
     def get_video_by_path(self, original_path: str) -> VideoRecord | None:
@@ -440,6 +498,10 @@ class ContentStore:
             (scheduled_at, pillar_key, prompt, google_calendar_event_id, created_at),
         )
         return cur.rowcount > 0
+
+    def get_slot(self, slot_id: int) -> SlotRecord | None:
+        row = self._conn.execute("SELECT * FROM content_slots WHERE id = ?", (slot_id,)).fetchone()
+        return _row_to_slot(row) if row else None
 
     def find_earliest_open_slot(self, pillar_key: str, after_iso: str) -> SlotRecord | None:
         row = self._conn.execute(
@@ -512,6 +574,40 @@ class ContentStore:
                 "UPDATE videos SET assigned_slot_id = ? WHERE id = ?",
                 (slot_id, video_id),
             )
+
+    # -- platform_posts (Milestone 2.0) ----------------------------------
+
+    def get_platform_post(self, video_id: int, platform: str) -> PlatformPostRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM platform_posts WHERE video_id = ? AND platform = ?", (video_id, platform)
+        ).fetchone()
+        return _row_to_platform_post(row) if row else None
+
+    def insert_platform_post(
+        self, video_id: int, platform: str, created_at: str, scheduled_at: str | None = None
+    ) -> PlatformPostRecord:
+        """Create the one publishing record for this (video, platform) pair.
+
+        Raises sqlite3.IntegrityError (UNIQUE(video_id, platform)) if one
+        already exists — callers must check get_platform_post() first and
+        update the existing row instead; this is the idempotency guard
+        against accidentally submitting the same post twice, enforced by
+        the schema rather than only by caller discipline.
+        """
+        self._conn.execute(
+            """
+            INSERT INTO platform_posts (video_id, platform, status, scheduled_at, created_at, updated_at)
+            VALUES (?, ?, 'PENDING', ?, ?, ?)
+            """,
+            (video_id, platform, scheduled_at, created_at, created_at),
+        )
+        return self.get_platform_post(video_id, platform)
+
+    def update_platform_post(self, post_id: int, updated_at: str, **fields) -> None:
+        fields = {**fields, "updated_at": updated_at}
+        columns = ", ".join(f"{key} = ?" for key in fields)
+        values = [*fields.values(), post_id]
+        self._conn.execute(f"UPDATE platform_posts SET {columns} WHERE id = ?", values)
 
 
 class SlotUnavailableError(Exception):

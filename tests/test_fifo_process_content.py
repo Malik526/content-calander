@@ -9,6 +9,7 @@ Skipped automatically if ffmpeg/ffprobe are not on PATH.
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -88,6 +89,24 @@ def test_fifo_video_is_assigned_without_a_classifier(store, synthetic_video, rou
     assert outcome.video.classified_pillar is None
     assert not synthetic_video.exists()
     assert (processed_dir / "video_001.mp4").exists()
+
+
+def test_fifo_assignment_updates_canonical_media_path_to_processed_location(store, synthetic_video, routed_dirs):
+    """canonical_media_path is set once at inspect time to the incoming/
+    discovery path; assignment must update it to where the file actually
+    ends up (content/processed/), or any later consumer (e.g.
+    publish_tiktok.py, Milestone 2.0) resolves a path that no longer
+    exists — this was a real, previously-silent gap."""
+    processed_dir, _ = routed_dirs
+    _seed_open_slot(store)
+
+    outcome = process_content.process_one(
+        store, FakeTranscriber(), None, synthetic_video, dry_run=False, routing_mode="fifo"
+    )
+
+    expected_path = processed_dir / "video_001.mp4"
+    assert outcome.video.canonical_media_path == str(expected_path)
+    assert Path(outcome.video.canonical_media_path).exists()
 
 
 def test_fifo_transcript_is_persisted(store, synthetic_video, routed_dirs):

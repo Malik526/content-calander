@@ -291,17 +291,23 @@ def process_one(
         return Outcome(path, video, "WOULD_ASSIGN", slot=slot)
 
     store.assign_slot(video.id, slot.id)
-    store.update_video(video.id, status="ASSIGNED", processed_at=now_iso)
-    _move_file(path, PROCESSED_DIR)
+    dest = _move_file(path, PROCESSED_DIR)
+    # canonical_media_path was set once at inspect time to the incoming/
+    # discovery path; without updating it here it goes stale the instant
+    # the file moves, which is exactly the state a later consumer (e.g.
+    # publish_tiktok.py, Milestone 2.0) needs to resolve correctly — see
+    # docs/decisions/0006-tiktok-publisher-foundation.md.
+    store.update_video(video.id, status="ASSIGNED", processed_at=now_iso, canonical_media_path=str(dest))
     return Outcome(path, store.get_video_by_hash(file_hash), "ASSIGNED", slot=slot)
 
 
-def _move_file(path: Path, dest_dir: Path) -> None:
+def _move_file(path: Path, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / path.name
     if dest.exists():
         dest = dest_dir / f"{path.stem}.{uuid.uuid4().hex[:8]}{path.suffix}"
     shutil.move(str(path), str(dest))
+    return dest
 
 
 # ---------------------------------------------------------------------------

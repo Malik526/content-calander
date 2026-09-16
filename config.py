@@ -302,9 +302,70 @@ EMBEDDING_CACHE_DIR = Path(
 EMBEDDING_MIN_SIMILARITY = float(os.getenv("CONTENT_CALENDAR_EMBEDDING_MIN_SIMILARITY", "0.50"))
 EMBEDDING_MIN_MARGIN = float(os.getenv("CONTENT_CALENDAR_EMBEDDING_MIN_MARGIN", "0.03"))
 
-# --- TikTok generic compatibility targets (informational in V1; no publishing) ---
+# --- TikTok generic compatibility targets ---
 # https://developers.tiktok.com/docs/en/content-posting-api-media-transfer-guide
+# Used by media.is_tiktok_compatible() as an informational pre-flight check;
+# tiktok_publisher.py does not transcode a video that fails it.
 TIKTOK_CONTAINERS = {"mov", "mp4", "webm"}
 TIKTOK_VIDEO_CODECS = {"h264", "hevc", "vp8", "vp9"}
+
+# ---------------------------------------------------------------------------
+# TikTok publishing (Milestone 2.0)
+# Added: September 2026 — proves one local MP4 can be published to a
+# dedicated TikTok test account via the real Content Posting API v2, using
+# publish_tiktok.py as a standalone manual CLI (not wired into scheduled
+# execution). See docs/decisions/0006-tiktok-publisher-foundation.md.
+#
+# Deliberately a separate OAuth flow/credential set from Google Calendar's:
+# different provider, different token cache file, different scopes — never
+# reuses calendar_manager.py's client secrets or token path.
+# ---------------------------------------------------------------------------
+
+# TikTok API hosts. Authorization happens on the web host; token exchange,
+# refresh, and all Content Posting API calls happen on the API host.
+TIKTOK_AUTHORIZE_BASE = os.getenv("CONTENT_CALENDAR_TIKTOK_AUTHORIZE_BASE", "https://www.tiktok.com")
+TIKTOK_API_BASE = os.getenv("CONTENT_CALENDAR_TIKTOK_API_BASE", "https://open.tiktokapis.com")
+
+# From the TikTok Developer Portal app dashboard (Login Kit + Content
+# Posting API scopes enabled) — never committed; set in .env only. Empty by
+# default so a missing setup fails with a clear, actionable error rather
+# than silently trying to authenticate with blank credentials.
+TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY", "")
+TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "")
+
+# Must exactly match a redirect URI registered for this app in the
+# Developer Portal. No local server is started to catch this automatically
+# (TikTok's OAuth does not support Google's InstalledAppFlow-style loopback
+# flow in general) — see tiktok_auth.py / README.md "TikTok Publishing
+# Setup" for the manual copy-the-code-from-the-browser step this implies.
+TIKTOK_REDIRECT_URI = os.getenv("TIKTOK_REDIRECT_URI", "")
+
+# Comma-separated in .env; user.info.basic is needed to complete OAuth at
+# all, video.publish for the Content Posting API's Direct Post endpoints
+# this milestone uses.
+TIKTOK_SCOPES = [
+    scope.strip()
+    for scope in os.getenv("CONTENT_CALENDAR_TIKTOK_SCOPES", "user.info.basic,video.publish").split(",")
+    if scope.strip()
+]
+
+# Cached access/refresh token pair, written by tiktok_auth.py after the
+# one-time authorization flow. Outside the repo (like the Calendar OAuth
+# token) so there is nothing publishing-credential-shaped to accidentally
+# commit.
+TIKTOK_TOKEN_PATH = Path(
+    os.getenv(
+        "CONTENT_CALENDAR_TIKTOK_TOKEN_PATH",
+        str(Path.home() / ".config" / "content-calendar" / "tiktok_token.json"),
+    )
+).expanduser()
+
+# TikTok Direct Post privacy_level for every post this milestone creates.
+# SELF_ONLY (private, visible only to the posting account) is the deliberate
+# default and the only level exercised by publish_tiktok.py for now — see
+# ADR-0006. tiktok_publisher.TikTokPublisher queries the account's actual
+# available privacy_level_options before publishing and fails clearly
+# rather than assuming this value is offered.
+TIKTOK_DEFAULT_PRIVACY_LEVEL = os.getenv("CONTENT_CALENDAR_TIKTOK_DEFAULT_PRIVACY_LEVEL", "SELF_ONLY")
 
 # ---------------------------------------------------------------------------
