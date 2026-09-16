@@ -16,7 +16,15 @@ What it does:
   pillar the strategy later assigns it. See
   docs/decisions/0002-configurable-cadence-and-weighted-pillar-allocation.md.
   _migrate_content_slots_unique_constraint() upgrades any database created
-  under the old two-column constraint the first time it's opened.
+  under the old two-column constraint the first time it's opened. It runs
+  with PRAGMA legacy_alter_table=ON so renaming content_slots during the
+  rebuild never rewrites videos.assigned_slot_id's REFERENCES clause to the
+  temporary table name — SQLite's enhanced ALTER TABLE RENAME behavior does
+  exactly that by default, which is what corrupted a real database's schema
+  before this guard existed. _repair_videos_assigned_slot_fk() detects and
+  fixes that already-corrupted state (assigned_slot_id referencing anything
+  other than content_slots) on databases that migrated before the guard was
+  added, by rebuilding videos the same safe way.
 
 Dependencies:
   stdlib sqlite3 only.
@@ -126,33 +134,65 @@ def _migrate_content_slots_unique_constraint(conn: sqlite3.Connection) -> None:
     discarded in favor of a still-open duplicate. Existing rows already have
     non-null pillar_key values, so relaxing that constraint doesn't change
     any copied data — it only makes the column newly insertable as NULL.
+
+    IMPORTANT — PRAGMA legacy_alter_table: by default (legacy_alter_table
+    OFF, the modern SQLite behavior), `ALTER TABLE content_slots RENAME TO
+    content_slots_old` automatically rewrites any REFERENCES clause in
+    *other* tables that pointed at "content_slots" to say "content_slots_old"
+    instead — including videos.assigned_slot_id. Dropping content_slots_old
+    afterward then leaves that FK dangling, pointing at a table that no
+    longer exists (this is exactly the bug _repair_videos_assigned_slot_fk
+    fixes for a database that already migrated before this guard existed).
+    legacy_alter_table=ON suppresses that cross-table rewrite entirely, so
+    videos' FK text is left untouched (still "content_slots") by this
+    rename — verified empirically, not merely asserted from documentation.
+
+    Runs inside one transaction: either the whole rebuild lands, or none of
+    it does. PRAGMA foreign_keys can only be toggled outside a pending
+    transaction (SQLite treats it as a no-op mid-transaction), so it — and
+    legacy_alter_table — must be set before BEGIN and restored after COMMIT.
     """
     conn.execute("PRAGMA foreign_keys = OFF")
-    conn.execute("ALTER TABLE content_slots RENAME TO content_slots_old")
-    conn.executescript(SCHEMA_CONTENT_SLOTS)
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("ALTER TABLE content_slots RENAME TO content_slots_old")
+            # NOT executescript(): Connection.executescript() implicitly
+            # COMMITs any pending transaction before running, regardless of
+            # isolation_level - which would silently end our BEGIN IMMEDIATE
+            # here (SCHEMA_CONTENT_SLOTS is one statement, so plain execute()
+            # is both correct and safe inside the transaction).
+            conn.execute(SCHEMA_CONTENT_SLOTS)
 
-    rows = conn.execute("SELECT * FROM content_slots_old ORDER BY scheduled_at, id").fetchall()
-    kept: dict[str, sqlite3.Row] = {}
-    for row in rows:
-        key = row["scheduled_at"]
-        current = kept.get(key)
-        if current is None or _SLOT_STATUS_PRIORITY.get(row["status"], 0) > _SLOT_STATUS_PRIORITY.get(current["status"], 0):
-            kept[key] = row
+            rows = conn.execute("SELECT * FROM content_slots_old ORDER BY scheduled_at, id").fetchall()
+            kept: dict[str, sqlite3.Row] = {}
+            for row in rows:
+                key = row["scheduled_at"]
+                current = kept.get(key)
+                if current is None or _SLOT_STATUS_PRIORITY.get(row["status"], 0) > _SLOT_STATUS_PRIORITY.get(current["status"], 0):
+                    kept[key] = row
 
-    for row in kept.values():
-        conn.execute(
-            """
-            INSERT INTO content_slots
-                (id, scheduled_at, pillar_key, prompt, status, assigned_video_id, google_calendar_event_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                row["id"], row["scheduled_at"], row["pillar_key"], row["prompt"],
-                row["status"], row["assigned_video_id"], row["google_calendar_event_id"], row["created_at"],
-            ),
-        )
-    conn.execute("DROP TABLE content_slots_old")
-    conn.execute("PRAGMA foreign_keys = ON")
+            for row in kept.values():
+                conn.execute(
+                    """
+                    INSERT INTO content_slots
+                        (id, scheduled_at, pillar_key, prompt, status, assigned_video_id, google_calendar_event_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row["id"], row["scheduled_at"], row["pillar_key"], row["prompt"],
+                        row["status"], row["assigned_video_id"], row["google_calendar_event_id"], row["created_at"],
+                    ),
+                )
+            conn.execute("DROP TABLE content_slots_old")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute("PRAGMA foreign_keys = ON")
 
     dropped = len(rows) - len(kept)
     if dropped:
@@ -163,6 +203,83 @@ def _migrate_content_slots_unique_constraint(conn: sqlite3.Connection) -> None:
             f"status per timestamp.",
             file=sys.stderr,
         )
+
+
+def _videos_fk_needs_repair(conn: sqlite3.Connection) -> bool:
+    """True if videos.assigned_slot_id's foreign key points at anything
+    other than content_slots — e.g. the stale "content_slots_old" name left
+    behind by SQLite's automatic FK-reference rewrite during an earlier
+    RENAME TABLE-based content_slots migration, before the
+    legacy_alter_table guard above existed. Checked structurally via PRAGMA
+    foreign_key_list rather than string-matching the stored CREATE TABLE
+    SQL, so it doesn't depend on the exact stale name."""
+    for row in conn.execute("PRAGMA foreign_key_list(videos)").fetchall():
+        if row["from"] == "assigned_slot_id" and row["table"] != "content_slots":
+            return True
+    return False
+
+
+def _repair_videos_assigned_slot_fk(conn: sqlite3.Connection) -> None:
+    """Repair a videos table whose assigned_slot_id foreign key was left
+    pointing at a stale/nonexistent table name (see
+    _videos_fk_needs_repair). SQLite has no ALTER TABLE ... ALTER COLUMN /
+    DROP CONSTRAINT to fix a REFERENCES clause in place, so this rebuilds
+    videos the same way _migrate_content_slots_unique_constraint rebuilds
+    content_slots: rename, recreate under the current (correct) schema,
+    copy every row across unchanged, drop the renamed original.
+
+    legacy_alter_table=ON is required here for the same reason as that
+    other migration, just mirrored: without it, `ALTER TABLE videos RENAME
+    TO videos_old` would itself rewrite content_slots.assigned_video_id's
+    REFERENCES clause to "videos_old", trading this bug for the same bug on
+    the other table. Verified empirically that legacy_alter_table=ON
+    prevents that rewrite.
+
+    Column list is derived from the freshly (re)created table via PRAGMA
+    table_info rather than hardcoded, so it stays correct as videos gains
+    columns over time (_ensure_videos_columns) without this function
+    needing to track them separately. Runs inside one transaction; verifies
+    PRAGMA foreign_key_check is clean afterward as a hard safety check.
+    """
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("ALTER TABLE videos RENAME TO videos_old")
+            # NOT executescript() — see the matching note in
+            # _migrate_content_slots_unique_constraint: it implicitly
+            # COMMITs a pending transaction, which would silently end this
+            # BEGIN IMMEDIATE. SCHEMA_VIDEOS is one statement.
+            conn.execute(SCHEMA_VIDEOS)
+            _ensure_videos_columns(conn)
+
+            columns = [row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()]
+            column_list = ", ".join(columns)
+            conn.execute(f"INSERT INTO videos ({column_list}) SELECT {column_list} FROM videos_old")
+
+            conn.execute("DROP TABLE videos_old")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError(
+            f"content_store: videos.assigned_slot_id repair left "
+            f"{len(violations)} foreign_key_check violation(s): {[dict(v) for v in violations]!r}"
+        )
+
+    print(
+        "[content_store] repaired videos.assigned_slot_id: it referenced a stale table name "
+        "left behind by an earlier content_slots rename migration; it now correctly "
+        "references content_slots.",
+        file=sys.stderr,
+    )
 
 
 @dataclass
@@ -229,6 +346,8 @@ class ContentStore:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(SCHEMA_VIDEOS)
         _ensure_videos_columns(self._conn)
+        if _videos_fk_needs_repair(self._conn):
+            _repair_videos_assigned_slot_fk(self._conn)
         if _content_slots_needs_migration(self._conn):
             _migrate_content_slots_unique_constraint(self._conn)
         self._conn.executescript(SCHEMA_CONTENT_SLOTS)
