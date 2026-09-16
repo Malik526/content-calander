@@ -2,6 +2,20 @@
 
 ## 2026-09-16
 
+### Milestone 1.3.1 Real-Video Walkthrough — Completed and Verified Live
+
+Documentation-only update recording that the full Shofo real-video walkthrough (`evaluation/video_pipeline/README.md`) has now been completed successfully, end to end, in this environment. No code changed.
+
+- **Acquisition**: 12/12 real Shofo clips downloaded successfully (`evaluation/video_pipeline/videos/`, `metadata.jsonl`).
+- **Transcription**: real `evaluate_transcription.py` run against all 12 with the production `FasterWhisperTranscriber` — 12/12 scored, 0 errors, mean WER 7.2%, median WER 7.3% (`evaluation/video_pipeline/results.jsonl`; independently reconfirmed by recomputing directly from the file).
+- **FIFO dry-run**: 5 of the 12 clips staged into `content/incoming/`; `process_content.py --dry-run --verbose` completed successfully for all 5 after the `videos.assigned_slot_id` FK migration repair (see the fix entry below).
+- **FIFO real run**: `process_content.py --verbose` (no `--dry-run`) then completed successfully — 5 discovered, 5 assigned, 0 needs review, 0 waiting for slot, 0 failed. Each video was atomically assigned to a distinct future `content_slots` row: Sep 16, 18, 19, 21, 23 2026 (all 9:00 AM), confirmed directly in `data/content.db` (`status=ASSIGNED`, `transcription_status=COMPLETE`, `caption_source=transcript_auto`, `assigned_slot_id` correct on every video, `PRAGMA foreign_key_check` clean) and on disk (`content/incoming/` empty, all 5 originals moved to `content/processed/`).
+- Confirms the complete real-media production path: media inspection → transcription → transcript-derived caption → SQLite persistence → earliest OPEN FIFO slot → atomic assignment → move to processed.
+- **Scope preserved**: this validates the local ingestion/scheduling pipeline only. Confirming the resulting events in the dedicated "Content Automation" Google Calendar remains the user's manual step. TikTok (or any platform) publishing is still not implemented and remains the next major milestone — nothing in this walkthrough posts anywhere.
+- Updated `PROJECT_STATE.md` ("Shofo Real-Video Evaluation Corpus") to replace the prior "still not verified" wording for real faster-whisper/real FIFO assignment with this confirmed-live status, narrowing the one remaining outstanding item to the Google Calendar check.
+
+No ADR added; no architecture or code changed.
+
 ### Fix — SQLite Migration Left `videos.assigned_slot_id` Referencing a Dropped Temporary Table
 
 The first real Shofo FIFO dry-run failed in `ContentStore.insert_video()`: `sqlite3.OperationalError: no such table: main.content_slots_old`. This was a pre-existing `content_store.py` schema-migration defect, not a FIFO, transcription, or Shofo-corpus issue.
