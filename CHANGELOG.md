@@ -1,5 +1,19 @@
 # Content Calendar — Changelog
 
+## 2026-09-16
+
+### Shofo Real-Video Transcription Benchmark — Milestone 1.3.1, Verified
+
+Ran `evaluate_transcription.py` for real against all 12 real Shofo clips acquired in Milestone 1.3.1 (`evaluation/video_pipeline/`), using the actual production `FasterWhisperTranscriber` (`base` model, CPU) — no mocks, no synthetic fixtures.
+
+- **12/12 clips transcribed successfully, 0 errors.**
+- **Mean WER 7.2%** (median 7.3%, range 0.0%-13.5%) against the dataset's own WEBVTT reference transcripts — independently recomputed from `evaluation/video_pipeline/results.jsonl` directly (not taken on faith from the run's own printed summary), confirming the reported numbers.
+- **Mean `realtime_factor` 0.083** — transcription took ~8% of each clip's duration on average (roughly 12x faster than real-time on CPU), indicating local faster-whisper is practical for this workflow at the `base` model size.
+- Confirms the media/transcription leg of the Milestone 1.3.1 pipeline test (`video download → ffprobe inspection → audio extraction → faster-whisper transcription → transcript comparison`) end to end against real data, not just the mocked unit-level contract.
+- `results.jsonl` (real transcripts/scores) stays gitignored per the corpus's existing rule — not committed.
+
+Validation: real run of `evaluate_transcription.py` against the live corpus; results independently re-verified by recomputing mean/median WER and mean realtime_factor directly from `results.jsonl`'s raw rows rather than trusting the printed report. Updated `PROJECT_STATE.md` ("Shofo Real-Video Evaluation Corpus") to record this as verified live and narrow the remaining outstanding manual step to real FIFO/Google-Calendar assignment only.
+
 ## 2026-09-13
 
 ### Fix — download_shofo_samples.py Real Schema Mismatch (No `file_name` Column)
