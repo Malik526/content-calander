@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------
+   Design tokens — provisional V1 visual system (Milestone 2.0.1).
+   This block is the single place to change the site's look: colors,
+   fonts. Everything else references these via Tailwind utilities
+   (bg-background, text-ink, bg-accent, etc.) generated from @theme
+   below — never a hardcoded hex value in a component.
+   --------------------------------------------------------------------- */
+:root {
+  --color-background: #fafafa; /* page background — neutral, light */
+  --color-surface: #ffffff; /* card/section surfaces */
+  --color-ink: #101828; /* primary text */
+  --color-ink-muted: #475467; /* secondary text */
+  --color-border: #e4e7ec; /* hairline borders */
+  --color-accent: #4338ca; /* the one restrained accent color */
+  --color-accent-hover: #362da6;
+  --color-accent-soft: #eef2ff; /* accent tint for subtle backgrounds/badges */
+}
+
+@theme inline {
+  --color-background: var(--color-background);
+  --color-surface: var(--color-surface);
+  --color-ink: var(--color-ink);
+  --color-ink-muted: var(--color-ink-muted);
+  --color-border: var(--color-border);
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-soft: var(--color-accent-soft);
+  --font-sans: var(--font-geist-sans);
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-ink);
+}
+
+/* Minimal legal-document typography for /privacy and /terms — no
+   typography plugin installed, so this is the one centralized place
+   heading/paragraph/list spacing for those two pages is defined. */
+.legal-content h2 {
+  margin-top: 2.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.legal-content p {
+  margin-bottom: 1rem;
+  line-height: 1.7;
+  color: var(--color-ink-muted);
+}
+.legal-content ul {
+  margin-bottom: 1rem;
+  padding-left: 1.25rem;
+  list-style-type: disc;
+  color: var(--color-ink-muted);
+}
+.legal-content li {
+  margin-bottom: 0.5rem;
+  line-height: 1.7;
+}
+.legal-content a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

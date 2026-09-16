@@ -2,6 +2,21 @@
 
 ## 2026-09-16
 
+### Milestone 2.0.1 — Content Automation Web Presence / SaaS Frontend Foundation
+
+Added the first public-facing website, inside this repository rather than as a separate throwaway compliance site — it provides real public URLs for TikTok Developer Portal configuration now, and is meant to become the foundation of the full SaaS UI later.
+
+- Added `web/`: a Next.js 16 (App Router, TypeScript, Tailwind CSS v4) app, scaffolded and structured per this session's global Next.js convention (`components/ui`/`components/layout`/`components/sections`/`lib/`) rather than a bespoke structure. Own `package.json`/toolchain, kept logically separate from the Python backend — no shared code, no imports either direction.
+- Three real, routable pages: `/` (homepage), `/privacy`, `/terms`. Static export (`next.config.ts`: `output: "export"`, `trailingSlash: true`) — no server-rendered/dynamic routes exist yet, so no Netlify Next.js runtime plugin or serverless functions were introduced.
+- Homepage sections: Hero, How it works (Upload → process → fill schedule → publish, as specified), What it does today (batch workflow, automatic scheduling, transcript generation, caption preparation, FIFO queue), Where publishing is headed (TikTok "In development", Instagram/YouTube Shorts "Planned"), and a contact CTA. Copy describes only what exists or is genuinely in progress — no unsupported feature claims.
+- Provisional V1 design system, centralized in exactly two places: `web/app/globals.css`'s `:root`/`@theme` block (neutral light background/surface/ink/border + one restrained accent color, `#4338CA`) and `web/lib/site-config.ts` (site name/tagline/description/contact email). Every component references tokens via Tailwind utilities — no hardcoded hex values. Mobile-first responsive throughout, including a client-side mobile nav toggle.
+- Real Privacy Policy and Terms of Service, proportionate to an early-stage/testing-phase product (not enterprise-length): what data is accessed when connecting TikTok/Google, that OAuth tokens are stored securely for that purpose, video/transcript/caption processing, no data sale, third-party processing under TikTok's/Google's own policies (with links), a deletion-request contact path, and explicit "in active development" framing. **`lib/site-config.ts`'s `contactEmail` is a placeholder (`support@content-automation.app`) and must be replaced with a real, monitored address before public deployment** — both legal pages promise it as a real contact method.
+- `netlify.toml` added at the repository root (`base = "web"`, `command = "npm run build"`, `publish = "out"`, pinned `NODE_VERSION`) — scopes Netlify's build to `web/` only, since the repo root also holds the unrelated Python backend.
+- Future authenticated SaaS routes (`/app/calendar`, `/app/uploads`, `/app/settings`, `/app/integrations`) were deliberately not started, not even as placeholders — judged unnecessary for this milestone; the `app/` structure already accommodates adding them later.
+- Updated root `README.md` (new "Public Website" section), `PROJECT_STATE.md` (new "Public Website / Frontend Foundation" section + Directory Ownership entry). No ADR added — the stack/structure choices follow an existing global convention directly rather than introducing a new durable decision.
+
+Validation: `npm run build` compiles cleanly (Next.js 16.3.5, Turbopack) and `npm run lint` reports no issues; all three routes plus the default not-found page export as static HTML. The static `out/` output was served locally and checked directly: all three real routes return HTTP 200 with correct titles/content, footer navigation and the contact `mailto:` link render correctly, and a nonexistent path correctly 404s. **Not verified live**: an actual Netlify deployment — no Netlify account/site was created in this environment. The config is correct per Next.js's documented static-export guidance, but the real deployed URLs are unconfirmed. That, and replacing the placeholder contact email, remain the user's manual steps before using the resulting URLs in TikTok Developer Portal / Sandbox configuration.
+
 ### Repository Relocation — `content-calendar` → `content-automation`
 
 Repository moved and renamed:

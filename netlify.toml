@@ -1,0 +1,16 @@
+# Netlify deployment config for the Content Automation public site
+# (Milestone 2.0.1). Scoped to web/ via `base` — the repository root also
+# contains the unrelated Python backend/CLI tooling, which Netlify must
+# never try to build.
+#
+# Static export (see web/next.config.ts: output: "export") — no Netlify
+# Next.js runtime plugin needed, since there are no server-rendered/
+# dynamic routes yet. Revisit this file if that changes.
+
+[build]
+  base = "web"
+  command = "npm run build"
+  publish = "out"
+
+[build.environment]
+  NODE_VERSION = "22"

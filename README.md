@@ -302,6 +302,21 @@ Idempotent: exactly one `platform_posts` row exists per (video, platform), enfor
 
 Non-goals for this milestone (see the ADR): automatic publishing when a slot's `scheduled_at` arrives, background workers, retry/backoff, Instagram/YouTube, object storage, audited/public posting. Those come after one real TikTok publish is proven.
 
+## Public Website (Milestone 2.0.1)
+
+`web/` is a separate Next.js (App Router, TypeScript, Tailwind CSS v4) app — the beginning of the eventual SaaS frontend, not a throwaway compliance site. It's kept logically separate from this Python backend/CLI tooling (its own `package.json`/`node_modules`, no shared code), but lives in the same repository since both are the same product going forward.
+
+```bash
+cd web
+npm install
+npm run dev      # http://localhost:3000
+npm run build    # static export -> web/out/
+```
+
+Routes: `/` (homepage), `/privacy`, `/terms` — real, stable public pages needed for TikTok Developer Portal configuration. Deployed via the repo-root `netlify.toml` (`base = "web"`, static export, no server-rendered routes yet). Design tokens (colors/fonts) are centralized in `web/app/globals.css`; site text/contact details in `web/lib/site-config.ts` — see `web/README.md` for the full breakdown, including the **placeholder contact email that must be replaced before deploying publicly**.
+
+No authenticated product screens, uploads, billing, or dashboard exist yet — see `docs/decisions/` and `PROJECT_STATE.md` if a durable frontend architecture decision is recorded later.
+
 ## Calendar Ownership
 
 Normal operation targets exactly one dedicated, app-owned Google Calendar (display name **"Content Automation"**) — never your primary calendar, never an arbitrary calendar. See `docs/decisions/0004-dedicated-google-calendar-ownership.md` for the full rationale.
