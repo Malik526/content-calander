@@ -310,7 +310,7 @@ TIKTOK_CONTAINERS = {"mov", "mp4", "webm"}
 TIKTOK_VIDEO_CODECS = {"h264", "hevc", "vp8", "vp9"}
 
 # ---------------------------------------------------------------------------
-# TikTok publishing (Milestone 2.0)
+# TikTok publishing (Milestone 2.0, corrected)
 # Added: September 2026 — proves one local MP4 can be published to a
 # dedicated TikTok test account via the real Content Posting API v2, using
 # publish_tiktok.py as a standalone manual CLI (not wired into scheduled
@@ -318,7 +318,10 @@ TIKTOK_VIDEO_CODECS = {"h264", "hevc", "vp8", "vp9"}
 #
 # Deliberately a separate OAuth flow/credential set from Google Calendar's:
 # different provider, different token cache file, different scopes — never
-# reuses calendar_manager.py's client secrets or token path.
+# reuses calendar_manager.py's client secrets or token path. Desktop OAuth
+# uses PKCE + a localhost callback (TikTok's current Desktop Login Kit
+# documentation supports this, corrected from an earlier assumption that it
+# did not) — see tiktok_auth.py.
 # ---------------------------------------------------------------------------
 
 # TikTok API hosts. Authorization happens on the web host; token exchange,
@@ -333,12 +336,22 @@ TIKTOK_API_BASE = os.getenv("CONTENT_CALENDAR_TIKTOK_API_BASE", "https://open.ti
 TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY", "")
 TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "")
 
-# Must exactly match a redirect URI registered for this app in the
-# Developer Portal. No local server is started to catch this automatically
-# (TikTok's OAuth does not support Google's InstalledAppFlow-style loopback
-# flow in general) — see tiktok_auth.py / README.md "TikTok Publishing
-# Setup" for the manual copy-the-code-from-the-browser step this implies.
+# Optional. TikTok's current Desktop Login Kit documentation supports
+# localhost/127.0.0.1 redirect URIs (including a wildcard port) for desktop
+# apps, so the preferred flow (tiktok_auth.authorize_interactive) starts a
+# temporary local callback server on an OS-assigned ephemeral port and
+# never needs this set at all. Set it only if this app's Developer Portal
+# registration requires an exact fixed port/path rather than relying on
+# wildcard-port matching, or to use the manual fallback flow
+# (--print-auth-url / --exchange-code) instead of the interactive one. See
+# tiktok_auth.py / README.md "TikTok Publishing Setup".
 TIKTOK_REDIRECT_URI = os.getenv("TIKTOK_REDIRECT_URI", "")
+
+# Host/path for the temporary local OAuth callback server when
+# TIKTOK_REDIRECT_URI is unset (the ephemeral-port default). 127.0.0.1
+# rather than "localhost" to avoid any local DNS resolution ambiguity.
+TIKTOK_LOOPBACK_HOST = os.getenv("CONTENT_CALENDAR_TIKTOK_LOOPBACK_HOST", "127.0.0.1")
+TIKTOK_LOOPBACK_PATH = os.getenv("CONTENT_CALENDAR_TIKTOK_LOOPBACK_PATH", "/callback")
 
 # Comma-separated in .env; user.info.basic is needed to complete OAuth at
 # all, video.publish for the Content Posting API's Direct Post endpoints
@@ -362,10 +375,19 @@ TIKTOK_TOKEN_PATH = Path(
 
 # TikTok Direct Post privacy_level for every post this milestone creates.
 # SELF_ONLY (private, visible only to the posting account) is the deliberate
-# default and the only level exercised by publish_tiktok.py for now — see
-# ADR-0006. tiktok_publisher.TikTokPublisher queries the account's actual
-# available privacy_level_options before publishing and fails clearly
-# rather than assuming this value is offered.
+# default and the only level TikTokPublisher(unaudited=True) (the default)
+# will ever use — see ADR-0006. TikTok restricts unaudited Direct Post
+# clients (this app has not completed TikTok's app review/audit) to
+# SELF_ONLY regardless of what an account's other privacy_level_options
+# report, so TikTokPublisher requires SELF_ONLY specifically rather than
+# accepting or falling back to any other available level.
 TIKTOK_DEFAULT_PRIVACY_LEVEL = os.getenv("CONTENT_CALENDAR_TIKTOK_DEFAULT_PRIVACY_LEVEL", "SELF_ONLY")
+
+# TikTok's documented Direct Post caption limit, in UTF-16 code units (NOT
+# Python characters — a character outside the Basic Multilingual Plane,
+# e.g. many emoji, is 1 Python character but a 2-unit UTF-16 surrogate
+# pair). tiktok_publisher.py validates against this and fails clearly
+# rather than silently truncating the canonical videos.caption_text.
+TIKTOK_MAX_CAPTION_UTF16_UNITS = int(os.getenv("CONTENT_CALENDAR_TIKTOK_MAX_CAPTION_UTF16_UNITS", "2200"))
 
 # ---------------------------------------------------------------------------

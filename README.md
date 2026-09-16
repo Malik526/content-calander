@@ -272,16 +272,21 @@ Proves one already-processed video can be published to a **dedicated TikTok test
 
 ### One-time setup
 
-1. Create an app in the [TikTok Developer Portal](https://developers.tiktok.com/) with **Login Kit** and the **Content Posting API** enabled. Note its client key/secret, and register a redirect URI.
-2. Set `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REDIRECT_URI` in `.env` — never commit real values.
-3. Authorize as the dedicated test account (TikTok's OAuth has no automated loopback-server flow to rely on here, so this is a deliberate two-step manual process, not automated around):
+1. Create an app in the [TikTok Developer Portal](https://developers.tiktok.com/) with **Login Kit** and the **Content Posting API** enabled. Note its client key/secret. TikTok's current Desktop Login Kit supports `localhost`/`127.0.0.1` redirect URIs (including a wildcard port) for desktop apps — register one of those (e.g. `http://127.0.0.1/callback` with a wildcard port, if your app type allows it, or a specific `http://127.0.0.1:<port>/callback` otherwise).
+2. Set `TIKTOK_CLIENT_KEY` and `TIKTOK_CLIENT_SECRET` in `.env` — never commit real values. Leave `TIKTOK_REDIRECT_URI` unset unless your app registration requires an exact fixed port (see step 3).
+3. Authorize as the dedicated test account. TikTok's desktop OAuth requires PKCE, which this always uses regardless of flow:
+   ```bash
+   python3 tiktok_auth.py --authorize
+   ```
+   This starts a temporary local callback server, prints (and tries to open) the authorization URL — open it, log in as the dedicated TikTok test account, and approve. The redirect is caught automatically, its `state` is verified before anything is exchanged, and the resulting access/refresh token pair is cached at `~/.config/content-calendar/tiktok_token.json` (outside the repo, like the Calendar OAuth token) and refreshed automatically after that — no browser needed again until the refresh token itself expires (~365 days).
+
+   If the interactive flow can't run in your environment (no local port binding, no browser at all), a manual two-command fallback exists — set `TIKTOK_REDIRECT_URI` in `.env` to a registered URI first:
    ```bash
    python3 tiktok_auth.py --print-auth-url
    # open the printed URL, log in as the dedicated TikTok test account, approve
-   # copy the `code` query parameter from the redirect URL, then:
-   python3 tiktok_auth.py --exchange-code <code>
+   # copy the `code` AND `state` query parameters from the redirect URL, then:
+   python3 tiktok_auth.py --exchange-code <code> --state <state>
    ```
-   The resulting access/refresh token pair is cached at `~/.config/content-calendar/tiktok_token.json` (outside the repo, like the Calendar OAuth token) and refreshed automatically after that — no browser needed again until the refresh token itself expires (~365 days).
 
 ### Publishing one video
 
@@ -291,11 +296,11 @@ python3 publish_tiktok.py --video-id 3 --privacy-level SELF_ONLY
 python3 publish_tiktok.py --video-id 3 --poll-only   # re-check an in-flight submission only, never resubmits
 ```
 
-`--video-id` is a `videos.id` from `data/content.db` — a video already processed (has a `canonical_media_path` and `caption_text`). Every post created by this milestone uses `SELF_ONLY` (private) by default — see `config.TIKTOK_DEFAULT_PRIVACY_LEVEL`.
+`--video-id` is a `videos.id` from `data/content.db` — a video already processed (has a `canonical_media_path` and `caption_text`). Every post created by this milestone uses `SELF_ONLY` (private) — TikTok restricts unaudited clients (this app hasn't completed TikTok's review) to `SELF_ONLY` regardless of what else an account's capabilities report, so `publish_tiktok.py` requires it explicitly rather than falling back to any other level. It also validates the stored caption against TikTok's 2200-UTF-16-code-unit limit and the account's own reported max video duration before ever calling TikTok — both fail clearly rather than silently truncating/proceeding.
 
-Idempotent: exactly one `platform_posts` row exists per (video, platform), enforced by the schema. Once TikTok has returned a real `publish_id` for a video, this script never submits it again — it only re-checks status, even if that status comes back `FAILED`. Only a video that never got a `publish_id` at all (a true submission failure — missing file, bad credentials, network error) is safe to retry, and retrying reuses the same record rather than creating a second one.
+Idempotent: exactly one `platform_posts` row exists per (video, platform), enforced by the schema. Once TikTok has returned a real `publish_id` for a video, this script never submits it again — it only re-checks status, even if that status comes back `FAILED`. Only a video that never got a `publish_id` at all (a true submission failure — missing file, bad credentials, network error, caption/duration validation) is safe to retry, and retrying reuses the same record rather than creating a second one.
 
-Non-goals for this milestone (see the ADR): automatic publishing when a slot's `scheduled_at` arrives, background workers, retry/backoff, Instagram/YouTube, object storage. Those come after one real TikTok publish is proven.
+Non-goals for this milestone (see the ADR): automatic publishing when a slot's `scheduled_at` arrives, background workers, retry/backoff, Instagram/YouTube, object storage, audited/public posting. Those come after one real TikTok publish is proven.
 
 ## Calendar Ownership
 
