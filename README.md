@@ -1,4 +1,4 @@
-# Content Calendar Generator
+# Content Automation
 
 Generates a month of short-form video content calendar events and pushes them to Google Calendar automatically, and automates routing recorded videos into that schedule: drop `.mov`/`.mp4` files into `content/incoming/`, run `process_content.py`, and each video is transcribed, given a caption candidate, and assigned to the earliest matching future posting slot.
 

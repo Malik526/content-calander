@@ -193,7 +193,7 @@ TIMEZONE = os.getenv("CONTENT_CALENDAR_TIMEZONE", "America/New_York")
 # (non-dry-run) generation, and reuses on every run after that.
 APP_CALENDAR_SUMMARY = os.getenv("CONTENT_CALENDAR_APP_CALENDAR_SUMMARY", "Content Automation")
 APP_CALENDAR_DESCRIPTION = (
-    "Managed by content-calendar (growth_agency/internal-tools/content-calendar). "
+    "Managed by Content Automation (~/content-automation). "
     "Events here are created/cleared by the app — avoid adding unrelated events."
 )
 

@@ -1,7 +1,7 @@
 """
 download_shofo_samples.py — Pull a small, varied, reproducible sample of real
 social-video clips + reference metadata from the Shofo/shofo-talking-head-en
-Hugging Face dataset, for exercising the content-calendar pipeline against
+Hugging Face dataset, for exercising the content-automation pipeline against
 real media instead of synthetic test fixtures.
 
 What it does (and does NOT do):

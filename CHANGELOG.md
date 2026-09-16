@@ -1,6 +1,27 @@
-# Content Calendar — Changelog
+# Content Automation — Changelog
 
 ## 2026-09-16
+
+### Repository Relocation — `content-calendar` → `content-automation`
+
+Repository moved and renamed:
+
+```
+~/growth_agency/internal-tools/content-calendar  →  ~/content-automation
+Content Calendar (project name)                  →  Content Automation
+```
+
+Investigated before changing anything, per an explicit classify-first requirement: every reference to the old path/name was checked and put into one of four buckets — runtime path needing a fix, persisted state needing migration, current-facing name reference to update, or intentional historical/unrelated reference to leave alone. Nothing was blindly replaced.
+
+- **Git verified intact**: `git status` clean, `git rev-parse --show-toplevel` resolves to the new directory, `git log` history unaffected. A pre-existing `origin` remote (`github.com/Malik526/content-calander.git`) is untouched — not renamed, not pushed to.
+- **`.venv` was broken by the move and recreated, not patched.** Venvs embed an absolute path at creation time; `bin/pip`/`bin/pytest` failed outright ("bad interpreter"), and `source .venv/bin/activate` silently fell through to the system Python rather than erroring — `python3 -m pytest` had appeared to keep working through the move only because this machine's system Python coincidentally already had every dependency installed, not because anything was actually fine. Fixed with the standard remedy: delete and recreate from `requirements.txt`/`requirements-eval.txt`.
+- **`data/content.db` was the real, correctly-flagged risk.** All 5 real Shofo videos' `videos.canonical_media_path` and `videos.original_path` were still absolute paths under the old repository location. Added `migrate_relocated_paths.py`, a narrow one-time repair: rewrites only a stored value that is exactly the old root or rooted under it (never a value that merely shares a text prefix, e.g. a sibling `content-calendar-archive` directory) to the equivalent path under the current repo root (derived from the script's own location, never hardcoded); `canonical_media_path` is verified to exist at the new location before being rewritten (skipped with a clear reason otherwise, independent of the row's other column); `original_path` is remapped without that check, since it's a stable historical identity key, not a live file reference, and by the time a video is `ASSIGNED` its incoming-file has already moved to `content/processed/` by design. Idempotent; never touches the database file itself, only targeted `UPDATE`s. Applied for real: 5 rows repaired, then confirmed a rerun reports nothing left to do. Every other table/field was checked and found to hold no absolute repository paths at all (`content_slots`, `platform_posts`, `data/calendar_state.json`, and `evaluation/video_pipeline/*.jsonl` — the last already relative by original Milestone 1.3.1 design).
+- **`~/.config/content-calendar/` and `~/.cache/content-calendar/fastembed` were deliberately left unrenamed.** They live outside the repository and never depended on its location (a fixed literal path, not derived from `__file__`), so the move didn't break them; both real Calendar OAuth files were confirmed still present and readable. Renaming them would risk losing the already-completed Calendar OAuth consent for zero functional benefit. Every doc/config reference to this real, unchanged path (`config.py`, `.env.example`, `README.md`, ADRs, prior `CHANGELOG.md` entries) was left as-is — correct, not missed.
+- **Project naming updated wherever the project itself is named**: `README.md`/`PROJECT_STATE.md`/`CHANGELOG.md` titles, `.env.example`'s header, `generate_calendar.py`'s module docstring (which had also, unrelatedly, mis-attributed itself to "MoreClientsCo" — corrected while already touching that line) and its printed schedule-summary headers, `config.APP_CALENDAR_DESCRIPTION` (cosmetic only — doesn't retroactively rewrite the already-existing live Google Calendar's description), and one prose reference in `download_shofo_samples.py`. ADR historical narrative under `docs/decisions/` describing the tool by its name **at the time each decision was made** was deliberately left unchanged. Module/table names containing "calendar" (`generate_calendar.py`, `calendar_manager.py`, `content_slots`, Google Calendar itself) were not renamed.
+- Added `tests/test_migrate_relocated_paths.py`: the pure path-matching logic (in/out of scope, exact-root, already-migrated no-op, similarly-prefixed-sibling rejection) and the full repair against a real `ContentStore` (both columns, all other fields/relationships preserved, missing-target-file skip, untouched-if-never-under-old-root, idempotency, `--dry-run`, multiple independent rows).
+- No ADR added — a relocation/repair, not a new durable architectural decision.
+
+Validation: `python3 -m pytest` (425 passed, up from 409). Verified live: real dry-runs of `generate_calendar.py --dry-run` and `process_content.py --dry-run` from the new location print the corrected header text; `data/content.db` inspected directly post-repair — all 5 videos' `canonical_media_path` resolve to real files under the new `content/processed/`, all 5 `content_slots` `ASSIGNED` rows (with real Google Calendar event IDs) and the 1 `platform_posts` row remain correctly linked, `PRAGMA foreign_key_check` clean, and a rerun of the migration script confirmed idempotency. Google Calendar OAuth and TikTok token paths resolve correctly with no secret content printed. No new TikTok post was made as part of this task.
 
 ### Milestone 2.0 Correction Pass — TikTok Desktop OAuth (PKCE) + Publishing Boundary Validation
 

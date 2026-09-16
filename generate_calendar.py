@@ -1,5 +1,5 @@
 """
-generate_calendar.py — Content calendar generator for MoreClientsCo.
+generate_calendar.py — Content Automation posting-schedule generator.
 
 What it does:
   Generates a month of content calendar events from a configurable posting
@@ -316,7 +316,7 @@ def print_summary(
     is_fifo = total == 0 or all(post.content_type is None for post in schedule)
 
     if is_fifo:
-        print(f"\n{month_name} {year} Content Calendar — FIFO")
+        print(f"\n{month_name} {year} Content Automation — FIFO")
         print("=" * 49)
         print(f"  {'Total:':<28} {total:2d} posts")
         print()
@@ -333,7 +333,7 @@ def print_summary(
 
     allocation_label = "/".join(str(get_content_weight_percent(ct)) for ct in CONTENT_TYPES)
 
-    print(f"\n{month_name} {year} Content Calendar — {allocation_label} Allocation")
+    print(f"\n{month_name} {year} Content Automation — {allocation_label} Allocation")
     print("=" * 49)
     for ct in CONTENT_TYPES:
         count = counts.get(ct, 0)
