@@ -315,6 +315,51 @@ def test_rerunning_after_true_submission_failure_is_allowed_to_retry(store, proc
     assert record.platform_post_id == "pub_1"
 
 
+# ---------------------------------------------------------------------------
+# ownership reconciliation (Milestone 2.1.4) — publish_video() now claims
+# through the same atomic primitive a worker would use
+# ---------------------------------------------------------------------------
+
+def test_publish_video_uses_claim_platform_post_not_a_plain_update(store, processed_video, monkeypatch):
+    """publish_video() must go through ContentStore.claim_platform_post()
+    for its PENDING -> PUBLISHING transition, not write status="PUBLISHING"
+    directly — that's the whole point of the 2.1.3/2.1.4 reconciliation."""
+    calls = []
+    original_claim = store.claim_platform_post
+
+    def spy_claim(post_id, updated_at):
+        calls.append(post_id)
+        return original_claim(post_id, updated_at)
+
+    monkeypatch.setattr(store, "claim_platform_post", spy_claim)
+
+    pt.publish_video(store, processed_video.id, FakePublisher())
+
+    assert len(calls) == 1
+    record = store.get_platform_post(processed_video.id, "tiktok")
+    assert calls[0] == record.id
+
+
+def test_publish_video_refuses_to_double_submit_an_already_claimed_row(store, processed_video):
+    """Simulates a competing claimant (e.g. worker.py) having already
+    claimed this video's row between publish_video() reading it and
+    attempting its own claim: seed a PENDING row and claim it directly via
+    ContentStore.claim_platform_post() first, exactly as another process
+    would have. publish_video() must then refuse to submit a second time
+    rather than silently double-publishing."""
+    store.insert_platform_post(processed_video.id, "tiktok", created_at="2026-01-01T00:00:00")
+    record = store.get_platform_post(processed_video.id, "tiktok")
+    already_claimed = store.claim_platform_post(record.id, updated_at="2026-01-01T00:00:01")
+    assert already_claimed is True  # sanity: the simulated competing claim itself succeeded
+
+    publisher = FakePublisher()
+    with pytest.raises(pt.PublishTikTokError, match="could not be claimed"):
+        pt.publish_video(store, processed_video.id, publisher)
+
+    assert len(publisher.publish_calls) == 0  # never submitted a second time
+    assert store.get_platform_post(processed_video.id, "tiktok").status == "PUBLISHING"  # untouched
+
+
 def test_only_one_platform_post_row_ever_exists_across_multiple_runs(store, processed_video):
     publisher = FakePublisher(status_result=PublishStatusResult(status="PROCESSING_DOWNLOAD"))
     pt.publish_video(store, processed_video.id, publisher)

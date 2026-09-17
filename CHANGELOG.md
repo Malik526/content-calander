@@ -2,6 +2,12 @@
 
 ## 2026-09-17
 
+### Milestone 2.1.4 — Worker Execution
+
+Added `worker.run_due_posts_once(store, publisher, platform="tiktok", now=None)` — a one-pass worker connecting `due_post_selector` (2.1.1/2.1.2), `ContentStore.claim_platform_post()` (2.1.3), and the real TikTok publish flow (2.0). Extracted `publish_tiktok.execute_claimed_platform_post()` so both the manual CLI and the worker share exactly one publishing implementation. Reconciled `publish_tiktok.py`'s `publish_video()` to claim through `claim_platform_post()` instead of a plain unconditional status write — `claim_platform_post()` is now the single supported `PENDING -> PUBLISHING` mechanism repository-wide, closing the overlap 2.1.3 found and deferred. Proven with a real two-thread, two-connection test running the full discover→claim→execute pipeline (not just the raw claim primitive): exactly one publish, every time, across 10 isolated reruns. A local validation ran the actual worker entry point end to end (discovered=1, claimed=1, published=1) with no human invoking the publish flow. Full details in `docs/evaluations/scheduling/milestone-2.1.4-worker-execution.md`; the 2.1.3 record was updated with a dated completion note.
+
+Milestone 2.1.4: **COMPLETE**.
+
 ### Milestone 2.1.3 — Atomic Platform-Post Claiming
 
 Added `ContentStore.claim_platform_post(post_id, updated_at)` — a single atomic `UPDATE ... WHERE id = ? AND status = 'PENDING'` conditional mutation that transitions a row `PENDING -> PUBLISHING`, with success read from `rowcount` rather than a separate `SELECT`-then-`UPDATE` (which would allow two concurrent claimants to both observe `PENDING`). Proven with a real two-thread, two-connection concurrency test (`threading.Barrier`-synchronized), re-run 10 times in isolation with no flakiness: exactly one winner every time. `due_post_selector.get_due_posts()` unchanged — still read-only. Found and documented (not fixed) a real pre-existing overlap: `publish_tiktok.py` already performs its own non-atomic `PENDING -> PUBLISHING` transition; reconciling the two into one ownership mechanism is deferred to a future worker-execution milestone. Full contract, atomicity reasoning, and the publisher-compatibility finding recorded in `docs/evaluations/scheduling/milestone-2.1.3-atomic-platform-post-claiming.md`.

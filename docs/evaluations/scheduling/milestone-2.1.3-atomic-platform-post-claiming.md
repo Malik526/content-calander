@@ -2,6 +2,8 @@
 
 Validation evidence, not an architecture decision — no ADR was warranted (see Conclusion). Recorded 2026-09-17.
 
+**Update (Milestone 2.1.4, same day)**: the "Publisher Compatibility Finding" below deferred reconciling `publish_tiktok.py`'s own non-atomic `PENDING -> PUBLISHING` transition to a future milestone. That reconciliation is done — `publish_tiktok.py`'s `publish_video()` now claims through `claim_platform_post()` exactly like `worker.py` does. `claim_platform_post()` is now the single supported `PENDING -> PUBLISHING` ownership mechanism repository-wide. See `docs/evaluations/scheduling/milestone-2.1.4-worker-execution.md`.
+
 ## Purpose
 
 Prove one invariant: for a given `platform_posts` row, at most one concurrent claimant may successfully transition it from `PENDING` to `PUBLISHING`. Claiming only — no worker loop, cron, actual TikTok publishing, retries, stale-job recovery, token refresh, or new infrastructure.

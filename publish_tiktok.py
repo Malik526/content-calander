@@ -1,6 +1,8 @@
 """
 publish_tiktok.py — Standalone manual CLI: publish one already-processed
-video to TikTok.
+video to TikTok. Also the shared TikTok execution path used by worker.py's
+one-pass worker (Milestone 2.1.4) — both drive execute_claimed_platform_post()
+so there is exactly one real implementation of the publish flow.
 
 What it does:
   python3 publish_tiktok.py --video-id <id>
@@ -11,10 +13,22 @@ What it does:
   privately -> obtain publish ID -> poll/check publish status -> persist
   outcome in platform_posts.
 
-  Deliberately NOT wired into process_content.py or any scheduled/automatic
-  execution — this milestone (2.0) only proves the publish path exists and
-  works for one manually-chosen video at a time. See
-  docs/decisions/0006-tiktok-publisher-foundation.md.
+  Not wired into process_content.py — that only assigns a slot and
+  materializes a PENDING platform_posts row (platform_post_materializer.py,
+  Milestone 2.1.2). Actual publishing happens here, invoked either
+  manually (this CLI) or by worker.py's one-pass worker.
+
+Ownership (Milestone 2.1.4 — reconciled; previously a plain unconditional
+write, see docs/evaluations/scheduling/milestone-2.1.3-atomic-platform-post-claiming.md
+"Publisher Compatibility Finding"):
+  The one real PENDING -> PUBLISHING mechanism is
+  content_store.ContentStore.claim_platform_post() — an atomic conditional
+  UPDATE. publish_video() (this CLI) now claims through it exactly like
+  worker.py does, instead of writing status="PUBLISHING" directly. A
+  FAILED row that never obtained a platform_post_id (a true submission
+  failure — see Idempotency below) is requeued to PENDING first so it can
+  be claimed again through the same mechanism, preserving the existing
+  manual-retry behavior without a second ownership path.
 
 Idempotency:
   Exactly one platform_posts row exists per (video, platform) — enforced by
@@ -23,11 +37,12 @@ Idempotency:
   submits it again: it only re-polls that existing submission's status,
   whether the fetch of it errors, is still processing, or is already
   terminal. Only a video that has NEVER obtained a publish_id (no
-  platform_posts row, or one still PENDING with platform_post_id=NULL — a
-  true submission failure: local file missing, auth error, network error,
-  or an upload rejected before TikTok ever returned an id) is eligible to
-  (re)submit — this distinguishes "submission never succeeded" from
-  "submission succeeded but post-processing/status came back FAILED",
+  platform_posts row, or one still PENDING/requeued-from-FAILED with
+  platform_post_id=NULL — a true submission failure: local file missing,
+  auth error, network error, or an upload rejected before TikTok ever
+  returned an id) is eligible to (re)submit, and only via a successful
+  claim_platform_post() — this distinguishes "submission never succeeded"
+  from "submission succeeded but post-processing/status came back FAILED",
   which is left as a terminal FAILED record rather than silently retried.
 
 Run:
@@ -105,6 +120,53 @@ def _poll_and_update(store: ContentStore, record, publisher: Publisher) -> None:
         print("Not yet final — rerun with --poll-only to check again.")
 
 
+def execute_claimed_platform_post(store: ContentStore, video_id: int, platform: str, publisher: Publisher) -> None:
+    """Execute the proven TikTok publish flow for a platform_posts row that
+    has ALREADY been claimed (status == PUBLISHING) via
+    ContentStore.claim_platform_post(). Does not claim, and does not
+    require or re-check PENDING — ownership must already be established by
+    the caller before this is invoked.
+
+    Shared by publish_video() (this file's manual CLI, after it claims)
+    and worker.py's one-pass worker (Milestone 2.1.4), so both drive
+    exactly the same publish path instead of duplicating TikTok publishing
+    logic. See module docstring for the ownership reconciliation.
+
+    Validates the video is actually publishable before calling the
+    publisher (belt-and-suspenders: publish_video() already validates
+    before ever inserting/claiming a row for a brand-new video, but
+    worker.py claims a pre-existing row with no equivalent earlier
+    checkpoint, so this is the one place that check is guaranteed to run
+    for every caller).
+    """
+    video = store.get_video(video_id)
+    if video is None:
+        raise PublishTikTokError(f"No video with id={video_id}.")
+    record = store.get_platform_post(video_id, platform)
+    if record is None:
+        raise PublishTikTokError(f"No platform_posts row for video={video_id} platform={platform!r}.")
+
+    _validate_ready_to_publish(video)
+
+    try:
+        result = publisher.publish(Path(video.canonical_media_path), video.caption_text)
+    except PublishError as exc:
+        store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc))
+        raise PublishTikTokError(f"Submission failed: {exc}") from exc
+
+    # Persist the publish_id immediately, separately from the eventual
+    # status outcome — this is what makes a crash between submission and
+    # polling safe: the next run sees platform_post_id set and only polls,
+    # never resubmits.
+    store.update_platform_post(
+        record.id, updated_at=_now_iso(), status="PUBLISHING", platform_post_id=result.platform_post_id
+    )
+    print(f"Submitted to TikTok: publish_id={result.platform_post_id}")
+
+    record = store.get_platform_post(video_id, platform)
+    _poll_and_update(store, record, publisher)
+
+
 def publish_video(store: ContentStore, video_id: int, publisher: Publisher, *, poll_only: bool = False) -> None:
     video = store.get_video(video_id)
     if video is None:
@@ -125,32 +187,33 @@ def publish_video(store: ContentStore, video_id: int, publisher: Publisher, *, p
     if poll_only:
         raise PublishTikTokError(f"No in-flight TikTok submission for video {video_id} to poll.")
 
-    _validate_ready_to_publish(video)
-
-    now = _now_iso()
     if record is None:
+        # Brand-new video: validate before ever creating a row, so a
+        # precondition failure (missing file/caption) leaves nothing to
+        # clean up — matches Milestone 2.0's original guarantee.
+        _validate_ready_to_publish(video)
         record = store.insert_platform_post(
-            video_id, "tiktok", created_at=now, scheduled_at=_slot_scheduled_at(store, video)
+            video_id, "tiktok", created_at=_now_iso(), scheduled_at=_slot_scheduled_at(store, video)
+        )
+    elif record.status == "FAILED":
+        # A true submission failure (no platform_post_id was ever obtained
+        # — a row WITH one already returned above) is a legitimate manual
+        # retry, not a duplicate. Requeue to PENDING so
+        # claim_platform_post() — the one real PENDING->PUBLISHING
+        # ownership mechanism — can claim it like any other due work,
+        # instead of writing PUBLISHING directly.
+        store.update_platform_post(record.id, updated_at=_now_iso(), status="PENDING")
+
+    claimed = store.claim_platform_post(record.id, updated_at=_now_iso())
+    if not claimed:
+        current = store.get_platform_post(video_id, "tiktok")
+        raise PublishTikTokError(
+            f"Video {video_id}'s TikTok post could not be claimed for submission "
+            f"(current status: {current.status if current else 'unknown'} — "
+            "likely already claimed by another process)."
         )
 
-    store.update_platform_post(record.id, updated_at=_now_iso(), status="PUBLISHING")
-    try:
-        result = publisher.publish(Path(video.canonical_media_path), video.caption_text)
-    except PublishError as exc:
-        store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc))
-        raise PublishTikTokError(f"Submission failed: {exc}") from exc
-
-    # Persist the publish_id immediately, separately from the eventual
-    # status outcome — this is what makes a crash between submission and
-    # polling safe: the next run sees platform_post_id set and only polls,
-    # never resubmits.
-    store.update_platform_post(
-        record.id, updated_at=_now_iso(), status="PUBLISHING", platform_post_id=result.platform_post_id
-    )
-    print(f"Submitted to TikTok: publish_id={result.platform_post_id}")
-
-    record = store.get_platform_post(video_id, "tiktok")
-    _poll_and_update(store, record, publisher)
+    execute_claimed_platform_post(store, video_id, "tiktok", publisher)
 
 
 # ---------------------------------------------------------------------------
