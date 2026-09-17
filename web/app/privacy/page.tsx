@@ -25,9 +25,9 @@ export default function PrivacyPage() {
             above.
           </p>
 
-          <h2>What Content Automation is</h2>
+          <h2>What {siteConfig.name} is</h2>
           <p>
-            Content Automation is a tool that helps creators organize finished videos into a
+            {siteConfig.name} is a tool that helps creators organize finished videos into a
             posting schedule and automate parts of publishing that schedule to third-party
             platforms such as TikTok. This policy covers the information involved in providing
             that functionality.
@@ -35,7 +35,7 @@ export default function PrivacyPage() {
 
           <h2>Information we access when you connect a third-party service</h2>
           <p>
-            To publish on your behalf or manage a schedule for you, Content Automation may need to
+            To publish on your behalf or manage a schedule for you, {siteConfig.name} may need to
             connect to third-party services such as TikTok or Google Calendar. When you connect an
             account, we may access basic account information (such as an account identifier) and
             request permission scopes needed for the specific feature — for example, permission to
@@ -95,7 +95,7 @@ export default function PrivacyPage() {
 
           <h2>Changes to this policy</h2>
           <p>
-            As Content Automation moves from testing toward a broader release, this policy will be
+            As {siteConfig.name} moves from testing toward a broader release, this policy will be
             revised to reflect new functionality (such as additional publishing platforms or
             account features). We&rsquo;ll update the date at the top of this page when that
             happens.

@@ -1,4 +1,5 @@
 import { Container } from "@/components/ui/Container";
+import { siteConfig } from "@/lib/site-config";
 
 const steps = [
   {
@@ -8,7 +9,7 @@ const steps = [
   },
   {
     step: "2",
-    title: "Content Automation processes them",
+    title: `${siteConfig.name} processes them`,
     description:
       "Each video is inspected, transcribed, and given a caption candidate automatically.",
   },

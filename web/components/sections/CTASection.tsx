@@ -8,7 +8,7 @@ export function CTASection() {
       <Container>
         <div className="mx-auto max-w-2xl rounded-2xl border border-border bg-background px-8 py-12 text-center">
           <h2 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
-            Content Automation is in active development.
+            {siteConfig.name} is in active development.
           </h2>
           <p className="mt-4 text-ink-muted">
             If you post short-form video regularly and want to try it early, reach out and we&rsquo;ll

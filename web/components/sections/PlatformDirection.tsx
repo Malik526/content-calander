@@ -1,4 +1,5 @@
 import { Container } from "@/components/ui/Container";
+import { siteConfig } from "@/lib/site-config";
 
 const platforms = [
   { name: "TikTok", status: "In development", note: "Direct Post integration is being built and tested now." },
@@ -13,7 +14,7 @@ export function PlatformDirection() {
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-semibold tracking-tight text-ink">Where publishing is headed</h2>
           <p className="mt-4 text-ink-muted">
-            Content Automation is being built platform by platform, starting with TikTok.
+            {siteConfig.name} is being built platform by platform, starting with TikTok.
           </p>
         </div>
 
