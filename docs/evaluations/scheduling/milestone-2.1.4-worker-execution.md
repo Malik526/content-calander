@@ -2,6 +2,8 @@
 
 Validation evidence, not an architecture decision — no ADR was warranted (see Conclusion). Recorded 2026-09-17.
 
+**Update (Milestone 2.1.5, same day)**: the "Success / Failure Semantics" section below notes that a crash after a successful claim but before completion leaves a row stuck `PUBLISHING`, "expected and explicitly deferred to a future crash-recovery milestone." That milestone is done — see `docs/evaluations/scheduling/milestone-2.1.5-crash-recovery.md`. Such a row is no longer stuck forever: once stale (`config.PLATFORM_POST_STALE_MINUTES`), `crash_recovery.py` either requeues it to `PENDING` (if no `platform_post_id` was ever obtained) or resumes polling it (if one was), never resubmitting the media.
+
 ## Purpose
 
 Prove that Pickle Batch can find a due job, take ownership of it safely, and execute the real publishing logic — without a human manually invoking the publish flow. Connects three pieces already proven in isolation (due detection, atomic claiming, the real TikTok publish flow) into one one-pass worker, and reconciles the ownership overlap Milestone 2.1.3 found and explicitly deferred.

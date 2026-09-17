@@ -409,3 +409,18 @@ TARGET_PUBLISHING_PLATFORMS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Crash recovery (Milestone 2.1.5)
+# How long a platform_posts row may sit in PUBLISHING with no activity
+# before crash_recovery.py treats it as abandoned rather than owned by a
+# still-running worker. platform_posts.updated_at (always written as an
+# aware UTC isoformat string — see publish_tiktok._now_iso/worker._now_iso,
+# NOT the naive-local-time convention scheduled_at uses) is the "last known
+# activity" signal; no separate lease/heartbeat column was added for this
+# milestone. Default is comfortably longer than the longest legitimate
+# single execution attempt (tiktok_publisher.py's upload timeout alone is
+# 300s) so an actively-running worker is never mistaken for a crashed one.
+# See docs/evaluations/scheduling/milestone-2.1.5-crash-recovery.md.
+# ---------------------------------------------------------------------------
+PLATFORM_POST_STALE_MINUTES = int(os.getenv("CONTENT_CALENDAR_PLATFORM_POST_STALE_MINUTES", "30"))
+
+# ---------------------------------------------------------------------------

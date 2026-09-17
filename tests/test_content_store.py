@@ -794,6 +794,84 @@ def test_concurrent_claims_produce_exactly_one_winner(tmp_path):
     assert final.status == "PUBLISHING"
 
 
+# ---------------------------------------------------------------------------
+# get_recoverable_platform_posts / update_platform_post_if_unchanged
+# (Milestone 2.1.5 — Crash Recovery)
+# ---------------------------------------------------------------------------
+
+def test_recent_publishing_row_is_not_recoverable(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+    store.claim_platform_post(record.id, updated_at="2026-02-01T00:29:00")
+
+    recoverable = store.get_recoverable_platform_posts("tiktok", stale_before_iso="2026-02-01T00:00:00")
+
+    assert recoverable == []
+
+
+def test_stale_publishing_row_is_selected(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+    store.claim_platform_post(record.id, updated_at="2026-02-01T00:00:00")
+
+    recoverable = store.get_recoverable_platform_posts("tiktok", stale_before_iso="2026-02-01T00:30:00")
+
+    assert [r.id for r in recoverable] == [record.id]
+
+
+@pytest.mark.parametrize("status", ["PENDING", "PUBLISHED", "FAILED"])
+def test_non_publishing_statuses_are_never_recoverable(store, status):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+    store.update_platform_post(record.id, updated_at="2026-02-01T00:00:00", status=status)
+
+    recoverable = store.get_recoverable_platform_posts("tiktok", stale_before_iso="2026-02-01T00:30:00")
+
+    assert recoverable == []
+
+
+def test_recoverable_posts_ordered_oldest_updated_first(store):
+    v1 = store.insert_video("h1", "v1.mp4", "/incoming/v1.mp4", "2026-01-01T00:00:00")
+    v2 = store.insert_video("h2", "v2.mp4", "/incoming/v2.mp4", "2026-01-01T00:00:00")
+    r1 = store.insert_platform_post(v1.id, "tiktok", created_at="2026-02-01T00:00:00")
+    r2 = store.insert_platform_post(v2.id, "tiktok", created_at="2026-02-01T00:00:00")
+    store.claim_platform_post(r1.id, updated_at="2026-02-01T00:05:00")
+    store.claim_platform_post(r2.id, updated_at="2026-02-01T00:01:00")  # older -> should come first
+
+    recoverable = store.get_recoverable_platform_posts("tiktok", stale_before_iso="2026-02-01T00:30:00")
+
+    assert [r.id for r in recoverable] == [r2.id, r1.id]
+
+
+def test_update_platform_post_if_unchanged_succeeds_when_updated_at_matches(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+
+    applied = store.update_platform_post_if_unchanged(
+        record.id, expected_updated_at="2026-02-01T00:00:00", updated_at="2026-02-01T00:01:00", status="PENDING"
+    )
+
+    assert applied is True
+    assert store.get_platform_post(video.id, "tiktok").updated_at == "2026-02-01T00:01:00"
+
+
+def test_update_platform_post_if_unchanged_fails_when_row_already_changed(store):
+    """Simulates the exact race recovery must be safe against: the row was
+    touched (e.g. by an active worker resuming) between when the caller
+    read it and when it tries to write — the write must be refused."""
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+    store.update_platform_post(record.id, updated_at="2026-02-01T00:05:00", status="PUBLISHING")  # "someone else" touched it
+
+    applied = store.update_platform_post_if_unchanged(
+        record.id, expected_updated_at="2026-02-01T00:00:00", updated_at="2026-02-01T00:06:00", status="PENDING"
+    )
+
+    assert applied is False
+    assert store.get_platform_post(video.id, "tiktok").status == "PUBLISHING"  # untouched by the refused write
+    assert store.get_platform_post(video.id, "tiktok").updated_at == "2026-02-01T00:05:00"
+
+
 def test_get_video_by_id(store):
     video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
     assert store.get_video(video.id).file_hash == "h1"

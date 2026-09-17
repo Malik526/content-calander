@@ -694,6 +694,53 @@ class ContentStore:
         ).fetchall()
         return [_row_to_platform_post(row) for row in rows]
 
+    def get_recoverable_platform_posts(self, platform: str, stale_before_iso: str) -> list[PlatformPostRecord]:
+        """platform_posts rows for `platform` that are PUBLISHING and have
+        not been touched since before stale_before_iso — candidates for
+        crash_recovery.py, not ordinary due work (get_due_platform_posts
+        stays PENDING-only). Ordered oldest-updated first, ties broken by
+        id, for deterministic output. Pure read — never mutates a row.
+
+        Milestone 2.1.5 (crash recovery): stale_before_iso must be an aware
+        UTC isoformat string, matching how updated_at is always written
+        (see publish_tiktok._now_iso/worker._now_iso) — this is a
+        deliberately different time convention from
+        get_due_platform_posts' now_iso, which is naive local time
+        matching scheduled_at. Mixing the two would silently miscompare.
+        """
+        rows = self._conn.execute(
+            "SELECT * FROM platform_posts WHERE platform = ? AND status = 'PUBLISHING' AND updated_at < ? "
+            "ORDER BY updated_at ASC, id ASC",
+            (platform, stale_before_iso),
+        ).fetchall()
+        return [_row_to_platform_post(row) for row in rows]
+
+    def update_platform_post_if_unchanged(
+        self, post_id: int, expected_updated_at: str, updated_at: str, **fields
+    ) -> bool:
+        """Optimistic-concurrency update: apply fields (plus updated_at)
+        only if the row's updated_at still equals expected_updated_at —
+        i.e. only if nothing has touched it since the caller last read it.
+        Returns True if this call performed the update, False if the row
+        had already changed (or didn't exist) — never raises merely
+        because it lost a race.
+
+        Milestone 2.1.5 (crash recovery): every write in this codebase
+        that mutates a platform_posts row also bumps updated_at (claim,
+        submission, poll outcomes, materialization is insert-only) — so
+        updated_at already serves as a de facto version/CAS token with no
+        new column needed. Used by crash_recovery.py so it can act only on
+        a row that is still the exact stale record it inspected, never on
+        one an active worker resumed and already moved on.
+        """
+        fields = {**fields, "updated_at": updated_at}
+        columns = ", ".join(f"{key} = ?" for key in fields)
+        values = [*fields.values(), post_id, expected_updated_at]
+        cur = self._conn.execute(
+            f"UPDATE platform_posts SET {columns} WHERE id = ? AND updated_at = ?", values
+        )
+        return cur.rowcount > 0
+
 
 class SlotUnavailableError(Exception):
     """Raised when a slot is claimed between selection and assignment."""
