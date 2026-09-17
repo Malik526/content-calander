@@ -56,12 +56,15 @@ Dependencies:
 
 import argparse
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import media
-from content_store import ContentStore, VideoRecord
+import retry_classification
+from config import MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_MINUTES
+from content_store import ContentStore, PlatformPostRecord, VideoRecord
 from publisher import PublishError, Publisher
+from slot_matcher import now_in_config_timezone
 from tiktok_publisher import TikTokPublisher
 
 
@@ -96,6 +99,39 @@ def _validate_ready_to_publish(video: VideoRecord) -> None:
     compatible, reason = media.is_tiktok_compatible(info)
     if not compatible:
         raise PublishTikTokError(f"Video {video.id} is not TikTok-compatible: {reason}")
+
+
+def _schedule_retry_or_fail(store: ContentStore, record: PlatformPostRecord, error: PublishError) -> None:
+    """A PublishError occurred before a platform_post_id was ever obtained
+    for `record` (the platform_post_id rule stays absolute — see module
+    docstring — this is only ever called pre-submission). Classify it
+    (retry_classification.py) against the existing retry budget:
+
+    - retryable AND retry_count < config.MAX_RETRY_ATTEMPTS: back to
+      PENDING, retry_count incremented, next_retry_at set
+      config.RETRY_BACKOFF_MINUTES[retry_count] minutes out (naive local
+      time — the same convention scheduled_at uses, so
+      due_post_selector's single `now` compares against both). Not
+      claimed again here — the normal claim_platform_post() path picks it
+      up once next_retry_at arrives, exactly like any other due work.
+    - otherwise (terminal, or retries exhausted): FAILED. Retry
+      exhaustion preserves this final failure_reason so a future UI can
+      explain why the post stopped retrying.
+
+    Either way failure_reason is set to str(error) — never silently
+    dropped, whether this is attempt 1 or the final one.
+    """
+    if retry_classification.classify(error) and record.retry_count < MAX_RETRY_ATTEMPTS:
+        delay_minutes = RETRY_BACKOFF_MINUTES[record.retry_count]
+        next_retry_at = (now_in_config_timezone() + timedelta(minutes=delay_minutes)).isoformat()
+        store.update_platform_post(
+            record.id, updated_at=_now_iso(), status="PENDING",
+            retry_count=record.retry_count + 1, next_retry_at=next_retry_at,
+            failure_reason=str(error),
+        )
+        print(f"Retryable failure ({error.reason_code}) — retry {record.retry_count + 1}/{MAX_RETRY_ATTEMPTS} at {next_retry_at}.")
+    else:
+        store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(error))
 
 
 def _poll_and_update(store: ContentStore, record, publisher: Publisher) -> None:
@@ -138,6 +174,18 @@ def execute_claimed_platform_post(store: ContentStore, video_id: int, platform: 
     worker.py claims a pre-existing row with no equivalent earlier
     checkpoint, so this is the one place that check is guaranteed to run
     for every caller).
+
+    Milestone 2.1.6 fix: a precondition failure here (missing file,
+    missing caption, incompatible container/codec) used to propagate
+    uncaught, leaving an already-claimed row stuck PUBLISHING forever with
+    no failure_reason — crash_recovery.py would eventually requeue it
+    (platform_post_id is still NULL), it would get re-claimed, fail the
+    same validation again, and repeat indefinitely for a video whose
+    problem never resolves on its own. Local validation failures are
+    unconditionally terminal (see retry_classification.py's module
+    docstring for why they're not routed through classification at all) —
+    now caught here and marked FAILED immediately, same as any other
+    terminal publishing failure.
     """
     video = store.get_video(video_id)
     if video is None:
@@ -146,12 +194,16 @@ def execute_claimed_platform_post(store: ContentStore, video_id: int, platform: 
     if record is None:
         raise PublishTikTokError(f"No platform_posts row for video={video_id} platform={platform!r}.")
 
-    _validate_ready_to_publish(video)
+    try:
+        _validate_ready_to_publish(video)
+    except PublishTikTokError as exc:
+        store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc))
+        raise
 
     try:
         result = publisher.publish(Path(video.canonical_media_path), video.caption_text)
     except PublishError as exc:
-        store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc))
+        _schedule_retry_or_fail(store, record, exc)
         raise PublishTikTokError(f"Submission failed: {exc}") from exc
 
     # Persist the publish_id immediately, separately from the eventual
@@ -201,8 +253,14 @@ def publish_video(store: ContentStore, video_id: int, publisher: Publisher, *, p
         # retry, not a duplicate. Requeue to PENDING so
         # claim_platform_post() — the one real PENDING->PUBLISHING
         # ownership mechanism — can claim it like any other due work,
-        # instead of writing PUBLISHING directly.
-        store.update_platform_post(record.id, updated_at=_now_iso(), status="PENDING")
+        # instead of writing PUBLISHING directly. A human explicitly
+        # rerunning this CLI is a fresh attempt, independent of the
+        # automatic retry/backoff budget (Milestone 2.1.6) — reset it
+        # rather than inheriting whatever retry_count the automatic path
+        # had already accumulated.
+        store.update_platform_post(
+            record.id, updated_at=_now_iso(), status="PENDING", retry_count=0, next_retry_at=None
+        )
 
     claimed = store.claim_platform_post(record.id, updated_at=_now_iso())
     if not claimed:

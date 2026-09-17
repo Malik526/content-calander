@@ -143,6 +143,26 @@ def _ensure_videos_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE videos ADD COLUMN {column} {sql_type}")
 
 
+# New platform_posts columns added for Milestone 2.1.6 (retry classification
+# and backoff — see docs/evaluations/scheduling/milestone-2.1.6-retry-backoff.md).
+# retry_count defaults to 0 for every existing row (a row from before this
+# milestone has never been retried); next_retry_at stays NULL until a
+# retryable failure schedules one. No last_error_code column — the existing
+# failure_reason already carries enough for this milestone's needs (see the
+# evaluation doc for why a separate structured column wasn't justified).
+_PLATFORM_POSTS_MIGRATION_COLUMNS = {
+    "retry_count": "INTEGER NOT NULL DEFAULT 0",
+    "next_retry_at": "TEXT",
+}
+
+
+def _ensure_platform_posts_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(platform_posts)").fetchall()}
+    for column, sql_type in _PLATFORM_POSTS_MIGRATION_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE platform_posts ADD COLUMN {column} {sql_type}")
+
+
 def _content_slots_needs_migration(conn: sqlite3.Connection) -> bool:
     """True if content_slots was created under either pre-Milestone-1.3
     schema this rebuilds away from: the old UNIQUE(scheduled_at, pillar_key)
@@ -374,6 +394,8 @@ class PlatformPostRecord:
     failure_reason: str | None
     created_at: str
     updated_at: str
+    retry_count: int
+    next_retry_at: str | None
 
 
 def _row_to_video(row: sqlite3.Row) -> VideoRecord:
@@ -405,6 +427,7 @@ class ContentStore:
             _migrate_content_slots_unique_constraint(self._conn)
         self._conn.executescript(SCHEMA_CONTENT_SLOTS)
         self._conn.executescript(SCHEMA_PLATFORM_POSTS)
+        _ensure_platform_posts_columns(self._conn)
 
     def close(self) -> None:
         self._conn.close()
@@ -669,9 +692,16 @@ class ContentStore:
     ) -> list[PlatformPostRecord]:
         """platform_posts rows for `platform` that are scheduled (scheduled_at
         IS NOT NULL), due (scheduled_at <= now_iso — inclusive, so a row
-        scheduled exactly at now_iso is due), and in one of
-        eligible_statuses. Ordered earliest-scheduled first, ties broken by
-        id for deterministic output. Pure read — never mutates a row.
+        scheduled exactly at now_iso is due), not waiting on a scheduled
+        retry (next_retry_at IS NULL OR next_retry_at <= now_iso — same
+        now_iso and same naive-local-time convention as scheduled_at, see
+        Milestone 2.1.6), and in one of eligible_statuses. Ordered by the
+        original scheduled_at first, ties broken by id — deliberately NOT
+        by next_retry_at: scheduled_at reflects the calendar-driven posting
+        order that matters to the business, and a retry's internal backoff
+        timing should never reorder that relative to other due content
+        (see docs/evaluations/scheduling/milestone-2.1.6-retry-backoff.md
+        "Due Selection"). Pure read — never mutates a row.
 
         Milestone 2.1.1 (due-post detection): this is the query layer only.
         now_iso and eligible_statuses are supplied by the caller (see
@@ -687,10 +717,11 @@ class ContentStore:
             WHERE platform = ?
               AND scheduled_at IS NOT NULL
               AND scheduled_at <= ?
+              AND (next_retry_at IS NULL OR next_retry_at <= ?)
               AND status IN ({placeholders})
             ORDER BY scheduled_at ASC, id ASC
             """,
-            (platform, now_iso, *eligible_statuses),
+            (platform, now_iso, now_iso, *eligible_statuses),
         ).fetchall()
         return [_row_to_platform_post(row) for row in rows]
 

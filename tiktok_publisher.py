@@ -82,7 +82,7 @@ def _parse_response(response: requests.Response) -> dict:
     except ValueError as exc:
         raise PublishError(
             f"TikTok returned a non-JSON response (HTTP {response.status_code}): {response.text[:200]!r}",
-            reason_code="MALFORMED_RESPONSE",
+            reason_code="MALFORMED_RESPONSE", http_status=response.status_code,
         ) from exc
 
     error = body.get("error") or {}
@@ -90,15 +90,21 @@ def _parse_response(response: requests.Response) -> dict:
     if error_code not in (None, "ok"):
         raise PublishError(
             f"TikTok API error {error_code}: {error.get('message', '(no message)')}",
-            reason_code=error_code or "TIKTOK_API_ERROR",
+            reason_code=error_code or "TIKTOK_API_ERROR", http_status=response.status_code,
         )
 
     if response.status_code >= 400:
-        raise PublishError(f"TikTok HTTP {response.status_code}: {body!r}", reason_code="HTTP_ERROR")
+        raise PublishError(
+            f"TikTok HTTP {response.status_code}: {body!r}",
+            reason_code="HTTP_ERROR", http_status=response.status_code,
+        )
 
     data = body.get("data")
     if not isinstance(data, dict):
-        raise PublishError(f"TikTok response missing a 'data' object: {body!r}", reason_code="MALFORMED_RESPONSE")
+        raise PublishError(
+            f"TikTok response missing a 'data' object: {body!r}",
+            reason_code="MALFORMED_RESPONSE", http_status=response.status_code,
+        )
     return data
 
 
@@ -240,12 +246,19 @@ class TikTokPublisher(Publisher):
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
         except requests.RequestException as exc:
-            raise PublishError(f"Could not upload video to TikTok: {exc}", reason_code="UPLOAD_FAILED") from exc
+            # A transport-level failure during the upload itself (timeout,
+            # connection reset, ...) — the same transient nature as
+            # NETWORK_ERROR, so it gets its own retryable reason_code
+            # rather than sharing UPLOAD_FAILED with the bad-HTTP-status
+            # case below, which is not always safe to retry the same way.
+            raise PublishError(
+                f"Could not upload video to TikTok: {exc}", reason_code="UPLOAD_NETWORK_ERROR"
+            ) from exc
 
         if upload_response.status_code not in (200, 201, 206):
             raise PublishError(
                 f"TikTok upload failed: HTTP {upload_response.status_code}: {upload_response.text[:200]!r}",
-                reason_code="UPLOAD_FAILED",
+                reason_code="UPLOAD_FAILED", http_status=upload_response.status_code,
             )
 
         return PublishResult(platform_post_id=publish_id, status="PROCESSING_UPLOAD", raw_response=init_data)

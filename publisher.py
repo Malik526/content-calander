@@ -32,11 +32,19 @@ class PublishError(Exception):
     error. `reason_code` is a short machine-stable label (e.g.
     "LOCAL_FILE_MISSING", "MALFORMED_RESPONSE", "UPLOAD_FAILED", or a
     platform-reported error code) so callers can persist/report it without
-    parsing the message string."""
+    parsing the message string.
 
-    def __init__(self, message: str, reason_code: str = "PUBLISH_FAILED"):
+    `http_status` (Milestone 2.1.6 — retry classification) is the real
+    numeric HTTP status code, when one was actually available at the raise
+    site (a transport-level failure with no response at all leaves it
+    None). Structured, not parsed from the message string, so
+    retry_classification.py can tell a transient 5xx from a permanent 4xx
+    without any text-matching heuristics."""
+
+    def __init__(self, message: str, reason_code: str = "PUBLISH_FAILED", http_status: int | None = None):
         super().__init__(message)
         self.reason_code = reason_code
+        self.http_status = http_status
 
 
 @dataclass

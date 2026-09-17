@@ -197,6 +197,7 @@ def test_publish_upload_http_failure(monkeypatch, video_file):
     with pytest.raises(PublishError) as exc_info:
         publisher.publish(video_file, "caption")
     assert exc_info.value.reason_code == "UPLOAD_FAILED"
+    assert exc_info.value.http_status == 500
 
 
 def test_publish_upload_network_error(monkeypatch, video_file):
@@ -216,7 +217,10 @@ def test_publish_upload_network_error(monkeypatch, video_file):
     publisher = tp.TikTokPublisher()
     with pytest.raises(PublishError) as exc_info:
         publisher.publish(video_file, "caption")
-    assert exc_info.value.reason_code == "UPLOAD_FAILED"
+    # Milestone 2.1.6: split from the shared UPLOAD_FAILED code — a
+    # transport-level failure during upload is the same transient nature
+    # as NETWORK_ERROR and needs its own retryable classification.
+    assert exc_info.value.reason_code == "UPLOAD_NETWORK_ERROR"
 
 
 def test_publish_tiktok_api_error_response(monkeypatch, video_file):

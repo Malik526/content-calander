@@ -424,3 +424,21 @@ TARGET_PUBLISHING_PLATFORMS = [
 PLATFORM_POST_STALE_MINUTES = int(os.getenv("CONTENT_CALENDAR_PLATFORM_POST_STALE_MINUTES", "30"))
 
 # ---------------------------------------------------------------------------
+# Retry classification and backoff (Milestone 2.1.6)
+# Deterministic exponential-ish backoff for a RETRYABLE publishing failure
+# (see retry_classification.py) — index 0 is the delay before the 1st retry,
+# index 1 before the 2nd, and so on. len(RETRY_BACKOFF_MINUTES) is the
+# retry ceiling: once retry_count reaches this, a further retryable failure
+# becomes terminal (FAILED) instead of scheduling another attempt — Pickle
+# Batch does not retry forever. Centralized here rather than scattered
+# magic numbers, per this milestone's own instruction. See
+# docs/evaluations/scheduling/milestone-2.1.6-retry-backoff.md.
+# ---------------------------------------------------------------------------
+RETRY_BACKOFF_MINUTES = [
+    int(m.strip())
+    for m in os.getenv("CONTENT_CALENDAR_RETRY_BACKOFF_MINUTES", "1,5,15,30").split(",")
+    if m.strip()
+]
+MAX_RETRY_ATTEMPTS = len(RETRY_BACKOFF_MINUTES)
+
+# ---------------------------------------------------------------------------

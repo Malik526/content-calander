@@ -195,6 +195,31 @@ def test_precondition_failure_leaves_no_platform_post_record(store, tmp_path):
     assert store.get_platform_post(video.id, "tiktok") is None
 
 
+def test_validation_failure_on_an_already_claimed_row_ends_failed_not_stuck(store):
+    """Milestone 2.1.6 bug fix: previously, a precondition failure
+    discovered only after a row was already claimed (e.g. the local file
+    goes missing between materialization and worker execution — worker.py
+    has no earlier checkpoint to validate at) propagated uncaught out of
+    execute_claimed_platform_post, leaving the row stuck PUBLISHING
+    forever with no failure_reason — crash_recovery.py would eventually
+    requeue it (platform_post_id is NULL), it would get re-claimed, fail
+    the same validation again, forever. Simulates exactly that: claim
+    directly (bypassing publish_video()'s own earlier pre-claim check),
+    then execute."""
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    store.update_video(video.id, canonical_media_path="/does/not/exist.mp4", caption_text="hi")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-01-01T00:00:00")
+    store.claim_platform_post(record.id, updated_at="2026-01-01T00:00:00")
+
+    with pytest.raises(pt.PublishTikTokError):
+        pt.execute_claimed_platform_post(store, video.id, "tiktok", FakePublisher())
+
+    final = store.get_platform_post(video.id, "tiktok")
+    assert final.status == "FAILED"
+    assert final.failure_reason is not None
+    assert "not found" in final.failure_reason
+
+
 # ---------------------------------------------------------------------------
 # submission failure vs. post-processing/status failure
 # ---------------------------------------------------------------------------
@@ -295,10 +320,17 @@ def test_rerunning_after_tiktok_reported_failure_does_not_resubmit(store, proces
 
 def test_rerunning_after_true_submission_failure_is_allowed_to_retry(store, processed_video):
     """The opposite case: no publish_id was ever obtained, so a fresh
-    attempt is a legitimate retry, not a duplicate — and it must reuse the
-    existing platform_posts row (UNIQUE(video_id, platform)) rather than
-    trying to insert a second one."""
-    failing_publisher = FakePublisher(publish_result=PublishError("network down", reason_code="NETWORK_ERROR"))
+    manual attempt is a legitimate retry, not a duplicate — and it must
+    reuse the existing platform_posts row (UNIQUE(video_id, platform))
+    rather than trying to insert a second one.
+
+    Uses a TERMINAL failure (reason_code with no retry classification —
+    see retry_classification.py) specifically so the first attempt
+    reaches FAILED immediately, exercising the manual
+    rerun-a-FAILED-row pathway in publish_video(). A retryable failure
+    (e.g. NETWORK_ERROR) instead goes to PENDING with a scheduled retry —
+    see tests/test_retry_backoff.py for that automatic path."""
+    failing_publisher = FakePublisher(publish_result=PublishError("caption too long", reason_code="CAPTION_TOO_LONG"))
     with pytest.raises(pt.PublishTikTokError):
         pt.publish_video(store, processed_video.id, failing_publisher)
 
@@ -313,6 +345,29 @@ def test_rerunning_after_true_submission_failure_is_allowed_to_retry(store, proc
     record = store.get_platform_post(processed_video.id, "tiktok")
     assert record.status == "PUBLISHED"
     assert record.platform_post_id == "pub_1"
+
+
+def test_manual_rerun_of_a_failed_row_resets_retry_state(store, processed_video):
+    """A human explicitly rerunning the CLI on a FAILED row is a fresh
+    attempt, independent of whatever the automatic retry/backoff budget
+    (Milestone 2.1.6) had already accumulated — retry_count/next_retry_at
+    must be reset, not inherited."""
+    failing_publisher = FakePublisher(publish_result=PublishError("caption too long", reason_code="CAPTION_TOO_LONG"))
+    with pytest.raises(pt.PublishTikTokError):
+        pt.publish_video(store, processed_video.id, failing_publisher)
+    record = store.get_platform_post(processed_video.id, "tiktok")
+    # Simulate this row having already accumulated automatic retry state
+    # from an earlier retryable failure, before this terminal one.
+    store.update_platform_post(
+        record.id, updated_at="2026-01-01T00:00:00", retry_count=2, next_retry_at="2099-01-01T00:00:00"
+    )
+
+    pt.publish_video(store, processed_video.id, FakePublisher())
+
+    record = store.get_platform_post(processed_video.id, "tiktok")
+    assert record.status == "PUBLISHED"
+    assert record.retry_count == 0
+    assert record.next_retry_at is None
 
 
 # ---------------------------------------------------------------------------

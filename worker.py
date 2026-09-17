@@ -55,13 +55,21 @@ class WorkerRunSummary:
     """One one-pass run's outcome. published/failed reflect the row's
     status immediately after execution — a row that ends this run still
     PUBLISHING (TikTok reported an in-progress, non-terminal status) is
-    counted in neither; claimed - published - failed - len(errors) is
-    exactly that count."""
+    counted in neither; claimed - published - failed - retry_scheduled -
+    len(errors) is exactly that count.
+
+    retry_scheduled (Milestone 2.1.6) counts a claimed post whose
+    execution failed with a retryable error (retry_classification.py) and
+    was returned to PENDING with a future next_retry_at rather than marked
+    FAILED — see publish_tiktok._schedule_retry_or_fail. A single
+    retryable/terminal failure never aborts the rest of this pass; every
+    other due post is still attempted."""
     discovered: int = 0
     claimed: int = 0
     skipped: int = 0
     published: int = 0
     failed: int = 0
+    retry_scheduled: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -98,6 +106,12 @@ def run_due_posts_once(
             summary.published += 1
         elif final is not None and final.status == "FAILED":
             summary.failed += 1
+        elif final is not None and final.status == "PENDING" and final.next_retry_at is not None:
+            # A row this pass claimed and executed can only be back at
+            # PENDING because a retryable failure scheduled a retry —
+            # never a plain never-attempted PENDING (this pass already
+            # claimed it, so it can't still be in that state).
+            summary.retry_scheduled += 1
 
     return summary
 
@@ -126,7 +140,7 @@ def main() -> None:
 
     print(
         f"discovered={summary.discovered} claimed={summary.claimed} skipped={summary.skipped} "
-        f"published={summary.published} failed={summary.failed}"
+        f"published={summary.published} failed={summary.failed} retry_scheduled={summary.retry_scheduled}"
     )
     for err in summary.errors:
         print(f"  error: {err}")

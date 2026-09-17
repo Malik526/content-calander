@@ -51,6 +51,13 @@ publish_tiktok.py is manually run — so this selector can now discover a
 scheduled delivery immediately, without requiring a prior manual publish
 attempt.
 
+Milestone 2.1.6 (retry classification and backoff): a PENDING row waiting
+out a scheduled retry (platform_posts.next_retry_at set, in the future) is
+not due yet even though it's PENDING — content_store.get_due_platform_posts
+requires next_retry_at IS NULL OR next_retry_at <= now, using the same
+now_iso/naive-local-time convention as scheduled_at. See
+docs/evaluations/scheduling/milestone-2.1.6-retry-backoff.md.
+
 Dependencies:
   content_store.py, slot_matcher.now_in_config_timezone (reused, not
   duplicated — same naive-local-time convention as content_slots.scheduled_at,
