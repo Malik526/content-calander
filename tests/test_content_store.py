@@ -1,6 +1,7 @@
 """Idempotency tests for content_store.py."""
 
 import sqlite3
+import threading
 
 import pytest
 
@@ -673,6 +674,124 @@ def test_update_platform_post_records_failure_reason(store):
     updated = store.get_platform_post(video.id, "tiktok")
     assert updated.status == "FAILED"
     assert updated.failure_reason == "LOCAL_FILE_MISSING"
+
+
+# ---------------------------------------------------------------------------
+# claim_platform_post (Milestone 2.1.3 — Atomic Platform-Post Claiming)
+# ---------------------------------------------------------------------------
+
+def test_claim_pending_post_succeeds_and_sets_publishing(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+
+    claimed = store.claim_platform_post(record.id, updated_at="2026-02-01T00:01:00")
+
+    assert claimed is True
+    assert store.get_platform_post(video.id, "tiktok").status == "PUBLISHING"
+
+
+def test_claim_updates_updated_at(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+
+    store.claim_platform_post(record.id, updated_at="2026-02-01T00:01:00")
+
+    assert store.get_platform_post(video.id, "tiktok").updated_at == "2026-02-01T00:01:00"
+
+
+def test_second_claim_on_same_row_fails(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+
+    first = store.claim_platform_post(record.id, updated_at="2026-02-01T00:01:00")
+    second = store.claim_platform_post(record.id, updated_at="2026-02-01T00:02:00")
+
+    assert first is True
+    assert second is False
+    # the second (failed) call's updated_at must not have overwritten the first's
+    assert store.get_platform_post(video.id, "tiktok").updated_at == "2026-02-01T00:01:00"
+
+
+@pytest.mark.parametrize("existing_status", ["PUBLISHING", "PUBLISHED", "FAILED"])
+def test_claim_fails_for_non_pending_status(store, existing_status):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+    store.update_platform_post(record.id, updated_at="2026-02-01T00:00:30", status=existing_status)
+
+    claimed = store.claim_platform_post(record.id, updated_at="2026-02-01T00:01:00")
+
+    assert claimed is False
+    assert store.get_platform_post(video.id, "tiktok").status == existing_status
+
+
+def test_claim_on_nonexistent_row_returns_false_cleanly(store):
+    claimed = store.claim_platform_post(999999, updated_at="2026-02-01T00:01:00")
+    assert claimed is False
+
+
+def test_claim_preserves_platform_post_id(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+    # Simulate a row that somehow already carries a platform_post_id while
+    # still PENDING (not a real code path today, but the claim's job is
+    # narrowly status+updated_at — it must never touch this field either way).
+    store.update_platform_post(record.id, updated_at="2026-02-01T00:00:30", platform_post_id="pre_existing_id")
+
+    store.claim_platform_post(record.id, updated_at="2026-02-01T00:01:00")
+
+    assert store.get_platform_post(video.id, "tiktok").platform_post_id == "pre_existing_id"
+
+
+def test_claim_preserves_scheduled_published_failure_fields(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    record = store.insert_platform_post(
+        video.id, "tiktok", created_at="2026-02-01T00:00:00", scheduled_at="2026-09-16T09:00:00"
+    )
+    before = store.get_platform_post(video.id, "tiktok")
+
+    store.claim_platform_post(record.id, updated_at="2026-02-01T00:01:00")
+
+    after = store.get_platform_post(video.id, "tiktok")
+    assert after.scheduled_at == before.scheduled_at == "2026-09-16T09:00:00"
+    assert after.published_at == before.published_at is None
+    assert after.failure_reason == before.failure_reason is None
+    assert after.video_id == before.video_id
+    assert after.platform == before.platform
+    assert after.created_at == before.created_at
+
+
+def test_concurrent_claims_produce_exactly_one_winner(tmp_path):
+    """The core invariant: two real, independent connections racing to
+    claim the same row must never both succeed. Uses two separate
+    ContentStore instances (separate sqlite3 connections) against the same
+    on-disk database file, from two real threads, rather than simulating
+    the race in a single connection/thread."""
+    db_path = tmp_path / "concurrent.db"
+    with ContentStore(db_path=db_path) as setup_store:
+        video = setup_store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+        record = setup_store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+        post_id = record.id
+
+    results = []
+    barrier = threading.Barrier(2)
+
+    def attempt_claim(worker_id):
+        with ContentStore(db_path=db_path) as worker_store:
+            barrier.wait()  # maximize actual overlap between the two UPDATE attempts
+            claimed = worker_store.claim_platform_post(post_id, updated_at=f"worker-{worker_id}")
+            results.append(claimed)
+
+    threads = [threading.Thread(target=attempt_claim, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert sorted(results) == [False, True]  # exactly one winner, exactly one loser
+
+    with ContentStore(db_path=db_path) as verify_store:
+        final = verify_store.get_platform_post(video.id, "tiktok")
+    assert final.status == "PUBLISHING"
 
 
 def test_get_video_by_id(store):

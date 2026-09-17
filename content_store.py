@@ -636,6 +636,34 @@ class ContentStore:
         values = [*fields.values(), post_id]
         self._conn.execute(f"UPDATE platform_posts SET {columns} WHERE id = ?", values)
 
+    def claim_platform_post(self, post_id: int, updated_at: str) -> bool:
+        """Atomically transition platform_posts.id=post_id from PENDING to
+        PUBLISHING. Returns True if this call performed the transition
+        (this caller now owns the row), False if the row didn't exist or
+        was no longer PENDING (already claimed by another caller, or in a
+        terminal PUBLISHING/PUBLISHED/FAILED state) — never raises merely
+        because another claimant won first.
+
+        Milestone 2.1.3 (atomic platform-post claiming): a single
+        UPDATE ... WHERE id = ? AND status = 'PENDING' is one indivisible
+        SQLite write — two connections racing to claim the same row are
+        serialized by SQLite's own file-level locking, so at most one
+        UPDATE can ever see status = 'PENDING' still true; the loser's
+        WHERE clause simply no longer matches (rowcount = 0). Deliberately
+        not a SELECT-then-UPDATE — that would let two callers both
+        observe PENDING before either writes. See
+        docs/evaluations/scheduling/milestone-2.1.3-atomic-platform-post-claiming.md.
+
+        Only status and updated_at are ever written by a claim —
+        platform_post_id, scheduled_at, published_at, failure_reason,
+        video_id, and platform are never touched here.
+        """
+        cur = self._conn.execute(
+            "UPDATE platform_posts SET status = 'PUBLISHING', updated_at = ? WHERE id = ? AND status = 'PENDING'",
+            (updated_at, post_id),
+        )
+        return cur.rowcount > 0
+
     def get_due_platform_posts(
         self, platform: str, now_iso: str, eligible_statuses: list[str]
     ) -> list[PlatformPostRecord]:

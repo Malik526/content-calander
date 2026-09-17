@@ -2,6 +2,12 @@
 
 ## 2026-09-17
 
+### Milestone 2.1.3 — Atomic Platform-Post Claiming
+
+Added `ContentStore.claim_platform_post(post_id, updated_at)` — a single atomic `UPDATE ... WHERE id = ? AND status = 'PENDING'` conditional mutation that transitions a row `PENDING -> PUBLISHING`, with success read from `rowcount` rather than a separate `SELECT`-then-`UPDATE` (which would allow two concurrent claimants to both observe `PENDING`). Proven with a real two-thread, two-connection concurrency test (`threading.Barrier`-synchronized), re-run 10 times in isolation with no flakiness: exactly one winner every time. `due_post_selector.get_due_posts()` unchanged — still read-only. Found and documented (not fixed) a real pre-existing overlap: `publish_tiktok.py` already performs its own non-atomic `PENDING -> PUBLISHING` transition; reconciling the two into one ownership mechanism is deferred to a future worker-execution milestone. Full contract, atomicity reasoning, and the publisher-compatibility finding recorded in `docs/evaluations/scheduling/milestone-2.1.3-atomic-platform-post-claiming.md`.
+
+Milestone 2.1.3: **COMPLETE**.
+
 ### Milestone 2.1.2 — Scheduled Platform-Post Materialization + Pending-Only Due State
 
 Closed the architectural gap Milestone 2.1.1 reported: `platform_post_materializer.materialize_platform_posts_for_assignment()` now creates a `PENDING` `platform_posts` row (via a new idempotent `ContentStore.insert_platform_post_if_missing()`, mirroring `insert_slot_if_missing`) immediately when a video is assigned a `content_slot` (`process_content.py`), instead of only when `publish_tiktok.py` is manually run. Corrected `due_post_selector.ELIGIBLE_STATUSES` from `["PENDING", "PUBLISHING"]` to `["PENDING"]` — `PUBLISHING` means already claimed/in progress, not eligible for initial execution. One-time `backfill_platform_posts.py` materialized the 3 real videos (`id`s 3, 4, 5) already assigned before this milestone existed, without touching the 2 existing rows. Full contract, lifecycle semantics, idempotency verification, and real-DB backfill results recorded in `docs/evaluations/scheduling/milestone-2.1.2-platform-post-materialization.md`; the 2.1.1 record was corrected in place with a dated note.
