@@ -2,6 +2,12 @@
 
 ## 2026-09-17
 
+### Milestone 2.1.1 — Due-Post Detection
+
+Added `due_post_selector.get_due_posts(store, platform, now=None)` (backed by a new `ContentStore.get_due_platform_posts()` query method) — deterministic, read-only selection of which `platform_posts` rows are due for execution right now. No worker, claiming, retries, or publishing side effects — selection logic only, mirroring `slot_matcher.py`'s existing shape. Full contract, time-semantics reasoning, and a reported (not fixed) architectural gap in `platform_posts` row creation timing are recorded in `docs/evaluations/scheduling/milestone-2.1.1-due-post-detection.md`.
+
+Milestone 2.1.1: **COMPLETE**.
+
 ### Milestone 2.0 — First Real Live TikTok Publish Validated
 
 Validated the full real TikTok Direct Post publishing path end-to-end against the live API for the first time, via the existing `publish_tiktok.py` CLI — no new/temporary script, no architecture changes, no code changes required. Full validation evidence (test subject, execution path, persistence and idempotency verification) recorded in `docs/evaluations/tiktok/milestone-2.0-live-publish-validation.md`.

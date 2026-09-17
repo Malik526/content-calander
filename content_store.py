@@ -609,6 +609,36 @@ class ContentStore:
         values = [*fields.values(), post_id]
         self._conn.execute(f"UPDATE platform_posts SET {columns} WHERE id = ?", values)
 
+    def get_due_platform_posts(
+        self, platform: str, now_iso: str, eligible_statuses: list[str]
+    ) -> list[PlatformPostRecord]:
+        """platform_posts rows for `platform` that are scheduled (scheduled_at
+        IS NOT NULL), due (scheduled_at <= now_iso — inclusive, so a row
+        scheduled exactly at now_iso is due), and in one of
+        eligible_statuses. Ordered earliest-scheduled first, ties broken by
+        id for deterministic output. Pure read — never mutates a row.
+
+        Milestone 2.1.1 (due-post detection): this is the query layer only.
+        now_iso and eligible_statuses are supplied by the caller (see
+        due_post_selector.get_due_posts) rather than decided here, so this
+        method carries no timezone or business-eligibility logic of its
+        own — same division of responsibility as find_earliest_open_slot_fifo/
+        slot_matcher.py.
+        """
+        placeholders = ", ".join("?" for _ in eligible_statuses)
+        rows = self._conn.execute(
+            f"""
+            SELECT * FROM platform_posts
+            WHERE platform = ?
+              AND scheduled_at IS NOT NULL
+              AND scheduled_at <= ?
+              AND status IN ({placeholders})
+            ORDER BY scheduled_at ASC, id ASC
+            """,
+            (platform, now_iso, *eligible_statuses),
+        ).fetchall()
+        return [_row_to_platform_post(row) for row in rows]
+
 
 class SlotUnavailableError(Exception):
     """Raised when a slot is claimed between selection and assignment."""
