@@ -2,6 +2,26 @@
 
 ## 2026-09-16
 
+### Fix TikTok Desktop PKCE Challenge Encoding
+
+`tiktok_auth.py`'s token exchange failed with `invalid_request: Code verifier or code challenge is invalid` after a successful browser authorization/callback. Root cause: `generate_pkce_pair()` derived `code_challenge` as `base64url(SHA256(verifier))` (RFC 7636's standard S256 encoding, and what most other OAuth providers use), but TikTok's Desktop Login Kit documentation requires `code_challenge` as the **lowercase hex digest** of `SHA256(verifier)` instead — confirmed directly against TikTok's current docs, not just the reported error. The verifier itself, its lifecycle (never regenerated between building the authorization URL and the token exchange, in both the interactive and manual-fallback flows), and the token exchange's `code_verifier` field were all already correct.
+
+- `tiktok_auth.py`: `generate_pkce_pair()` now computes `challenge = hashlib.sha256(verifier.encode("ascii")).hexdigest()` instead of base64url-encoding the digest. Removed the now-unused `base64` import. No other function changed — verifier generation, state/CSRF handling, token exchange, refresh, and persistence are untouched.
+- `tests/test_tiktok_auth.py`: updated the two tests that encoded the old base64url assumption (challenge length 43 → 64, comparison against `base64.urlsafe_b64encode` → `hashlib...hexdigest()`), added an explicit hex-charset assertion, and added `test_authorize_interactive_sends_same_verifier_that_produced_the_challenge` — an end-to-end guard proving the exact verifier used to build the challenge on the authorization URL is the same one presented at token exchange, and that it's the correct SHA256 preimage of that challenge.
+
+Verification: `pytest tests/test_tiktok_auth.py` (35 passed) and the full suite (`pytest`, 427 passed). Not yet verified against TikTok's real token endpoint — a fresh `python3 tiktok_auth.py --authorize` run follows this fix, per the existing "never reuse a verifier/challenge across attempts" contract.
+
+### Public Brand Rename — Content Automation → Pickle Batch (web frontend only)
+
+Renamed the public-facing SaaS/product brand from "Content Automation" to "Pickle Batch" across `web/`. The backend/internal engineering name (this repository, Python modules, database tables, CLI scripts, ADRs/history, this changelog) stays "Content Automation" — the two names now deliberately diverge: internal engineering name vs. public product name.
+
+- `web/lib/site-config.ts`: `name` and `description` updated — this is the single source `web/app/layout.tsx`'s page-title template and meta description already read from, so title/metadata changed automatically with no separate edit.
+- Replaced 8 literal `"Content Automation"` strings that were hardcoded directly in JSX/data instead of sourced from `siteConfig.name` — `Hero.tsx`, `CTASection.tsx`, `PlatformDirection.tsx`, `HowItWorks.tsx`, and 4 occurrences in `app/privacy/page.tsx` — with `{siteConfig.name}` (or, for `Hero.tsx`'s description paragraph, which was a verbatim duplicate of `siteConfig.description`, with `{siteConfig.description}` directly, removing the duplication rather than just fixing the brand word in both places). `app/terms/page.tsx` already sourced every mention from `siteConfig.name` and needed no changes.
+- `SiteHeader.tsx`/`SiteFooter.tsx` already read `siteConfig.name` and needed no changes.
+- Deliberately left unchanged: `siteConfig.url` and `siteConfig.contactEmail` (infrastructure — domain/email — not copy; changing either without confirming the actual domain/mailbox exists could point the site at something nonexistent) and root `README.md`'s "Content Automation" mentions (internal engineering documentation describing this repository, not site visitor-facing copy — same category the task explicitly said to leave alone). No favicon/logo text existed to update — `app/favicon.ico` is a generic icon with no embedded brand text.
+
+Validation: `npm run lint` (clean) and `npm run build` (Next.js 16.3.5, Turbopack — compiles, typechecks, and statically exports all 4 routes successfully). Confirmed directly in the static `out/` output: zero remaining occurrences of "Content Automation" in any rendered HTML, "Pickle Batch" appears correctly on every page including `<title>Pickle Batch</title>` on the homepage.
+
 ### Milestone 2.0.1 — Content Automation Web Presence / SaaS Frontend Foundation
 
 Added the first public-facing website, inside this repository rather than as a separate throwaway compliance site — it provides real public URLs for TikTok Developer Portal configuration now, and is meant to become the foundation of the full SaaS UI later.

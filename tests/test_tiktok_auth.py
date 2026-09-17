@@ -89,18 +89,27 @@ def test_load_token_returns_none_for_corrupt_file():
 # PKCE / state generation
 # ---------------------------------------------------------------------------
 
-def test_generate_pkce_pair_lengths_within_rfc7636_bounds():
-    verifier, challenge = ta.generate_pkce_pair()
+def test_generate_pkce_pair_verifier_length_and_charset():
+    verifier, _ = ta.generate_pkce_pair()
     assert 43 <= len(verifier) <= 128
-    assert len(challenge) == 43  # base64url(sha256(...)) without padding is always 43 chars
+    # TikTok's unreserved charset: [A-Z] [a-z] [0-9] - . _ ~
+    assert all(c.isalnum() or c in "-._~" for c in verifier)
+
+
+def test_generate_pkce_pair_challenge_is_64_hex_chars():
+    _, challenge = ta.generate_pkce_pair()
+    assert len(challenge) == 64  # hex(sha256(...)) is always 64 lowercase hex chars
+    assert all(c in "0123456789abcdef" for c in challenge)
 
 
 def test_generate_pkce_pair_challenge_matches_verifier_via_s256():
-    import base64
+    """TikTok's Desktop Login Kit requires the hex digest of SHA256(verifier),
+    not RFC 7636's standard base64url encoding — this is the exact bug this
+    test guards against regressing to."""
     import hashlib
 
     verifier, challenge = ta.generate_pkce_pair()
-    expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+    expected = hashlib.sha256(verifier.encode("ascii")).hexdigest()
     assert challenge == expected
 
 
@@ -360,6 +369,60 @@ def test_authorize_interactive_uses_fresh_verifier_each_call(monkeypatch):
 
     assert len(verifiers_sent) == 2
     assert verifiers_sent[0] != verifiers_sent[1]
+
+
+def test_authorize_interactive_sends_same_verifier_that_produced_the_challenge(monkeypatch):
+    """End-to-end guard for the PKCE mismatch bug: the exact code_verifier
+    used to derive code_challenge for the authorization URL must be the
+    same one presented at token exchange — never regenerated, truncated,
+    or otherwise altered in between."""
+    sent_verifier = {}
+
+    def fake_post(url, data, **kwargs):
+        sent_verifier["value"] = data.get("code_verifier")
+        return _fake_token_post()
+
+    monkeypatch.setattr(ta.requests, "post", fake_post)
+
+    captured = {}
+    orig_generate = ta.generate_pkce_pair
+
+    def spy_generate():
+        verifier, challenge = orig_generate()
+        captured["verifier"] = verifier
+        captured["challenge"] = challenge
+        return verifier, challenge
+
+    monkeypatch.setattr(ta, "generate_pkce_pair", spy_generate)
+
+    orig_build = ta.build_authorization_url
+
+    def spy_build(state, code_challenge, redirect_uri):
+        captured["state"] = state
+        return orig_build(state, code_challenge, redirect_uri)
+
+    monkeypatch.setattr(ta, "build_authorization_url", spy_build)
+
+    port = _free_port()
+
+    def click_once_state_known():
+        for _ in range(50):
+            if "state" in captured:
+                break
+            time.sleep(0.01)
+        _click_callback(port, "/callback", f"code=fakecode123&state={captured['state']}", delay=0)
+
+    threading.Thread(target=click_once_state_known, daemon=True).start()
+
+    ta.authorize_interactive(port=port, open_browser=False, timeout_seconds=5)
+
+    # The verifier sent at token exchange must be exactly the one generate_pkce_pair()
+    # produced for this attempt, and it must be the correct S256 preimage of the
+    # challenge that was actually put on the authorization URL.
+    assert sent_verifier["value"] == captured["verifier"]
+    import hashlib
+
+    assert hashlib.sha256(captured["verifier"].encode("ascii")).hexdigest() == captured["challenge"]
 
 
 # ---------------------------------------------------------------------------

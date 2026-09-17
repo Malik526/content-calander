@@ -49,7 +49,6 @@ Dependencies:
 """
 
 import argparse
-import base64
 import hashlib
 import http.server
 import json
@@ -122,13 +121,21 @@ def generate_state() -> str:
 
 def generate_pkce_pair() -> tuple[str, str]:
     """A fresh (code_verifier, code_challenge) pair for the S256 PKCE
-    method, per RFC 7636 — mandatory for TikTok's desktop OAuth flow.
-    Generate a new pair for every authorization attempt; never reuse one
-    across attempts, and never persist the verifier longer than the single
-    attempt it belongs to."""
-    verifier = secrets.token_urlsafe(64)  # ~86 chars: within RFC 7636's required 43-128
-    digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    method — mandatory for TikTok's desktop OAuth flow. Generate a new pair
+    for every authorization attempt; never reuse one across attempts, and
+    never persist the verifier longer than the single attempt it belongs
+    to.
+
+    TikTok's Desktop Login Kit documentation deviates from RFC 7636's
+    standard base64url challenge encoding: it requires code_challenge as
+    the lowercase hex digest of SHA256(code_verifier), not base64url.
+    Confirmed directly from TikTok's docs (developers.tiktok.com/doc/
+    login-kit-desktop): "Create the code challenge by hashing the code
+    verifier using hex encoding of SHA256." Using base64url here produces
+    a challenge TikTok's token endpoint rejects as invalid even though the
+    verifier itself is correct."""
+    verifier = secrets.token_urlsafe(64)  # ~86 chars, [A-Za-z0-9_-]: within TikTok's required 43-128 and unreserved charset
+    challenge = hashlib.sha256(verifier.encode("ascii")).hexdigest()  # TikTok-specific: hex, not base64url
     return verifier, challenge
 
 
