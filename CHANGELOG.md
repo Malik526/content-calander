@@ -1,6 +1,13 @@
 # Content Automation — Changelog
 
-## 2026-09-16
+## 2026-09-17
+
+### Milestone 2.0 — First Real Live TikTok Publish Validated
+
+Validated the full real TikTok Direct Post publishing path end-to-end against the live API for the first time, via the existing `publish_tiktok.py` CLI — no new/temporary script, no architecture changes, no code changes required. Full validation evidence (test subject, execution path, persistence and idempotency verification) recorded in `docs/evaluations/tiktok/milestone-2.0-live-publish-validation.md`.
+
+Milestone 2.0: **COMPLETE**.
+
 
 ### Fix TikTok Desktop PKCE Challenge Encoding
 
