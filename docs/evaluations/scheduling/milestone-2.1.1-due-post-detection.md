@@ -2,6 +2,8 @@
 
 Validation evidence, not an architecture decision — no ADR was warranted (see Conclusion). Recorded 2026-09-17.
 
+**Correction (Milestone 2.1.2, same day)**: this milestone's original selection contract included `PUBLISHING` as an eligible/due status. That was corrected in 2.1.2 to `PENDING`-only — `PUBLISHING` means already claimed/in progress, not available for initial execution; see `docs/evaluations/scheduling/milestone-2.1.2-platform-post-materialization.md` for the reasoning. The "Selection Contract" and "Eligible / Excluded States" sections below are left as originally recorded (not rewritten) with this note instead, per this repository's changelog/documentation policy of not rewriting historical entries — treat `due_post_selector.ELIGIBLE_STATUSES` in the actual code, not this doc, as current truth for what's eligible. The architectural gap this milestone reported (below) **was** fixed in 2.1.2 — `platform_post_materializer.py` now creates the `PENDING` row this doc predicted was needed.
+
 ## Purpose
 
 Answer exactly one question, trustworthily and deterministically:

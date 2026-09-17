@@ -391,3 +391,21 @@ TIKTOK_DEFAULT_PRIVACY_LEVEL = os.getenv("CONTENT_CALENDAR_TIKTOK_DEFAULT_PRIVAC
 TIKTOK_MAX_CAPTION_UTF16_UNITS = int(os.getenv("CONTENT_CALENDAR_TIKTOK_MAX_CAPTION_UTF16_UNITS", "2200"))
 
 # ---------------------------------------------------------------------------
+# Platform-post materialization (Milestone 2.1.2)
+# Which platform(s) a scheduled video should be materialized as a PENDING
+# platform_posts row for, as soon as it's assigned a content_slot — see
+# platform_post_materializer.py and
+# docs/evaluations/scheduling/milestone-2.1.2-platform-post-materialization.md.
+# Deliberately a plain list, not hardcoded to TikTok inside that module:
+# "tiktok" is the only real publisher today (publisher.build_publisher), so
+# adding a second platform here alone does nothing until a real Publisher
+# implementation for it exists — this list only controls which platforms get
+# a scheduling placeholder created, not which platforms can actually publish.
+# ---------------------------------------------------------------------------
+TARGET_PUBLISHING_PLATFORMS = [
+    platform.strip()
+    for platform in os.getenv("CONTENT_CALENDAR_TARGET_PUBLISHING_PLATFORMS", "tiktok").split(",")
+    if platform.strip()
+]
+
+# ---------------------------------------------------------------------------

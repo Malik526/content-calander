@@ -603,6 +603,33 @@ class ContentStore:
         )
         return self.get_platform_post(video_id, platform)
 
+    def insert_platform_post_if_missing(
+        self, video_id: int, platform: str, scheduled_at: str, created_at: str
+    ) -> bool:
+        """Create a PENDING platform_posts row for (video_id, platform)
+        unless one already exists. Returns True if a new row was created,
+        False if one already existed — mirrors insert_slot_if_missing's
+        contract exactly (INSERT OR IGNORE against the existing
+        UNIQUE(video_id, platform) constraint).
+
+        Milestone 2.1.2 (platform-post materialization): unlike
+        insert_platform_post (which raises on a duplicate, expecting the
+        caller to have already checked get_platform_post()), this is safe
+        to call unconditionally and repeatedly for the same pair — it never
+        runs an UPDATE, so it can never reset an existing row's
+        status/platform_post_id/published_at/failure_reason, no matter how
+        many times assignment/materialization logic is revisited for the
+        same video.
+        """
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO platform_posts (video_id, platform, status, scheduled_at, created_at, updated_at)
+            VALUES (?, ?, 'PENDING', ?, ?, ?)
+            """,
+            (video_id, platform, scheduled_at, created_at, created_at),
+        )
+        return cur.rowcount > 0
+
     def update_platform_post(self, post_id: int, updated_at: str, **fields) -> None:
         fields = {**fields, "updated_at": updated_at}
         columns = ", ".join(f"{key} = ?" for key in fields)

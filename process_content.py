@@ -68,6 +68,7 @@ from pathlib import Path
 import caption
 import classification
 import media
+import platform_post_materializer
 import scheduling
 import slot_matcher
 import transcription
@@ -291,6 +292,12 @@ def process_one(
         return Outcome(path, video, "WOULD_ASSIGN", slot=slot)
 
     store.assign_slot(video.id, slot.id)
+    # Milestone 2.1.2: materialize a PENDING platform_posts row per
+    # config.TARGET_PUBLISHING_PLATFORMS immediately, so due_post_selector
+    # can discover this scheduled delivery ahead of publish time instead of
+    # only after a manual publish_tiktok.py run — see
+    # docs/evaluations/scheduling/milestone-2.1.2-platform-post-materialization.md.
+    platform_post_materializer.materialize_platform_posts_for_assignment(store, video.id, slot.id, now_iso)
     dest = _move_file(path, PROCESSED_DIR)
     # canonical_media_path was set once at inspect time to the incoming/
     # discovery path; without updating it here it goes stale the instant

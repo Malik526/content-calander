@@ -2,6 +2,12 @@
 
 ## 2026-09-17
 
+### Milestone 2.1.2 — Scheduled Platform-Post Materialization + Pending-Only Due State
+
+Closed the architectural gap Milestone 2.1.1 reported: `platform_post_materializer.materialize_platform_posts_for_assignment()` now creates a `PENDING` `platform_posts` row (via a new idempotent `ContentStore.insert_platform_post_if_missing()`, mirroring `insert_slot_if_missing`) immediately when a video is assigned a `content_slot` (`process_content.py`), instead of only when `publish_tiktok.py` is manually run. Corrected `due_post_selector.ELIGIBLE_STATUSES` from `["PENDING", "PUBLISHING"]` to `["PENDING"]` — `PUBLISHING` means already claimed/in progress, not eligible for initial execution. One-time `backfill_platform_posts.py` materialized the 3 real videos (`id`s 3, 4, 5) already assigned before this milestone existed, without touching the 2 existing rows. Full contract, lifecycle semantics, idempotency verification, and real-DB backfill results recorded in `docs/evaluations/scheduling/milestone-2.1.2-platform-post-materialization.md`; the 2.1.1 record was corrected in place with a dated note.
+
+Milestone 2.1.2: **COMPLETE**.
+
 ### Milestone 2.1.1 — Due-Post Detection
 
 Added `due_post_selector.get_due_posts(store, platform, now=None)` (backed by a new `ContentStore.get_due_platform_posts()` query method) — deterministic, read-only selection of which `platform_posts` rows are due for execution right now. No worker, claiming, retries, or publishing side effects — selection logic only, mirroring `slot_matcher.py`'s existing shape. Full contract, time-semantics reasoning, and a reported (not fixed) architectural gap in `platform_posts` row creation timing are recorded in `docs/evaluations/scheduling/milestone-2.1.1-due-post-detection.md`.

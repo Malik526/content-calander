@@ -88,6 +88,17 @@ def test_failed_post_is_excluded(store):
     assert due == []
 
 
+def test_publishing_post_is_excluded(store):
+    """Milestone 2.1.2 correction: PUBLISHING means already claimed/in
+    progress, not available for initial execution — see module docstring
+    for why this differs from Milestone 2.1.1's original contract."""
+    _add_platform_post(store, scheduled_at=(NOW - timedelta(hours=1)).isoformat(), status="PUBLISHING")
+
+    due = due_post_selector.get_due_posts(store, "tiktok", now=NOW)
+
+    assert due == []
+
+
 # 5. unrelated platform is excluded
 def test_unrelated_platform_is_excluded(store):
     _add_platform_post(
@@ -112,7 +123,7 @@ def test_null_scheduled_at_is_excluded(store):
 def test_multiple_due_posts_return_earliest_first(store):
     later = _add_platform_post(store, scheduled_at=(NOW - timedelta(hours=1)).isoformat(), status="PENDING")
     earliest = _add_platform_post(store, scheduled_at=(NOW - timedelta(days=2)).isoformat(), status="PENDING")
-    middle = _add_platform_post(store, scheduled_at=(NOW - timedelta(hours=12)).isoformat(), status="PUBLISHING")
+    middle = _add_platform_post(store, scheduled_at=(NOW - timedelta(hours=12)).isoformat(), status="PENDING")
 
     due = due_post_selector.get_due_posts(store, "tiktok", now=NOW)
 

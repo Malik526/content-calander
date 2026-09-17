@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import media
+import platform_post_materializer
 import publish_tiktok as pt
 from content_store import ContentStore
 from publisher import PublishError, PublishResult, PublishStatusResult
@@ -107,6 +108,38 @@ def test_publish_video_with_no_assigned_slot_leaves_scheduled_at_none(store, pro
     pt.publish_video(store, processed_video.id, FakePublisher())
     record = store.get_platform_post(processed_video.id, "tiktok")
     assert record.scheduled_at is None
+
+
+def test_publish_video_uses_pre_materialized_pending_row(store, processed_video, monkeypatch):
+    """Milestone 2.1.2 compatibility (Phase 6, case A): a video assigned a
+    slot now already has a PENDING platform_posts row materialized ahead
+    of time (see platform_post_materializer.py). publish_video() must use
+    that existing row — not raise a duplicate-row IntegrityError by trying
+    to insert a second one, and not reset anything on it before
+    publishing."""
+    monkeypatch.setattr(platform_post_materializer, "TARGET_PUBLISHING_PLATFORMS", ["tiktok"])
+    store.insert_slot_if_missing("2026-09-16T09:00:00", None, None, "2026-01-01T00:00:00")
+    slot = store.find_earliest_open_slot_fifo("2000-01-01T00:00:00")
+    store.assign_slot(processed_video.id, slot.id)
+    platform_post_materializer.materialize_platform_posts_for_assignment(
+        store, processed_video.id, slot.id, created_at="2026-01-01T00:00:00"
+    )
+    pre_existing = store.get_platform_post(processed_video.id, "tiktok")
+    assert pre_existing.status == "PENDING"
+
+    publisher = FakePublisher()
+    pt.publish_video(store, processed_video.id, publisher)
+
+    assert len(publisher.publish_calls) == 1
+    rows = store._conn.execute(
+        "SELECT COUNT(*) AS n FROM platform_posts WHERE video_id = ? AND platform = 'tiktok'",
+        (processed_video.id,),
+    ).fetchone()
+    assert rows["n"] == 1  # the same row was reused, not a second one inserted
+    record = store.get_platform_post(processed_video.id, "tiktok")
+    assert record.id == pre_existing.id
+    assert record.status == "PUBLISHED"
+    assert record.scheduled_at == "2026-09-16T09:00:00"  # preserved from materialization
 
 
 # ---------------------------------------------------------------------------
