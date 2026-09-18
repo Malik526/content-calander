@@ -1,5 +1,13 @@
 # Content Automation — Changelog
 
+## 2026-09-18
+
+### Milestone 2.1.7 — Missed-Schedule Behavior
+
+Answered what happens when a `PENDING` post's `scheduled_at` has already passed before a worker gets to run it (offline, crashed, deploy window). Investigation first, per the brief: traced `due_post_selector.py`, `content_store.get_due_platform_posts`, `worker.py`, `crash_recovery.py`, and `retry_classification.py`, and confirmed the policy already existed as an emergent property — `scheduled_at <= now` has no upper bound, `scheduled_at` is structurally write-once (grepped every write site; only ever set at materialization, never rewritten), retry timing (`next_retry_at`) composes independently via its own gate, and `published_at` already existed in the schema and is written at real execution time. No new status, no new persisted flag, and no worker/selector logic changes were needed. Added a pure `due_post_selector.calculate_schedule_delay(scheduled_at, published_at)` helper for on-demand lateness derivation — building it surfaced a real pre-existing bug: `scheduled_at` is naive local time but `published_at` is aware UTC, so a raw subtraction raises `TypeError` (or would silently misreport lateness by the UTC offset if tzinfo were stripped instead); fixed by normalizing `published_at` into `config.TIMEZONE` inside the helper, scoped to that helper only. `tests/test_missed_schedule.py` (13 new tests) proves overdue due-selection at the brief's actual scale (1 minute, hours, days — prior tests only covered 1 hour), the retry-gate/overdue composition at day-scale, and an end-to-end worker run against a 3-day-overdue post proving `scheduled_at` stays untouched while `published_at` reflects the late execution time. Three outside-pytest local simulations (simple offline overdue, retry-gated overdue, multi-day overdue) all passed against isolated temp SQLite DBs. Real `data/content.db` read read-only via `sqlite3 -readonly` (not `ContentStore()`, to guarantee no write path could run) — all 5 rows byte-identical to Milestone 2.1.6's recorded state; none of the real `PENDING` rows are yet overdue as of today, so the guardrail (no real row touched) was never at risk. Full suite: 551 passed, no regressions. Full details in `docs/evaluations/scheduling/milestone-2.1.7-missed-schedule-behavior.md`.
+
+Milestone 2.1.7: **COMPLETE**.
+
 ## 2026-09-17
 
 ### Milestone 2.1.6 — Retry Classification and Backoff

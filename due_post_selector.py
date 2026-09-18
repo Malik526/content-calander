@@ -58,14 +58,23 @@ requires next_retry_at IS NULL OR next_retry_at <= now, using the same
 now_iso/naive-local-time convention as scheduled_at. See
 docs/evaluations/scheduling/milestone-2.1.6-retry-backoff.md.
 
+Milestone 2.1.7 (missed-schedule behavior): scheduled_at <= now above has
+no upper bound, so a PENDING row does not stop being due just because it
+is hours or days overdue (e.g. the worker was offline past its scheduled
+time) — it is selected and published exactly like any other due row, and
+scheduled_at is never rewritten to the actual execution time. See
+docs/evaluations/scheduling/milestone-2.1.7-missed-schedule-behavior.md.
+
 Dependencies:
   content_store.py, slot_matcher.now_in_config_timezone (reused, not
   duplicated — same naive-local-time convention as content_slots.scheduled_at,
   which platform_posts.scheduled_at is copied from at materialization time).
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
+from config import TIMEZONE
 from content_store import ContentStore, PlatformPostRecord
 from slot_matcher import now_in_config_timezone
 
@@ -87,3 +96,27 @@ def get_due_posts(store: ContentStore, platform: str, now: datetime | None = Non
     """
     resolved_now = now if now is not None else now_in_config_timezone()
     return store.get_due_platform_posts(platform, resolved_now.isoformat(), ELIGIBLE_STATUSES)
+
+
+def calculate_schedule_delay(scheduled_at: str, published_at: str) -> timedelta:
+    """How much later than its original scheduled_at a platform_posts row
+    actually published (Milestone 2.1.7), e.g.
+    calculate_schedule_delay(record.scheduled_at, record.published_at).
+    Pure derivation, not a persisted field — lateness is never written to
+    the database, only computed on demand from the two timestamps that are
+    already stored. A non-positive result means the row published at or
+    before its schedule, which the normal pipeline always produces for an
+    on-time post.
+
+    scheduled_at is a naive local-time isoformat string (config.TIMEZONE,
+    same convention as this module's `now` — see module docstring), but
+    published_at is written as an aware UTC isoformat string (publish_tiktok
+    and crash_recovery's `_now_iso()`, the same convention as updated_at) —
+    a genuine pre-existing mismatch between the two columns' conventions,
+    not something this milestone introduces. Subtracting them directly
+    would either raise (naive vs. aware) or, if blindly stripped of tzinfo,
+    silently misreport lateness by config.TIMEZONE's UTC offset. Converting
+    published_at into config.TIMEZONE before subtracting is therefore not
+    optional formatting — it is required for the result to be correct."""
+    published_local = datetime.fromisoformat(published_at).astimezone(ZoneInfo(TIMEZONE)).replace(tzinfo=None)
+    return published_local - datetime.fromisoformat(scheduled_at)
