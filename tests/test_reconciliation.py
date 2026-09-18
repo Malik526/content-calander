@@ -346,7 +346,7 @@ def test_token_refresh_can_happen_during_reconciliation(monkeypatch, store, tmp_
     assert "Bearer stale_access" not in bearer_tokens_seen
 
 
-def test_reauthorization_required_does_not_resubmit(monkeypatch, store, tmp_path):
+def test_reauthorization_required_marks_failed_and_stops_polling(monkeypatch, store, tmp_path):
     import tiktok_auth as ta
     import tiktok_publisher as tp
 
@@ -380,8 +380,94 @@ def test_reauthorization_required_does_not_resubmit(monkeypatch, store, tmp_path
 
     final = store.get_platform_post(row.video_id, "tiktok")
     assert len(summary.errors) == 1
-    assert final.status == "PUBLISHING"  # not resubmitted, not silently marked terminal
+    assert summary.failed == 1
+    # Terminal — a human must reconnect TikTok; must not sit PUBLISHING and
+    # get silently re-polled forever. Never resubmitted either way.
+    assert final.status == "FAILED"
+    assert "tiktok_auth.py --authorize" in final.failure_reason
     assert final.platform_post_id == row.platform_post_id
+
+
+def test_reauthorization_required_does_not_schedule_another_check(monkeypatch, store, tmp_path):
+    """A row marked FAILED for this reason must never be selected by
+    reconciliation again — it leaves PUBLISHING entirely, so
+    get_reconcilable_platform_posts excludes it structurally regardless of
+    next_status_check_at, exactly like any other terminal outcome."""
+    import tiktok_auth as ta
+    import tiktok_publisher as tp
+
+    monkeypatch.setattr(ta, "TIKTOK_CLIENT_KEY", "fake_key")
+    monkeypatch.setattr(ta, "TIKTOK_CLIENT_SECRET", "fake_secret")
+    monkeypatch.setattr(ta, "TIKTOK_TOKEN_PATH", tmp_path / "tok.json")
+    monkeypatch.setattr(ta, "TIKTOK_PENDING_AUTH_PATH", tmp_path / "pending.json")
+    monkeypatch.setattr(ta, "TIKTOK_REFRESH_LOCK_PATH", tmp_path / "lock")
+    ta.save_token({
+        "access_token": "stale_access", "refresh_token": "revoked_refresh",
+        "access_token_expires_at": (NOW - timedelta(minutes=10)).isoformat(),
+        "refresh_token_expires_at": (NOW + timedelta(days=300)).isoformat(),
+        "open_id": "u", "scope": "s",
+    })
+
+    class _FakeResponse:
+        def __init__(self, body, status_code):
+            self._body, self.status_code, self.text = body, status_code, str(body)
+
+        def json(self):
+            return self._body
+
+    monkeypatch.setattr(
+        tp.requests, "post", lambda *a, **k: _FakeResponse({"error": "invalid_request"}, status_code=401)
+    )
+
+    _publishing_row(store)
+    publisher = tp.TikTokPublisher()
+    recon.reconcile_pending_status_checks_once(store, publisher, now=NOW)
+
+    summary = recon.reconcile_pending_status_checks_once(store, publisher, now=NOW + timedelta(days=1))
+
+    assert summary.discovered == 0
+
+
+def test_transient_auth_network_failure_stays_publishing_and_reschedules(monkeypatch, store, tmp_path):
+    """The retryable counterpart to the reauthorization-required case
+    above: a transient failure to even reach TikTok's token endpoint while
+    refreshing must NOT be treated as reauthorization-required — the row
+    stays PUBLISHING and another check is scheduled, exactly like any
+    other transient status-check failure."""
+    import tiktok_auth as ta
+    import tiktok_publisher as tp
+    from config import STATUS_CHECK_BACKOFF_SECONDS
+
+    monkeypatch.setattr(ta, "TIKTOK_CLIENT_KEY", "fake_key")
+    monkeypatch.setattr(ta, "TIKTOK_CLIENT_SECRET", "fake_secret")
+    monkeypatch.setattr(ta, "TIKTOK_TOKEN_PATH", tmp_path / "tok.json")
+    monkeypatch.setattr(ta, "TIKTOK_PENDING_AUTH_PATH", tmp_path / "pending.json")
+    monkeypatch.setattr(ta, "TIKTOK_REFRESH_LOCK_PATH", tmp_path / "lock")
+    ta.save_token({
+        "access_token": "stale_access", "refresh_token": "refresh_xyz",
+        "access_token_expires_at": (NOW - timedelta(minutes=10)).isoformat(),
+        "refresh_token_expires_at": (NOW + timedelta(days=300)).isoformat(),
+        "open_id": "u", "scope": "s",
+    })
+
+    import requests as real_requests
+
+    def _raise(*a, **k):
+        raise real_requests.ConnectionError("temporary DNS failure")
+
+    monkeypatch.setattr(tp.requests, "post", _raise)
+
+    row = _publishing_row(store)
+    publisher = tp.TikTokPublisher()
+
+    summary = recon.reconcile_pending_status_checks_once(store, publisher, now=NOW)
+
+    final = store.get_platform_post(row.video_id, "tiktok")
+    assert len(summary.errors) == 1
+    assert summary.failed == 0
+    assert final.status == "PUBLISHING"
+    assert final.status_check_count == 1
+    assert final.next_status_check_at == (NOW + timedelta(seconds=STATUS_CHECK_BACKOFF_SECONDS[0])).isoformat()
 
 
 # ---------------------------------------------------------------------------

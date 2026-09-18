@@ -61,6 +61,7 @@ import argparse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import retry_classification
 from content_store import ContentStore
 from publish_tiktok import _next_status_check_at, _resolve_poll_outcome
 from publisher import PublishError, Publisher
@@ -92,10 +93,32 @@ def reconcile_pending_status_checks_once(
     further scheduling — the row leaves PUBLISHING entirely, so
     get_reconcilable_platform_posts will never select it again regardless.
 
-    A transient failure to even reach the status endpoint (PublishError)
-    also reschedules the next check with the same backoff, rather than
-    leaving the row stuck at its old (now-elapsed) next_status_check_at
-    forever — never a resubmission either way.
+    A failure to even reach/use the status endpoint (PublishError, most
+    commonly from the token refresh path inside publisher.get_status() —
+    Milestone 2.1.8) is classified exactly like a publishing failure
+    already is (retry_classification.is_retryable, the same reason_code/
+    http_status-driven decision publish_tiktok._schedule_retry_or_fail
+    already uses — not a second independently-invented rule):
+
+      - retryable (e.g. a transient network blip, a temporary 5xx from
+        TikTok's token endpoint): the row stays PUBLISHING and the next
+        check is rescheduled with the same backoff, rather than leaving
+        it stuck at its old (now-elapsed) next_status_check_at forever.
+      - terminal (TikTokReauthorizationRequiredError's
+        REAUTHORIZATION_REQUIRED — the refresh token is expired, revoked,
+        or was never issued): the row is marked FAILED immediately with
+        the actionable reconnect message as failure_reason, and no
+        further check is scheduled. A row that genuinely needs a human to
+        re-run `tiktok_auth.py --authorize` must not sit PUBLISHING and
+        get silently re-polled forever — nothing about waiting longer
+        ever resolves it, exactly the same reasoning
+        retry_classification.py already applies to a publishing attempt
+        that hits this error. No new lifecycle status was introduced:
+        this is the same FAILED every other terminal outcome already
+        uses.
+
+    Neither branch ever resubmits — get_status() is the only TikTok call
+    reconciliation ever makes.
 
     `now` is forwarded to content_store.get_reconcilable_platform_posts
     for deterministic testing (see that method's docstring for the
@@ -112,11 +135,22 @@ def reconcile_pending_status_checks_once(
         try:
             status_result = publisher.get_status(record.platform_post_id)
         except PublishError as exc:
-            store.update_platform_post_if_unchanged(
-                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(),
-                next_status_check_at=_next_status_check_at(record.status_check_count, now),
-                status_check_count=record.status_check_count + 1,
-            )
+            if retry_classification.is_retryable(exc.reason_code, getattr(exc, "http_status", None)):
+                store.update_platform_post_if_unchanged(
+                    record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(),
+                    next_status_check_at=_next_status_check_at(record.status_check_count, now),
+                    status_check_count=record.status_check_count + 1,
+                )
+            else:
+                # Terminal — most notably REAUTHORIZATION_REQUIRED. Stop
+                # polling: mark FAILED with the actionable message, never
+                # schedule another check. No new lifecycle status.
+                updated = store.update_platform_post_if_unchanged(
+                    record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(),
+                    status="FAILED", failure_reason=str(exc),
+                )
+                if updated:
+                    summary.failed += 1
             summary.errors.append(str(exc))
             continue
 
