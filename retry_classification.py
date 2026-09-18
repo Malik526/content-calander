@@ -61,6 +61,14 @@ _TERMINAL_REASON_CODES = frozenset({
     "UNSUPPORTED_PRIVACY_LEVEL",
     "UNAUDITED_CLIENT_PRIVACY_RESTRICTION",
     "AUTH_ERROR",
+    # Milestone 2.1.8: tiktok_auth.TikTokReauthorizationRequiredError always
+    # carries this code — the refresh token is expired/revoked/never
+    # issued, or TikTok's token endpoint explicitly rejected a refresh
+    # request. Listed explicitly (not left to the http_status fallback)
+    # so it stays terminal even though the underlying failure may itself
+    # carry a 4xx http_status that would otherwise route through the same
+    # fallback path other unrecognized codes use.
+    "REAUTHORIZATION_REQUIRED",
 })
 
 

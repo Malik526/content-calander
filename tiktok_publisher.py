@@ -124,10 +124,19 @@ class TikTokPublisher(Publisher):
         self.unaudited = unaudited
 
     def _headers(self) -> dict:
+        """Milestone 2.1.8: propagates the underlying TikTokAuthError's own
+        reason_code/http_status onto the PublishError instead of collapsing
+        every auth failure into a single hardcoded "AUTH_ERROR" — a
+        transient failure to reach TikTok's token endpoint while refreshing
+        (reason_code="NETWORK_ERROR") or a temporary 5xx from it now
+        classifies as retryable, exactly like any other transient
+        publishing failure, while a TikTokReauthorizationRequiredError
+        (already reason_code="REAUTHORIZATION_REQUIRED") stays
+        unconditionally terminal — see retry_classification.py."""
         try:
             token = get_access_token()
         except TikTokAuthError as exc:
-            raise PublishError(str(exc), reason_code="AUTH_ERROR") from exc
+            raise PublishError(str(exc), reason_code=exc.reason_code, http_status=exc.http_status) from exc
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=UTF-8"}
 
     def query_creator_info(self) -> dict:

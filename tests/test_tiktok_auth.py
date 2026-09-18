@@ -27,6 +27,14 @@ def tiktok_credentials(monkeypatch, tmp_path):
     monkeypatch.setattr(ta, "TIKTOK_REDIRECT_URI", "")
     monkeypatch.setattr(ta, "TIKTOK_TOKEN_PATH", tmp_path / "tiktok_token.json")
     monkeypatch.setattr(ta, "TIKTOK_PENDING_AUTH_PATH", tmp_path / "tiktok_pending_auth.json")
+    # Milestone 2.1.8: TIKTOK_REFRESH_LOCK_PATH is a separate module-level
+    # constant (not derived from TIKTOK_TOKEN_PATH at call time), so it
+    # must be redirected here too — otherwise get_access_token()'s refresh
+    # path would flock() the real ~/.config/content-calendar/tiktok_refresh.lock
+    # file from every test that exercises a refresh, exactly the "ad hoc
+    # auth test accidentally touched the real token cache" mistake this
+    # milestone's brief calls out.
+    monkeypatch.setattr(ta, "TIKTOK_REFRESH_LOCK_PATH", tmp_path / "tiktok_refresh.lock")
 
 
 def _valid_token(now=None, access_ttl_minutes=60, refresh_ttl_days=300):

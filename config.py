@@ -373,6 +373,16 @@ TIKTOK_TOKEN_PATH = Path(
     )
 ).expanduser()
 
+# Milestone 2.1.8: how long before a cached access token's documented
+# expiry tiktok_auth.get_access_token() proactively refreshes it, so a
+# token that's merely "technically still valid" at the start of a call
+# doesn't expire mid-request (creator_info -> init -> upload -> polling).
+# TikTok's access tokens live 24h (86400s) per its OAuth docs; a 5-minute
+# default skew is centrally defined here (not scattered across call
+# sites), matching the RETRY_BACKOFF_MINUTES/PLATFORM_POST_STALE_MINUTES
+# env-overridable pattern.
+TIKTOK_TOKEN_REFRESH_SKEW_SECONDS = int(os.getenv("CONTENT_CALENDAR_TIKTOK_TOKEN_REFRESH_SKEW_SECONDS", "300"))
+
 # TikTok Direct Post privacy_level for every post this milestone creates.
 # SELF_ONLY (private, visible only to the posting account) is the deliberate
 # default and the only level TikTokPublisher(unaudited=True) (the default)
