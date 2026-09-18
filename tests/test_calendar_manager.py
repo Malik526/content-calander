@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 from googleapiclient.errors import HttpError
 
-import calendar_manager
+from content_automation.calendar import calendar_manager
 
 
 def _http_error(status: int) -> HttpError:

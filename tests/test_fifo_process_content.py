@@ -13,11 +13,17 @@ from pathlib import Path
 
 import pytest
 
-import classification
-import media
-import process_content
-from content_store import ContentStore
-from transcription import TranscriptionError, TranscriptResult
+from content_automation.media import classification
+from content_automation.media import inspection as media
+from content_automation.media import processing as process_content
+# The one test below that drives main() (test_fifo_mode_never_constructs_a_classifier)
+# needs the thin CLI wrapper specifically — ROUTING_MODE/INCOMING_DIR/
+# ContentStore are only re-imported there, not in the package logic module
+# process_one() itself reads PROCESSED_DIR/FAILED_DIR/ROUTING_MODE from
+# (content_automation.media.processing, aliased above as process_content).
+import process_content as process_content_cli
+from content_automation.persistence.content_store import ContentStore
+from content_automation.media.transcription import TranscriptionError, TranscriptResult
 
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
@@ -367,15 +373,15 @@ def test_fifo_mode_never_constructs_a_classifier(monkeypatch, tmp_path, capsys):
     mode — classification.build_classifier() is never even called."""
     monkeypatch.setattr(sys, "argv", ["process_content.py"])
     monkeypatch.setattr(media, "check_ffmpeg_available", lambda: None)
-    monkeypatch.setattr(process_content, "ROUTING_MODE", "fifo")
-    monkeypatch.setattr(process_content, "INCOMING_DIR", tmp_path / "incoming")
-    monkeypatch.setattr(process_content, "ContentStore", lambda: ContentStore(db_path=tmp_path / "test.db"))
+    monkeypatch.setattr(process_content_cli, "ROUTING_MODE", "fifo")
+    monkeypatch.setattr(process_content_cli, "INCOMING_DIR", tmp_path / "incoming")
+    monkeypatch.setattr(process_content_cli, "ContentStore", lambda: ContentStore(db_path=tmp_path / "test.db"))
 
     def _must_not_be_called(*args, **kwargs):
         raise AssertionError("classification.build_classifier must not be called in FIFO mode")
 
     monkeypatch.setattr(classification, "build_classifier", _must_not_be_called)
 
-    process_content.main()  # must not raise
+    process_content_cli.main()  # must not raise
 
     assert "No videos found" in capsys.readouterr().out

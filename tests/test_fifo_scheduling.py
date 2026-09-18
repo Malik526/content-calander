@@ -11,11 +11,11 @@ from datetime import datetime
 
 import pytest
 
-import generate_calendar
-import scheduling
-from content_store import ContentStore
-from generate_calendar import build_event_body, build_schedule
-from scheduling import generate_posting_dates
+from content_automation.calendar import cadence
+from content_automation.calendar import generate_calendar
+from content_automation.calendar.cadence import generate_posting_dates
+from content_automation.calendar.generate_calendar import build_event_body, build_schedule
+from content_automation.persistence.content_store import ContentStore
 
 PAST_BOUNDARY = datetime(2000, 1, 1)
 
@@ -36,7 +36,7 @@ def test_build_schedule_fifo_matches_full_future_only_date_set():
     """FIFO's WHEN is exactly generate_posting_dates + filter_future_dates —
     no allocation/reallocation logic touches the count."""
     dates = generate_posting_dates(2026, 6, 4, "auto", "09:00")
-    expected = scheduling.filter_future_dates(dates, PAST_BOUNDARY)
+    expected = cadence.filter_future_dates(dates, PAST_BOUNDARY)
 
     schedule = build_schedule(2026, 6, start_at=PAST_BOUNDARY, routing_mode="fifo")
 
@@ -147,7 +147,7 @@ def test_fifo_assignment_is_strict_ingestion_order(store):
     video_b = store.insert_video("hash-b", "b.mp4", "/incoming/b.mp4", "2026-01-01T00:00:02")
     video_c = store.insert_video("hash-c", "c.mp4", "/incoming/c.mp4", "2026-01-01T00:00:03")
 
-    import slot_matcher
+    from content_automation.scheduling import slot_matcher
 
     assignments = []
     for video in (video_a, video_b, video_c):
@@ -168,7 +168,7 @@ def test_fifo_matching_ignores_pillar_entirely(store):
     store.insert_slot_if_missing("2026-09-05T09:00:00", "engineering", "p", "2026-01-01T00:00:00")
     store.insert_slot_if_missing("2026-09-01T09:00:00", None, None, "2026-01-01T00:00:00")
 
-    import slot_matcher
+    from content_automation.scheduling import slot_matcher
 
     slot = slot_matcher.select_slot_fifo(store, now=datetime(2000, 1, 1))
 
@@ -177,6 +177,6 @@ def test_fifo_matching_ignores_pillar_entirely(store):
 
 
 def test_fifo_matching_returns_none_when_no_open_slot(store):
-    import slot_matcher
+    from content_automation.scheduling import slot_matcher
 
     assert slot_matcher.select_slot_fifo(store, now=datetime(2000, 1, 1)) is None

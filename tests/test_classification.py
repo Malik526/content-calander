@@ -9,8 +9,8 @@ CLASSIFICATION_FAILED.
 
 import pytest
 
-from classification import ClassificationError, _validate_result
-from config import AUTO_ASSIGN_THRESHOLD
+from content_automation.media.classification import ClassificationError, _validate_result
+from content_automation.config import AUTO_ASSIGN_THRESHOLD
 
 # Deliberately arbitrary/generic, not imported from config.CONTENT_TYPES:
 # this file tests _validate_result's generic contract (pillar restricted to

@@ -8,8 +8,8 @@ from datetime import datetime
 
 import pytest
 
-import platform_post_materializer as ppm
-from content_store import ContentStore
+from content_automation.scheduling import platform_post_materializer as ppm
+from content_automation.persistence.content_store import ContentStore
 
 NOW = datetime(2026, 9, 14, 8, 0, 0)
 

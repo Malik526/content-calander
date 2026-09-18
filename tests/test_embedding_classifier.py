@@ -7,7 +7,7 @@ test_embedding_classifier_real_model.py (skipped by default — see that file).
 
 import pytest
 
-from classification import ClassificationError, EmbeddingClassifier, UnsupportedClassifierError, build_classifier
+from content_automation.media.classification import ClassificationError, EmbeddingClassifier, UnsupportedClassifierError, build_classifier
 
 PILLARS = {
     "building": {"label": "Building Systems & Tools", "description": "Building tools and automation.", "classification_examples": ["Explaining an API integration."]},
@@ -206,7 +206,7 @@ def test_embeddings_selected_by_default():
 
 
 def test_claude_selectable():
-    from classification import ClaudeClassifier
+    from content_automation.media.classification import ClaudeClassifier
     clf = build_classifier("claude")
     assert isinstance(clf, ClaudeClassifier)
 

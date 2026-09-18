@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-import media
-import tiktok_publisher as tp
-from publisher import PublishError
+from content_automation.media import inspection as media
+from content_automation.publishing.tiktok import publisher as tp
+from content_automation.publishing.publisher import PublishError
 
 
 class _FakeResponse:
@@ -88,7 +88,7 @@ def test_headers_include_bearer_token():
 
 
 def test_headers_wrap_auth_error_as_publish_error(monkeypatch):
-    from tiktok_auth import TikTokAuthError
+    from content_automation.publishing.tiktok.auth import TikTokAuthError
 
     def _raise(*a, **k):
         raise TikTokAuthError("no credentials")

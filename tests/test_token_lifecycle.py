@@ -30,13 +30,13 @@ from pathlib import Path
 
 import pytest
 
-import publish_tiktok as pt
-import retry_classification
-import tiktok_auth as ta
-import tiktok_publisher as tp
-import worker
-from content_store import ContentStore
-from publisher import PublishError, PublishResult, PublishStatusResult
+from content_automation.scheduling import publish_tiktok as pt
+from content_automation.scheduling import retry_classification
+from content_automation.publishing.tiktok import auth as ta
+from content_automation.publishing.tiktok import publisher as tp
+from content_automation.scheduling import worker
+from content_automation.persistence.content_store import ContentStore
+from content_automation.publishing.publisher import PublishError, PublishResult, PublishStatusResult
 
 NOW = datetime(2026, 9, 14, 8, 0, 0)
 
@@ -433,7 +433,7 @@ def test_worker_revoked_refresh_token_ends_failed_not_retried(monkeypatch, store
     # tiktok_auth.refresh_access_token) — not a loose substring guess, so
     # this can't false-positive the way a bare "revoked"/"invalid" check
     # could (e.g. against an unrelated tmp-path component).
-    assert "python3 tiktok_auth.py --authorize" in final.failure_reason
+    assert "python3 cli/tiktok_auth.py --authorize" in final.failure_reason
     assert final.retry_count == 0
 
 

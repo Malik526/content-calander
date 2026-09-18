@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-import crash_recovery as cr
-import reconciliation as recon
-from content_store import ContentStore
-from publisher import PublishError, PublishResult, PublishStatusResult
+from content_automation.scheduling import crash_recovery as cr
+from content_automation.scheduling import reconciliation as recon
+from content_automation.persistence.content_store import ContentStore
+from content_automation.publishing.publisher import PublishError, PublishResult, PublishStatusResult
 
 NOW = datetime(2026, 2, 1, 12, 0, 0, tzinfo=timezone.utc)
 _video_counter = itertools.count()
@@ -171,12 +171,12 @@ def test_processing_status_schedules_next_check_at_first_backoff_interval(store)
     final = store.get_platform_post(row.video_id, "tiktok")
     assert summary.still_processing == 1
     assert final.status_check_count == 1
-    from config import STATUS_CHECK_BACKOFF_SECONDS
+    from content_automation.config import STATUS_CHECK_BACKOFF_SECONDS
     assert final.next_status_check_at == (NOW + timedelta(seconds=STATUS_CHECK_BACKOFF_SECONDS[0])).isoformat()
 
 
 def test_repeated_processing_increases_backoff_delay(store):
-    from config import STATUS_CHECK_BACKOFF_SECONDS
+    from content_automation.config import STATUS_CHECK_BACKOFF_SECONDS
 
     row = _publishing_row(store)
     publisher = FakePublisher(status_result=PublishStatusResult(status="PROCESSING_UPLOAD"))
@@ -198,7 +198,7 @@ def test_repeated_processing_increases_backoff_delay(store):
 
 
 def test_backoff_caps_at_last_interval_rather_than_growing_unbounded(store):
-    from config import STATUS_CHECK_BACKOFF_SECONDS
+    from content_automation.config import STATUS_CHECK_BACKOFF_SECONDS
 
     row = _publishing_row(store, status_check_count=len(STATUS_CHECK_BACKOFF_SECONDS) + 3)
     publisher = FakePublisher(status_result=PublishStatusResult(status="PROCESSING_UPLOAD"))
@@ -276,7 +276,7 @@ def test_transient_status_check_failure_does_not_resubmit(store):
 
 
 def test_transient_status_check_failure_schedules_another_check(store):
-    from config import STATUS_CHECK_BACKOFF_SECONDS
+    from content_automation.config import STATUS_CHECK_BACKOFF_SECONDS
 
     row = _publishing_row(store)
     publisher = FakePublisher(status_result=PublishError("network blip", reason_code="NETWORK_ERROR"))
@@ -296,8 +296,8 @@ def test_transient_status_check_failure_schedules_another_check(store):
 # ---------------------------------------------------------------------------
 
 def test_token_refresh_can_happen_during_reconciliation(monkeypatch, store, tmp_path):
-    import tiktok_auth as ta
-    import tiktok_publisher as tp
+    from content_automation.publishing.tiktok import auth as ta
+    from content_automation.publishing.tiktok import publisher as tp
 
     monkeypatch.setattr(ta, "TIKTOK_CLIENT_KEY", "fake_key")
     monkeypatch.setattr(ta, "TIKTOK_CLIENT_SECRET", "fake_secret")
@@ -347,8 +347,8 @@ def test_token_refresh_can_happen_during_reconciliation(monkeypatch, store, tmp_
 
 
 def test_reauthorization_required_marks_failed_and_stops_polling(monkeypatch, store, tmp_path):
-    import tiktok_auth as ta
-    import tiktok_publisher as tp
+    from content_automation.publishing.tiktok import auth as ta
+    from content_automation.publishing.tiktok import publisher as tp
 
     monkeypatch.setattr(ta, "TIKTOK_CLIENT_KEY", "fake_key")
     monkeypatch.setattr(ta, "TIKTOK_CLIENT_SECRET", "fake_secret")
@@ -393,8 +393,8 @@ def test_reauthorization_required_does_not_schedule_another_check(monkeypatch, s
     reconciliation again — it leaves PUBLISHING entirely, so
     get_reconcilable_platform_posts excludes it structurally regardless of
     next_status_check_at, exactly like any other terminal outcome."""
-    import tiktok_auth as ta
-    import tiktok_publisher as tp
+    from content_automation.publishing.tiktok import auth as ta
+    from content_automation.publishing.tiktok import publisher as tp
 
     monkeypatch.setattr(ta, "TIKTOK_CLIENT_KEY", "fake_key")
     monkeypatch.setattr(ta, "TIKTOK_CLIENT_SECRET", "fake_secret")
@@ -434,9 +434,9 @@ def test_transient_auth_network_failure_stays_publishing_and_reschedules(monkeyp
     refreshing must NOT be treated as reauthorization-required — the row
     stays PUBLISHING and another check is scheduled, exactly like any
     other transient status-check failure."""
-    import tiktok_auth as ta
-    import tiktok_publisher as tp
-    from config import STATUS_CHECK_BACKOFF_SECONDS
+    from content_automation.publishing.tiktok import auth as ta
+    from content_automation.publishing.tiktok import publisher as tp
+    from content_automation.config import STATUS_CHECK_BACKOFF_SECONDS
 
     monkeypatch.setattr(ta, "TIKTOK_CLIENT_KEY", "fake_key")
     monkeypatch.setattr(ta, "TIKTOK_CLIENT_SECRET", "fake_secret")

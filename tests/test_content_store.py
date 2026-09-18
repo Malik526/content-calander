@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from content_store import ContentStore, _videos_fk_needs_repair
+from content_automation.persistence.content_store import ContentStore, _videos_fk_needs_repair
 
 
 @pytest.fixture

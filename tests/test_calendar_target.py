@@ -9,8 +9,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import calendar_manager
-import generate_calendar
+# Milestone 3.0 package refactor: build_schedule()'s own free variables
+# (e.g. now_in_config_timezone) resolve against the PACKAGE module's
+# globals, so patching those must target `generate_calendar` (the
+# package). main()/parse_args() and what main() itself calls
+# (build_calendar_service, ContentStore) live in the thin CLI wrapper
+# (cli/generate_calendar.py, importable bare via pytest.ini's
+# pythonpath), so those are patched on `generate_calendar_cli` instead —
+# patching the package copy would not affect what main() actually calls.
+import generate_calendar as generate_calendar_cli
+from content_automation.calendar import calendar_manager, generate_calendar
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +32,7 @@ def fixed_now(monkeypatch):
 def test_calendar_flag_defaults_to_none(monkeypatch):
     """No implicit target — not "primary", not DEFAULT_CALENDAR_ID."""
     monkeypatch.setattr(sys, "argv", ["generate_calendar.py"])
-    args = generate_calendar.parse_args()
+    args = generate_calendar_cli.parse_args()
     assert args.calendar is None
 
 
@@ -37,9 +45,9 @@ def test_dry_run_never_touches_calendar_manager_or_service_account(monkeypatch, 
         raise AssertionError("dry-run must not call this")
 
     monkeypatch.setattr(calendar_manager, "build_oauth_calendar_service", _fail)
-    monkeypatch.setattr(generate_calendar, "build_calendar_service", _fail)
+    monkeypatch.setattr(generate_calendar_cli, "build_calendar_service", _fail)
 
-    generate_calendar.main()  # must not raise
+    generate_calendar_cli.main()  # must not raise
 
     out = capsys.readouterr().out
     assert "Dry run enabled" in out
@@ -57,16 +65,16 @@ def test_default_path_uses_oauth_and_dedicated_calendar(monkeypatch, tmp_path):
     def _service_account_should_not_be_called(*a, **k):
         raise AssertionError("default path must not use the service account")
 
-    monkeypatch.setattr(generate_calendar, "build_calendar_service", _service_account_should_not_be_called)
+    monkeypatch.setattr(generate_calendar_cli, "build_calendar_service", _service_account_should_not_be_called)
 
     # Isolate persistence so this doesn't touch the real data/content.db.
-    import content_store
+    from content_automation.persistence import content_store
     monkeypatch.setattr(content_store, "DB_PATH", tmp_path / "test.db")
-    monkeypatch.setattr(generate_calendar, "ContentStore", lambda: content_store.ContentStore(db_path=tmp_path / "test.db"))
+    monkeypatch.setattr(generate_calendar_cli, "ContentStore", lambda: content_store.ContentStore(db_path=tmp_path / "test.db"))
 
     fake_service.events().insert.return_value.execute.return_value = {"id": "evt-1"}
 
-    generate_calendar.main()  # must not raise
+    generate_calendar_cli.main()  # must not raise
 
     calls = fake_service.events().insert.call_args_list
     assert len(calls) > 0
@@ -81,7 +89,7 @@ def test_explicit_calendar_override_uses_service_account_not_oauth(monkeypatch, 
     )
 
     fake_service = MagicMock()
-    monkeypatch.setattr(generate_calendar, "build_calendar_service", lambda path: fake_service)
+    monkeypatch.setattr(generate_calendar_cli, "build_calendar_service", lambda path: fake_service)
 
     def _oauth_should_not_be_called(*a, **k):
         raise AssertionError("explicit --calendar override must not use OAuth")
@@ -89,12 +97,12 @@ def test_explicit_calendar_override_uses_service_account_not_oauth(monkeypatch, 
     monkeypatch.setattr(calendar_manager, "build_oauth_calendar_service", _oauth_should_not_be_called)
     monkeypatch.setattr(calendar_manager, "resolve_app_calendar", _oauth_should_not_be_called)
 
-    import content_store
-    monkeypatch.setattr(generate_calendar, "ContentStore", lambda: content_store.ContentStore(db_path=tmp_path / "test.db"))
+    from content_automation.persistence import content_store
+    monkeypatch.setattr(generate_calendar_cli, "ContentStore", lambda: content_store.ContentStore(db_path=tmp_path / "test.db"))
 
     fake_service.events().insert.return_value.execute.return_value = {"id": "evt-1"}
 
-    generate_calendar.main()
+    generate_calendar_cli.main()
 
     calls = fake_service.events().insert.call_args_list
     assert len(calls) > 0

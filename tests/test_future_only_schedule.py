@@ -11,12 +11,19 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import calendar_manager
-import generate_calendar
-from config import CONTENT_TYPES, POSTING_DAYS, POSTING_TIME, POSTS_PER_WEEK
-from content_store import ContentStore
-from generate_calendar import build_schedule
-from scheduling import allocate_pillars, generate_posting_dates
+# Milestone 3.0 package refactor: build_schedule()'s own free variables
+# (e.g. now_in_config_timezone) resolve against the PACKAGE module's
+# globals, so patching those must target `generate_calendar` (the
+# package). main() and what it calls (build_calendar_service,
+# ContentStore) live in the thin CLI wrapper (cli/generate_calendar.py,
+# importable bare via pytest.ini's pythonpath), so those are patched on
+# `generate_calendar_cli` instead.
+import generate_calendar as generate_calendar_cli
+from content_automation.calendar import calendar_manager, generate_calendar
+from content_automation.calendar.cadence import allocate_pillars, generate_posting_dates
+from content_automation.calendar.generate_calendar import build_schedule
+from content_automation.config import CONTENT_TYPES, POSTING_DAYS, POSTING_TIME, POSTS_PER_WEEK
+from content_automation.persistence.content_store import ContentStore
 
 
 def test_build_schedule_default_start_at_uses_now_in_config_timezone(monkeypatch):
@@ -113,10 +120,10 @@ def test_main_reports_no_future_slots_and_touches_nothing_for_past_month(monkeyp
         raise AssertionError("must not be called when there are no future slots")
 
     monkeypatch.setattr(calendar_manager, "build_oauth_calendar_service", _fail)
-    monkeypatch.setattr(generate_calendar, "build_calendar_service", _fail)
-    monkeypatch.setattr(generate_calendar, "ContentStore", _fail)
+    monkeypatch.setattr(generate_calendar_cli, "build_calendar_service", _fail)
+    monkeypatch.setattr(generate_calendar_cli, "ContentStore", _fail)
 
-    generate_calendar.main()  # must not raise
+    generate_calendar_cli.main()  # must not raise
 
     out = capsys.readouterr().out
     assert "No future posting slots remain for September 2026." in out
@@ -128,7 +135,7 @@ def test_main_dry_run_past_month_reports_cleanly(monkeypatch, capsys):
     )
     monkeypatch.setattr(generate_calendar, "now_in_config_timezone", lambda: datetime(2026, 10, 1, 0, 0))
 
-    generate_calendar.main()  # must not raise, must not print a schedule table
+    generate_calendar_cli.main()  # must not raise, must not print a schedule table
 
     out = capsys.readouterr().out
     assert "No future posting slots remain for September 2026." in out
@@ -142,7 +149,7 @@ def test_main_dry_run_partial_month_shows_only_future_slots(monkeypatch, capsys)
     fixed_now = datetime(2026, 9, 12, 13, 0)
     monkeypatch.setattr(generate_calendar, "now_in_config_timezone", lambda: fixed_now)
 
-    generate_calendar.main()
+    generate_calendar_cli.main()
 
     out = capsys.readouterr().out
     expected_total = len(build_schedule(2026, 9, start_at=fixed_now))

@@ -7,8 +7,8 @@ credential — see PROJECT_STATE.md and the 2026-09-12 CHANGELOG.md entry.
 
 import pytest
 
-from classification import EmbeddingClassifier, build_classifier
-from config import CLASSIFIER, CONTENT_TYPES
+from content_automation.media.classification import EmbeddingClassifier, build_classifier
+from content_automation.config import CLASSIFIER, CONTENT_TYPES
 
 
 def test_active_pillar_keys_are_the_provisional_engineering_set():

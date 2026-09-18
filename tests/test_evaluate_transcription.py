@@ -8,8 +8,8 @@ import json
 import pytest
 
 import evaluate_transcription as et
-import media
-import transcription
+from content_automation.media import inspection as media
+from content_automation.media import transcription
 
 
 class FakeTranscriber:

@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 import backfill_platform_posts as bpp
-from content_store import ContentStore
+from content_automation.persistence.content_store import ContentStore
 
 NOW = datetime(2026, 9, 14, 8, 0, 0)
 

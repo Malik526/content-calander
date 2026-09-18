@@ -9,8 +9,8 @@ is covered separately in tests/test_future_only_schedule.py."""
 
 from datetime import datetime
 
-from content_store import ContentStore
-from generate_calendar import build_event_body, build_schedule, get_content_label
+from content_automation.calendar.generate_calendar import build_event_body, build_schedule, get_content_label
+from content_automation.persistence.content_store import ContentStore
 
 PAST_BOUNDARY = datetime(2000, 1, 1)  # old enough that no configured month is ever "in the past" relative to it
 

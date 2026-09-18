@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import migrate_relocated_paths as mrp
-from content_store import ContentStore
+from content_automation.persistence.content_store import ContentStore
 
 OLD_ROOT = "/home/malik/growth_agency/internal-tools/content-calendar"
 

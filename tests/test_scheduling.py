@@ -1,12 +1,16 @@
-"""Tests for scheduling.py: posting-date generation, pillar allocation,
-pillar sequencing, configuration validation, and future-only filtering."""
+"""Tests for content_automation.calendar.cadence (Milestone 3.0: renamed
+from the original root-level scheduling.py to avoid colliding with the
+new content_automation.scheduling package — see
+docs/evaluations/productization/milestone-3.0-backend-package-refactor.md):
+posting-date generation, pillar allocation, pillar sequencing,
+configuration validation, and future-only filtering."""
 
 from datetime import datetime, time
 
 import pytest
 
-import scheduling
-from scheduling import (
+from content_automation.calendar import cadence
+from content_automation.calendar.cadence import (
     ScheduleConfigError,
     allocate_pillars,
     auto_posting_weekdays,
@@ -95,7 +99,7 @@ def test_auto_posting_weekdays_returns_n_distinct_valid_names(n):
     days = auto_posting_weekdays(n)
     assert len(days) == n
     assert len(set(days)) == n
-    assert all(day in scheduling.WEEKDAY_NAMES for day in days)
+    assert all(day in cadence.WEEKDAY_NAMES for day in days)
 
 
 def test_auto_posting_weekdays_is_deterministic():
@@ -103,7 +107,7 @@ def test_auto_posting_weekdays_is_deterministic():
 
 
 def test_auto_posting_weekdays_seven_is_every_day():
-    assert set(auto_posting_weekdays(7)) == set(scheduling.WEEKDAY_NAMES)
+    assert set(auto_posting_weekdays(7)) == set(cadence.WEEKDAY_NAMES)
 
 
 # ---------------------------------------------------------------------------

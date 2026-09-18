@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import tiktok_auth as ta
+from content_automation.publishing.tiktok import auth as ta
 
 
 @pytest.fixture(autouse=True)

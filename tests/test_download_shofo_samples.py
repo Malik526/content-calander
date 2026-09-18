@@ -9,7 +9,7 @@ import json
 import pytest
 
 import download_shofo_samples as dss
-import media
+from content_automation.media import inspection as media
 
 
 DATASET_NAME = "Shofo/shofo-talking-head-en"

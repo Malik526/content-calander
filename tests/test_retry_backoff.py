@@ -16,12 +16,12 @@ from pathlib import Path
 
 import pytest
 
-import publish_tiktok as pt
-import retry_classification
-import worker
-from config import MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_MINUTES
-from content_store import ContentStore
-from publisher import PublishError, PublishResult, PublishStatusResult
+from content_automation.scheduling import publish_tiktok as pt
+from content_automation.scheduling import retry_classification
+from content_automation.scheduling import worker
+from content_automation.config import MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_MINUTES
+from content_automation.persistence.content_store import ContentStore
+from content_automation.publishing.publisher import PublishError, PublishResult, PublishStatusResult
 
 NOW = datetime(2026, 9, 14, 8, 0, 0)
 

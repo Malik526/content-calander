@@ -5,6 +5,10 @@
 __pycache__/
 *.py[cod]
 
+# Editable-install build metadata (pip install -e .) — regenerated locally,
+# never committed. See pyproject.toml / Milestone 3.0's package refactor.
+*.egg-info/
+
 # Local safety backups created during manual migrations.
 *.backup
 

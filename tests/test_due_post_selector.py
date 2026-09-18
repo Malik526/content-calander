@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-import due_post_selector
-from content_store import ContentStore
+from content_automation.scheduling import due_post_selector
+from content_automation.persistence.content_store import ContentStore
 
 NOW = datetime(2026, 9, 14, 8, 0, 0)
 _video_counter = itertools.count()

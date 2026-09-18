@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-import worker
-from content_store import ContentStore
-from publisher import PublishError, PublishResult, PublishStatusResult
+from content_automation.scheduling import worker
+from content_automation.persistence.content_store import ContentStore
+from content_automation.publishing.publisher import PublishError, PublishResult, PublishStatusResult
 
 NOW = datetime(2026, 9, 14, 8, 0, 0)
 

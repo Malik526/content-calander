@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import evaluate_classifier as ec
-from classification import ClassificationError, ClassificationResult
+from content_automation.media.classification import ClassificationError, ClassificationResult
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "eval_sample"
 

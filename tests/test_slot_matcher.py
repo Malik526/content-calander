@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-import slot_matcher
-from content_store import ContentStore, SlotUnavailableError
+from content_automation.scheduling import slot_matcher
+from content_automation.persistence.content_store import ContentStore, SlotUnavailableError
 
 
 @pytest.fixture

@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pytest
 
-import media
-import platform_post_materializer
-import publish_tiktok as pt
-from content_store import ContentStore
-from publisher import PublishError, PublishResult, PublishStatusResult
+from content_automation.media import inspection as media
+from content_automation.scheduling import platform_post_materializer
+from content_automation.scheduling import publish_tiktok as pt
+from content_automation.persistence.content_store import ContentStore
+from content_automation.publishing.publisher import PublishError, PublishResult, PublishStatusResult
 
 
 @pytest.fixture

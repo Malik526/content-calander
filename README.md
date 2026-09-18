@@ -1,6 +1,32 @@
 # Content Automation
 
-Generates a month of short-form video content calendar events and pushes them to Google Calendar automatically, and automates routing recorded videos into that schedule: drop `.mov`/`.mp4` files into `content/incoming/`, run `process_content.py`, and each video is transcribed, given a caption candidate, and assigned to the earliest matching future posting slot.
+Generates a month of short-form video content calendar events and pushes them to Google Calendar automatically, and automates routing recorded videos into that schedule: drop `.mov`/`.mp4` files into `content/incoming/`, run `cli/process_content.py`, and each video is transcribed, given a caption candidate, and assigned to the earliest matching future posting slot.
+
+## Project Structure
+
+Milestone 3.0 reorganized the backend from a flat collection of root-level scripts into a responsibility-based package (behavior-preserving only — see `docs/evaluations/productization/milestone-3.0-backend-package-refactor.md`):
+
+```text
+src/content_automation/   # runtime application package (import as content_automation.*)
+  config.py                #   shared configuration
+  media/                   #   video inspection, transcription, captioning, classification, the ingestion pipeline
+  scheduling/               #   due-post selection, worker, retry/backoff, reconciliation, crash recovery
+  publishing/                #   platform-neutral Publisher contract + publishing/tiktok/ (auth, publisher)
+  persistence/                 #   ContentStore (SQLite)
+  calendar/                     #   Google Calendar generation/management, posting cadence (cadence.py)
+
+cli/                       # thin CLI entry points (python3 cli/<name>.py) — argument parsing only;
+                            # all logic lives in the package above, directly callable by a future service
+tools/evaluation/          # engineering evaluation tooling (classifier/transcription benchmarking) —
+                            # not runtime code; distinct from the evaluation/ data directory below
+
+tests/                     # automated verification
+docs/                       # ADRs + recorded milestone evaluation evidence
+evaluation/                  # golden dataset for tools/evaluation/evaluate_classifier.py (gitignored contents)
+data/, content/               # real SQLite DB + incoming/processed/failed video files
+```
+
+An editable install (`pip install -e .`, via `pyproject.toml`) makes `content_automation` importable from anywhere in the venv — no `sys.path` hacks.
 
 **Two routing modes** (`config.ROUTING_MODE`, default **`fifo`**):
 
@@ -20,13 +46,13 @@ Generation is **future-only** in both modes: run it partway through the current 
 **Generate a month's calendar** — normal operation always targets one dedicated, app-owned "Content Automation" calendar (created on first real run, reused after that — never your primary calendar). Only posting datetimes that haven't already passed are generated: for the current month that means whatever's left from now, not the whole month; for a past month, nothing.
 
 ```bash
-python3 generate_calendar.py --month [MM] --year [YYYY]
+python3 cli/generate_calendar.py --month [MM] --year [YYYY]
 ```
 
 **Example — July 2026:**
 
 ```bash
-python3 generate_calendar.py --month 07 --year 2026
+python3 cli/generate_calendar.py --month 07 --year 2026
 ```
 
 If every candidate posting datetime for the requested month has already passed, the command prints `No future posting slots remain for <Month> <Year>.` and exits cleanly — no Calendar or database writes.
@@ -34,30 +60,30 @@ If every candidate posting datetime for the requested month has already passed, 
 **Preview without creating events or touching Google Calendar at all**
 
 ```bash
-python3 generate_calendar.py --month 07 --year 2026 --dry-run
+python3 cli/generate_calendar.py --month 07 --year 2026 --dry-run
 ```
 
 **Clear the app's managed schedule** (only ever touches the dedicated calendar's own tracked events — see Calendar Ownership below):
 
 ```bash
-python3 clear_calendar.py --dry-run   # report what would be removed
-python3 clear_calendar.py             # clear unassigned (OPEN) slots + their events
-python3 clear_calendar.py --all       # also clear ASSIGNED slots + their events (destructive; see below)
+python3 cli/clear_calendar.py --dry-run   # report what would be removed
+python3 cli/clear_calendar.py             # clear unassigned (OPEN) slots + their events
+python3 cli/clear_calendar.py --all       # also clear ASSIGNED slots + their events (destructive; see below)
 ```
 
 **Advanced/debug: target an explicit calendar by ID directly** (bypasses the dedicated-calendar boundary entirely; opt-in only, uses the shared service account):
 
 ```bash
-python3 generate_calendar.py --month 07 --year 2026 --calendar your_calendar_id@group.calendar.google.com
-python3 clear_calendar.py --calendar your_calendar_id@group.calendar.google.com --start 2026-06-01 --end 2026-07-01
+python3 cli/generate_calendar.py --month 07 --year 2026 --calendar your_calendar_id@group.calendar.google.com
+python3 cli/clear_calendar.py --calendar your_calendar_id@group.calendar.google.com --start 2026-06-01 --end 2026-07-01
 ```
 
 **Process incoming videos:**
 
 ```bash
-python3 process_content.py
-python3 process_content.py --dry-run    # classify/transcribe and cache, but never claim a slot or move a file
-python3 process_content.py --verbose    # print media/transcript/classification detail per video
+python3 cli/process_content.py
+python3 cli/process_content.py --dry-run    # classify/transcribe and cache, but never claim a slot or move a file
+python3 cli/process_content.py --verbose    # print media/transcript/classification detail per video
 ```
 
 Place `.mov`/`.mp4` files in `content/incoming/` first. A video is only auto-assigned once you have generated a month whose slots are still in the future — see "Video Processing Setup" below. This runs **fully locally by default** — no Anthropic API key required, and in the default `fifo` routing mode no classifier is constructed at all (see Routing Mode and Classification below).
@@ -65,9 +91,9 @@ Place `.mov`/`.mp4` files in `content/incoming/` first. A video is only auto-ass
 **Benchmark or calibrate the classifier:**
 
 ```bash
-python3 evaluate_classifier.py --classifier embeddings
-python3 evaluate_classifier.py --classifier claude          # requires ANTHROPIC_API_KEY
-python3 evaluate_classifier.py --classifier embeddings --sweep
+python3 tools/evaluation/evaluate_classifier.py --classifier embeddings
+python3 tools/evaluation/evaluate_classifier.py --classifier claude          # requires ANTHROPIC_API_KEY
+python3 tools/evaluation/evaluate_classifier.py --classifier embeddings --sweep
 ```
 
 Reads your local labeled dataset in `evaluation/` (see Classification below); never touches `data/content.db`.
@@ -109,7 +135,7 @@ Normal operation (`generate_calendar.py`/`clear_calendar.py` with no `--calendar
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), on a project with the **Calendar API** enabled, create an **OAuth 2.0 Client ID** (Application type: **Desktop app**).
 2. Download its JSON and save it at `~/.config/content-calendar/calendar_oauth_client_secrets.json` (override the path via `CONTENT_CALENDAR_OAUTH_CLIENT_SECRETS` in `.env` if you want it elsewhere).
-3. Run `python3 generate_calendar.py --month MM --year YYYY` for real (not `--dry-run`). A browser window opens once for consent; after that, a cached token (`~/.config/content-calendar/calendar_oauth_token.json`) is reused automatically — no browser on later runs.
+3. Run `python3 cli/generate_calendar.py --month MM --year YYYY` for real (not `--dry-run`). A browser window opens once for consent; after that, a cached token (`~/.config/content-calendar/calendar_oauth_token.json`) is reused automatically — no browser on later runs.
 
 Without this, real (non-dry-run) generation fails with a clear error naming exactly what's missing — it never silently falls back to the service account or to "primary".
 
@@ -237,10 +263,10 @@ CONTENT_TYPES = {
 **Calibrating the thresholds:** build a labeled dataset of your own real transcripts in `evaluation/` (see `evaluation/README.md` for the exact format — it's gitignored, your transcripts never enter source control), then:
 
 ```bash
-python3 evaluate_classifier.py --classifier embeddings --sweep
+python3 tools/evaluation/evaluate_classifier.py --classifier embeddings --sweep
 ```
 
-This reports auto-assigned count, **wrong auto-assignments**, review count, and accuracy for a grid of similarity/margin combinations, without re-embedding per combination. Pick the combination with the lowest wrong-auto-assignment rate you're comfortable with, then set `EMBEDDING_MIN_SIMILARITY`/`EMBEDDING_MIN_MARGIN` accordingly. `python3 evaluate_classifier.py --classifier embeddings` (no `--sweep`) runs a normal report against the currently configured thresholds; add `--classifier claude` to compare against Claude on the exact same dataset.
+This reports auto-assigned count, **wrong auto-assignments**, review count, and accuracy for a grid of similarity/margin combinations, without re-embedding per combination. Pick the combination with the lowest wrong-auto-assignment rate you're comfortable with, then set `EMBEDDING_MIN_SIMILARITY`/`EMBEDDING_MIN_MARGIN` accordingly. `python3 tools/evaluation/evaluate_classifier.py --classifier embeddings` (no `--sweep`) runs a normal report against the currently configured thresholds; add `--classifier claude` to compare against Claude on the exact same dataset.
 
 `ClassificationResult.confidence` is a raw cosine similarity for `embeddings`, not a calibrated probability — the CLI labels it "Similarity score" rather than "Confidence" for anything but Claude. See `docs/decisions/0003-local-embedding-classification.md`.
 
@@ -252,8 +278,8 @@ A separate, optional test/evaluation utility (Milestone 1.3.1) for exercising th
 
 ```bash
 pip install -r requirements-eval.txt          # kept out of requirements.txt on purpose
-python3 download_shofo_samples.py --count 12  # ~12 real MP4s + reference metadata, not the full dataset
-python3 evaluate_transcription.py             # faster-whisper vs. the dataset's reference transcript (WER/CER)
+python3 tools/evaluation/download_shofo_samples.py --count 12  # ~12 real MP4s + reference metadata, not the full dataset
+python3 tools/evaluation/evaluate_transcription.py             # faster-whisper vs. the dataset's reference transcript (WER/CER)
 ```
 
 Notes:
@@ -276,24 +302,24 @@ Proves one already-processed video can be published to a **dedicated TikTok test
 2. Set `TIKTOK_CLIENT_KEY` and `TIKTOK_CLIENT_SECRET` in `.env` — never commit real values. Leave `TIKTOK_REDIRECT_URI` unset unless your app registration requires an exact fixed port (see step 3).
 3. Authorize as the dedicated test account. TikTok's desktop OAuth requires PKCE, which this always uses regardless of flow:
    ```bash
-   python3 tiktok_auth.py --authorize
+   python3 cli/tiktok_auth.py --authorize
    ```
    This starts a temporary local callback server, prints (and tries to open) the authorization URL — open it, log in as the dedicated TikTok test account, and approve. The redirect is caught automatically, its `state` is verified before anything is exchanged, and the resulting access/refresh token pair is cached at `~/.config/content-calendar/tiktok_token.json` (outside the repo, like the Calendar OAuth token) and refreshed automatically after that — no browser needed again until the refresh token itself expires (~365 days).
 
    If the interactive flow can't run in your environment (no local port binding, no browser at all), a manual two-command fallback exists — set `TIKTOK_REDIRECT_URI` in `.env` to a registered URI first:
    ```bash
-   python3 tiktok_auth.py --print-auth-url
+   python3 cli/tiktok_auth.py --print-auth-url
    # open the printed URL, log in as the dedicated TikTok test account, approve
    # copy the `code` AND `state` query parameters from the redirect URL, then:
-   python3 tiktok_auth.py --exchange-code <code> --state <state>
+   python3 cli/tiktok_auth.py --exchange-code <code> --state <state>
    ```
 
 ### Publishing one video
 
 ```bash
-python3 publish_tiktok.py --video-id 3
-python3 publish_tiktok.py --video-id 3 --privacy-level SELF_ONLY
-python3 publish_tiktok.py --video-id 3 --poll-only   # re-check an in-flight submission only, never resubmits
+python3 cli/publish_tiktok.py --video-id 3
+python3 cli/publish_tiktok.py --video-id 3 --privacy-level SELF_ONLY
+python3 cli/publish_tiktok.py --video-id 3 --poll-only   # re-check an in-flight submission only, never resubmits
 ```
 
 `--video-id` is a `videos.id` from `data/content.db` — a video already processed (has a `canonical_media_path` and `caption_text`). Every post created by this milestone uses `SELF_ONLY` (private) — TikTok restricts unaudited clients (this app hasn't completed TikTok's review) to `SELF_ONLY` regardless of what else an account's capabilities report, so `publish_tiktok.py` requires it explicitly rather than falling back to any other level. It also validates the stored caption against TikTok's 2200-UTF-16-code-unit limit and the account's own reported max video duration before ever calling TikTok — both fail clearly rather than silently truncating/proceeding.

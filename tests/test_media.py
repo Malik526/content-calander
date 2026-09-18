@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import media
+from content_automation.media import inspection as media
 
 
 def _ffprobe_result(returncode=0, stdout="", stderr=""):

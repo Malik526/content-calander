@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import calendar_manager
+from content_automation.calendar import calendar_manager
 import clear_calendar
-from content_store import ContentStore
+from content_automation.persistence.content_store import ContentStore
 
 
 @pytest.fixture

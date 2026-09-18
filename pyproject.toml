@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "content-automation"
+version = "0.1.0"
+description = "Pickle Batch backend: content ingestion, scheduling, and TikTok publishing."
+requires-python = ">=3.10"
+
+# Milestone 3.0 (package refactor): the only packaging configuration this
+# repository needs is "make content_automation importable from anywhere in
+# the venv, without sys.path hacks" — an editable install (`pip install -e .`)
+# does exactly that via the src/ layout below. Runtime dependencies remain
+# declared in requirements.txt (installed separately), not duplicated here.
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -10,11 +10,11 @@ import subprocess
 
 import pytest
 
-import process_content
-from classification import ClassificationResult
-from config import AUTO_ASSIGN_THRESHOLD
-from content_store import ContentStore
-from transcription import TranscriptResult
+from content_automation.config import AUTO_ASSIGN_THRESHOLD
+from content_automation.media import processing as process_content
+from content_automation.media.classification import ClassificationResult
+from content_automation.media.transcription import TranscriptResult
+from content_automation.persistence.content_store import ContentStore
 
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 

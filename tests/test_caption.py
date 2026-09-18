@@ -3,7 +3,7 @@ CAPTION_MODE validation."""
 
 import pytest
 
-from caption import CaptionConfigError, build_caption_from_transcript, validate_caption_mode
+from content_automation.media.caption import CaptionConfigError, build_caption_from_transcript, validate_caption_mode
 
 
 def test_build_caption_from_transcript_returns_none_for_empty():

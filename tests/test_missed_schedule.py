@@ -24,11 +24,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-import due_post_selector
-import worker
-from config import TIMEZONE
-from content_store import ContentStore
-from publisher import PublishResult, PublishStatusResult
+from content_automation.scheduling import due_post_selector
+from content_automation.scheduling import worker
+from content_automation.config import TIMEZONE
+from content_automation.persistence.content_store import ContentStore
+from content_automation.publishing.publisher import PublishResult, PublishStatusResult
 
 NOW = datetime(2026, 9, 14, 8, 0, 0)
 _video_counter = itertools.count()

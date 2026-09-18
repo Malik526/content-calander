@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-import crash_recovery as cr
-from content_store import ContentStore
-from publisher import PublishResult, PublishStatusResult
+from content_automation.scheduling import crash_recovery as cr
+from content_automation.persistence.content_store import ContentStore
+from content_automation.publishing.publisher import PublishResult, PublishStatusResult
 
 NOW = datetime(2026, 2, 1, 12, 0, 0, tzinfo=timezone.utc)
 

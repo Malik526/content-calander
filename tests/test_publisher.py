@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import publisher
+from content_automation.publishing import publisher
 
 
 def test_publish_error_carries_reason_code():
@@ -36,7 +36,7 @@ def test_publisher_is_abstract_and_cannot_be_instantiated_directly():
 
 
 def test_build_publisher_returns_tiktok_publisher():
-    from tiktok_publisher import TikTokPublisher
+    from content_automation.publishing.tiktok.publisher import TikTokPublisher
 
     result = publisher.build_publisher("tiktok")
     assert isinstance(result, TikTokPublisher)

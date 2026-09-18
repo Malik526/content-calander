@@ -2,8 +2,8 @@
 
 import pytest
 
-import retry_classification as rc
-from publisher import PublishError
+from content_automation.scheduling import retry_classification as rc
+from content_automation.publishing.publisher import PublishError
 
 
 @pytest.mark.parametrize("reason_code", ["NETWORK_ERROR", "UPLOAD_NETWORK_ERROR"])
