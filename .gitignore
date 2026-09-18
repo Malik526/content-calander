@@ -38,3 +38,6 @@ evaluation/video_pipeline/results.jsonl
 
 #ignore virtual environment folder 
 .venv/
+
+#ignore images
+images/
