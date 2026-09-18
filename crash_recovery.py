@@ -50,6 +50,7 @@ from datetime import datetime, timedelta, timezone
 
 from config import PLATFORM_POST_STALE_MINUTES
 from content_store import ContentStore
+from publish_tiktok import _resolve_poll_outcome
 from publisher import PublishError, Publisher
 
 
@@ -116,17 +117,24 @@ def recover_stale_posts_once(
             summary.errors.append(str(exc))
             continue
 
-        if status_result.status == "PUBLISH_COMPLETE":
+        # Milestone 2.1.10: the actual status->fields decision is shared
+        # with publish_tiktok.py's inline poll and reconciliation.py's
+        # routine checks (publish_tiktok._resolve_poll_outcome) — never a
+        # second independently-maintained copy of this mapping. Only the
+        # still-processing branch stays crash-recovery-specific: it
+        # deliberately does NOT write next_status_check_at/
+        # status_check_count the way reconciliation.py does, for the same
+        # reason it never refreshed updated_at — see the comment below.
+        outcome, fields = _resolve_poll_outcome(status_result)
+        if outcome == "PUBLISHED":
             updated = store.update_platform_post_if_unchanged(
-                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(),
-                status="PUBLISHED", published_at=_now_iso(),
+                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), **fields
             )
             if updated:
                 summary.published += 1
-        elif status_result.status == "FAILED":
+        elif outcome == "FAILED":
             updated = store.update_platform_post_if_unchanged(
-                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(),
-                status="FAILED", failure_reason=status_result.failure_reason,
+                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), **fields
             )
             if updated:
                 summary.failed += 1
@@ -138,7 +146,10 @@ def recover_stale_posts_once(
             # rechecking an already-complete job for a full threshold
             # period. Leaving it untouched means the next recovery run
             # checks again immediately, which is safe — get_status() is
-            # read-only and idempotent.
+            # read-only and idempotent. (Milestone 2.1.10: this is
+            # precisely why crash recovery stays the safety net and
+            # reconciliation.py — which DOES schedule next_status_check_at
+            # — is the routine path; see that module's docstring.)
             summary.still_processing += 1
 
     return summary

@@ -61,9 +61,9 @@ from pathlib import Path
 
 import media
 import retry_classification
-from config import MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_MINUTES
+from config import MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_MINUTES, STATUS_CHECK_BACKOFF_SECONDS
 from content_store import ContentStore, PlatformPostRecord, VideoRecord
-from publisher import PublishError, Publisher
+from publisher import PublishError, Publisher, PublishStatusResult
 from slot_matcher import now_in_config_timezone
 from tiktok_publisher import TikTokPublisher
 
@@ -134,9 +134,49 @@ def _schedule_retry_or_fail(store: ContentStore, record: PlatformPostRecord, err
         store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(error))
 
 
+def _next_status_check_at(status_check_count: int, now: datetime) -> str:
+    """Aware-UTC isoformat timestamp for the next automatic reconciliation
+    check (Milestone 2.1.10), indexed by how many status checks a row has
+    already had — capped at config.STATUS_CHECK_BACKOFF_SECONDS' last
+    (longest) interval rather than growing unbounded or ever exhausting
+    (there is no retry-budget equivalent here; nothing was ever
+    resubmitted to "use up" — TikTok will eventually reach a terminal
+    status). `now` must be aware UTC, matching next_status_check_at's own
+    storage convention (see content_store.py's migration comment)."""
+    index = min(status_check_count, len(STATUS_CHECK_BACKOFF_SECONDS) - 1)
+    return (now + timedelta(seconds=STATUS_CHECK_BACKOFF_SECONDS[index])).isoformat()
+
+
+def _resolve_poll_outcome(status_result: PublishStatusResult) -> tuple[str, dict]:
+    """The one TikTok-status -> platform_posts-fields mapping, shared
+    (Milestone 2.1.10) by every caller that ever checks an existing
+    submission's status: _poll_and_update below (the synchronous poll
+    right after submission, and the manual --poll-only CLI),
+    crash_recovery.py's Case B (stale-PUBLISHING safety net), and
+    reconciliation.py (the routine automatic re-check). Never two
+    independently-maintained copies of this decision.
+
+    Returns (outcome, fields): outcome is one of "PUBLISHED"/"FAILED"/
+    "PROCESSING"; fields is what to persist for a terminal outcome
+    (excluding updated_at, which every caller already supplies itself) —
+    empty for "PROCESSING", since what to persist there (next_status_check_at/
+    status_check_count) depends on each caller's own scheduling state, not
+    on the status result alone."""
+    if status_result.status == "PUBLISH_COMPLETE":
+        return "PUBLISHED", {"status": "PUBLISHED", "published_at": _now_iso()}
+    if status_result.status == "FAILED":
+        return "FAILED", {"status": "FAILED", "failure_reason": status_result.failure_reason}
+    return "PROCESSING", {}
+
+
 def _poll_and_update(store: ContentStore, record, publisher: Publisher) -> None:
     """Check an existing submission's status and persist the result.
-    Never resubmits — only ever reads/updates the record it's given."""
+    Never resubmits — only ever reads/updates the record it's given.
+
+    Milestone 2.1.10: a still-processing outcome now also schedules the
+    first automatic reconciliation check (next_status_check_at/
+    status_check_count) instead of leaving the row to wait on a human
+    rerunning --poll-only — reconciliation.py picks it up from here."""
     try:
         status_result = publisher.get_status(record.platform_post_id)
     except PublishError as exc:
@@ -144,16 +184,23 @@ def _poll_and_update(store: ContentStore, record, publisher: Publisher) -> None:
         return
 
     print(f"TikTok status: {status_result.status}")
-    if status_result.status == "PUBLISH_COMPLETE":
-        store.update_platform_post(record.id, updated_at=_now_iso(), status="PUBLISHED", published_at=_now_iso())
+    outcome, fields = _resolve_poll_outcome(status_result)
+
+    if outcome == "PROCESSING":
+        fields = {
+            "next_status_check_at": _next_status_check_at(record.status_check_count, datetime.now(timezone.utc)),
+            "status_check_count": record.status_check_count + 1,
+        }
+        store.update_platform_post(record.id, updated_at=_now_iso(), **fields)
+        print("Not yet final — scheduled for automatic reconciliation (see reconciliation.py), "
+              "or rerun with --poll-only to check again immediately.")
+        return
+
+    store.update_platform_post(record.id, updated_at=_now_iso(), **fields)
+    if outcome == "PUBLISHED":
         print(f"Published. platform_post_id={record.platform_post_id}")
-    elif status_result.status == "FAILED":
-        store.update_platform_post(
-            record.id, updated_at=_now_iso(), status="FAILED", failure_reason=status_result.failure_reason
-        )
-        print(f"TikTok reported failure: {status_result.failure_reason}")
     else:
-        print("Not yet final — rerun with --poll-only to check again.")
+        print(f"TikTok reported failure: {status_result.failure_reason}")
 
 
 def execute_claimed_platform_post(store: ContentStore, video_id: int, platform: str, publisher: Publisher) -> None:

@@ -153,6 +153,14 @@ def _ensure_videos_columns(conn: sqlite3.Connection) -> None:
 _PLATFORM_POSTS_MIGRATION_COLUMNS = {
     "retry_count": "INTEGER NOT NULL DEFAULT 0",
     "next_retry_at": "TEXT",
+    # Milestone 2.1.10 (asynchronous publish reconciliation): distinct from
+    # next_retry_at — next_retry_at gates re-*submitting* a not-yet-accepted
+    # PENDING row; next_status_check_at gates re-*polling* a PUBLISHING row
+    # TikTok has already accepted (platform_post_id set). Aware-UTC
+    # isoformat, matching updated_at's convention (not scheduled_at's naive
+    # local-time convention) — see reconciliation.py.
+    "next_status_check_at": "TEXT",
+    "status_check_count": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -396,6 +404,8 @@ class PlatformPostRecord:
     updated_at: str
     retry_count: int
     next_retry_at: str | None
+    next_status_check_at: str | None
+    status_check_count: int
 
 
 def _row_to_video(row: sqlite3.Row) -> VideoRecord:
@@ -743,6 +753,42 @@ class ContentStore:
             "SELECT * FROM platform_posts WHERE platform = ? AND status = 'PUBLISHING' AND updated_at < ? "
             "ORDER BY updated_at ASC, id ASC",
             (platform, stale_before_iso),
+        ).fetchall()
+        return [_row_to_platform_post(row) for row in rows]
+
+    def get_reconcilable_platform_posts(self, platform: str, now_iso: str) -> list[PlatformPostRecord]:
+        """platform_posts rows for `platform` that TikTok has already
+        accepted (status = PUBLISHING AND platform_post_id IS NOT NULL) and
+        are due for another status check (next_status_check_at IS NULL OR
+        next_status_check_at <= now_iso) — reconciliation.py's routine
+        polling candidates (Milestone 2.1.10), deliberately distinct from
+        both get_due_platform_posts (PENDING-only — work never yet
+        submitted) and get_recoverable_platform_posts (staleness-gated
+        safety net for an abandoned/crashed claim, which does not require
+        platform_post_id to be set at all — see crash_recovery.py's Case
+        A/B split). A row here is never re-submitted, only re-polled — see
+        publish_tiktok._resolve_poll_outcome, the one shared mapping every
+        status-check caller (this module, crash_recovery.py's Case B, and
+        the inline post-submission poll) applies.
+
+        NULL next_status_check_at is immediately eligible — same
+        NULL-means-no-gate convention get_due_platform_posts already uses
+        for next_retry_at — covering any row that predates this milestone's
+        migration and has never had a check scheduled for it yet.
+
+        now_iso must be an aware UTC isoformat string, matching how
+        next_status_check_at/updated_at are always written — the same
+        convention get_recoverable_platform_posts already requires (and a
+        deliberately different one from get_due_platform_posts' naive-
+        local-time now_iso). Ordered oldest-due-for-a-check first, ties
+        broken by id. Pure read — never mutates a row.
+        """
+        rows = self._conn.execute(
+            "SELECT * FROM platform_posts WHERE platform = ? AND status = 'PUBLISHING' "
+            "AND platform_post_id IS NOT NULL "
+            "AND (next_status_check_at IS NULL OR next_status_check_at <= ?) "
+            "ORDER BY next_status_check_at ASC, id ASC",
+            (platform, now_iso),
         ).fetchall()
         return [_row_to_platform_post(row) for row in rows]
 

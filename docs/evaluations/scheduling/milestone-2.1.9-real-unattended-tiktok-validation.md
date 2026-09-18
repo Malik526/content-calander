@@ -2,6 +2,8 @@
 
 Live validation evidence against the real TikTok Sandbox account — the canonical acceptance record for the complete TikTok scheduled-publishing backend. Recorded 2026-09-18. No ADR — no architecture decision was made here, only end-to-end proof of decisions already recorded in Milestones 2.0–2.1.8.
 
+> **Follow-up (Milestone 2.1.10):** the manual `--poll-only` step in Phase 5 below exposed the need for routine asynchronous reconciliation. Milestone 2.1.10 implements that automation — see `docs/evaluations/scheduling/milestone-2.1.10-asynchronous-publish-reconciliation.md`. The live evidence below is unchanged and not rewritten.
+
 ## Purpose
 
 Stop validating pieces in isolation and prove the whole unattended path works for real: a scheduled post becomes due, the worker discovers it, refreshes TikTok authorization if required, claims it exactly once, publishes it privately, persists the final result, and a second pass does not duplicate it.

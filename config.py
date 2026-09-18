@@ -452,3 +452,24 @@ RETRY_BACKOFF_MINUTES = [
 MAX_RETRY_ATTEMPTS = len(RETRY_BACKOFF_MINUTES)
 
 # ---------------------------------------------------------------------------
+# Asynchronous publish reconciliation (Milestone 2.1.10)
+# How long to wait before automatically re-checking a PUBLISHING row TikTok
+# has already accepted (platform_post_id set) but has not yet finished
+# processing (see reconciliation.py, publish_tiktok._resolve_poll_outcome).
+# Indexed by platform_posts.status_check_count, same shape as
+# RETRY_BACKOFF_MINUTES — but deliberately capped rather than exhausted:
+# once status_check_count reaches the end of this list, further checks
+# keep reusing the last (longest) interval indefinitely instead of ever
+# giving up, since TikTok will eventually reach a terminal status and
+# there is no equivalent to a retry budget here (nothing was ever
+# resubmitted to "use up"). Seconds, not minutes — the first checks need
+# finer granularity than a publishing retry does. See
+# docs/evaluations/scheduling/milestone-2.1.10-asynchronous-publish-reconciliation.md.
+# ---------------------------------------------------------------------------
+STATUS_CHECK_BACKOFF_SECONDS = [
+    int(s.strip())
+    for s in os.getenv("CONTENT_CALENDAR_STATUS_CHECK_BACKOFF_SECONDS", "30,60,120,300,600").split(",")
+    if s.strip()
+]
+
+# ---------------------------------------------------------------------------
