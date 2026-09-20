@@ -65,6 +65,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from typing import Callable
+
 from content_automation.calendar.generate_calendar import get_content_label
 from content_automation.config import (
     CAPTION_MODE,
@@ -76,9 +78,11 @@ from content_automation.config import (
 )
 from content_automation.media import caption, classification
 from content_automation.media import inspection as media
+from content_automation.media import media_storage
 from content_automation.media import transcription
 from content_automation.persistence.content_store import ContentStore, SlotRecord, VideoRecord
 from content_automation.scheduling import platform_post_materializer, slot_matcher
+from content_automation.storage.protocol import StorageProtocol
 
 
 @dataclass
@@ -136,6 +140,8 @@ def process_one(
     dry_run: bool,
     routing_mode: str = ROUTING_MODE,
     user_id: int | None = None,
+    on_failed: Callable[[Path], None] | None = None,
+    on_assigned: Callable[[Path], Path | None] | None = None,
 ) -> Outcome:
     """user_id (Milestone 3.2, ownership) is optional and, when supplied,
     stamps every row this call creates (the video itself, and — via
@@ -147,7 +153,27 @@ def process_one(
     Omitting it preserves the exact pre-3.2 unscoped pipeline. The real
     CLI entry point (cli/process_content.py) always resolves and passes
     the local user's id.
+
+    on_failed/on_assigned (Milestone 3.4, object storage) are optional
+    hooks controlling what happens to `path` on a terminal outcome —
+    default to _move_file(path, FAILED_DIR)/_move_file(path, PROCESSED_DIR),
+    the exact pre-3.4 local-ingestion behavior (content/incoming/ ->
+    content/processed/|content/failed/), unchanged whenever this function
+    is called without them (every existing caller, including
+    cli/process_content.py). process_storage_backed_video (below) is the
+    one caller that passes no-op hooks instead: there, `path` is a
+    temporary object-storage materialization
+    (media.media_storage.materialize_canonical_media) already cleaned up
+    by its own context manager — not a permanent content/incoming/ file to
+    relocate — so nothing should be moved anywhere on either outcome.
+    on_assigned's return value (or None) becomes the new
+    videos.canonical_media_path; returning None (the storage-backed case)
+    leaves canonical_media_path exactly as it already was, rather than
+    recording a temp path that is about to stop existing.
     """
+    on_failed = on_failed if on_failed is not None else lambda p: _move_file(p, FAILED_DIR)
+    on_assigned = on_assigned if on_assigned is not None else lambda p: _move_file(p, PROCESSED_DIR)
+
     now_iso = datetime.now(timezone.utc).isoformat()
     file_hash = media.file_hash(path)
 
@@ -168,7 +194,7 @@ def process_one(
             info = media.inspect_media(path)
         except media.MediaError as exc:
             store.update_video(video.id, status="FAILED", failure_reason=exc.reason_code, processed_at=now_iso)
-            _move_file(path, FAILED_DIR)
+            on_failed(path)
             return Outcome(path, store.get_video_by_hash(file_hash), "FAILED")
 
         store.update_video(
@@ -219,7 +245,7 @@ def process_one(
                 video = store.get_video_by_hash(file_hash)
             else:
                 store.update_video(video.id, status="FAILED", failure_reason=reason, processed_at=now_iso)
-                _move_file(path, FAILED_DIR)
+                on_failed(path)
                 return Outcome(path, store.get_video_by_hash(file_hash), "FAILED")
         else:
             store.update_video(
@@ -265,7 +291,7 @@ def process_one(
                 result = classifier.classify(video.transcript, CONTENT_TYPES)
             except classification.ClassificationError:
                 store.update_video(video.id, status="FAILED", failure_reason="CLASSIFICATION_FAILED", processed_at=now_iso)
-                _move_file(path, FAILED_DIR)
+                on_failed(path)
                 return Outcome(path, store.get_video_by_hash(file_hash), "FAILED")
 
             # The classifier already applied its own auto-assign policy: pillar
@@ -307,14 +333,70 @@ def process_one(
     platform_post_materializer.materialize_platform_posts_for_assignment(
         store, video.id, slot.id, now_iso, user_id=user_id
     )
-    dest = _move_file(path, PROCESSED_DIR)
+    dest = on_assigned(path)
     # canonical_media_path was set once at inspect time to the incoming/
     # discovery path; without updating it here it goes stale the instant
     # the file moves, which is exactly the state a later consumer (e.g.
     # publish_tiktok.py, Milestone 2.0) needs to resolve correctly — see
-    # docs/decisions/0006-tiktok-publisher-foundation.md.
-    store.update_video(video.id, status="ASSIGNED", processed_at=now_iso, canonical_media_path=str(dest))
+    # docs/decisions/0006-tiktok-publisher-foundation.md. Milestone 3.4:
+    # dest is None for a storage-backed video (on_assigned is a no-op
+    # there) — canonical_media_path is left exactly as it already was
+    # rather than recording a temp path that's about to stop existing.
+    if dest is not None:
+        store.update_video(video.id, status="ASSIGNED", processed_at=now_iso, canonical_media_path=str(dest))
+    else:
+        store.update_video(video.id, status="ASSIGNED", processed_at=now_iso)
     return Outcome(path, store.get_video_by_hash(file_hash), "ASSIGNED", slot=slot)
+
+
+def process_storage_backed_video(
+    store: ContentStore,
+    storage: StorageProtocol,
+    transcriber: transcription.Transcriber,
+    classifier: classification.ContentClassifier | None,
+    video_id: int,
+    user_id: int,
+    *,
+    dry_run: bool = False,
+    routing_mode: str = ROUTING_MODE,
+) -> Outcome:
+    """Milestone 3.4 hosted processing entry point: process an
+    already-uploaded, storage-backed video (videos.storage_provider/
+    storage_key already set — see
+    media.media_storage.upload_canonical_media, or a future upload API)
+    without requiring a permanent local content/incoming/ or
+    content/processed/|content/failed/ copy — see
+    docs/decisions/0009-object-storage-media-lifecycle.md "Media
+    Processing".
+
+    Reuses process_one's exact inspection/transcription/caption/scheduling
+    logic unmodified — the only differences are where the bytes come from
+    (media.media_storage.materialize_canonical_media, a temporary local
+    file cleaned up automatically when this function returns, success or
+    failure — never a permanent local copy) and that process_one's
+    on_failed/on_assigned hooks are passed as no-ops, since there is no
+    content/incoming/ file to relocate to content/processed/|failed/.
+    Content-hash identity (the same mechanism process_one's own
+    idempotency already relies on) is what makes this safe: the
+    materialized temp file's sha256 matches the already-inserted video
+    row's file_hash, so process_one resolves the existing row rather than
+    creating a duplicate.
+
+    Local CLI ingestion (cli/process_content.py -> process_one) is
+    unaffected and continues to work exactly as before — this is a
+    genuinely separate, additive entry point, not a replacement.
+
+    Raises MediaOwnershipError if video_id does not belong to user_id, or
+    MediaNotUploadedError if the video has no storage_provider/storage_key
+    yet (media.media_storage.materialize_canonical_media's own contract —
+    checked, and the temporary materialization opened, before any
+    processing logic runs).
+    """
+    with media_storage.materialize_canonical_media(store, storage, video_id, user_id) as media_path:
+        return process_one(
+            store, transcriber, classifier, media_path, dry_run=dry_run, routing_mode=routing_mode,
+            user_id=user_id, on_failed=lambda p: None, on_assigned=lambda p: None,
+        )
 
 
 def _move_file(path: Path, dest_dir: Path) -> Path:

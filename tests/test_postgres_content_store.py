@@ -429,9 +429,17 @@ def test_migrations_are_idempotent_on_reopen():
     """Opening a second PostgresContentStore against an already-migrated
     schema must not fail or re-apply anything — proves apply_migrations()'s
     idempotency against a real database, not just its own logic in
-    isolation."""
+    isolation. Compares against the real migrations directory rather than
+    a hardcoded count, so this doesn't need editing every time a new
+    migration file is added (Milestone 3.4 added a second one,
+    0002_add_media_storage_columns.sql — this test's own count was
+    hardcoded to 1 and had to be fixed here for exactly that reason)."""
+    from content_automation.persistence.postgres_migrate import MIGRATIONS_DIR
+
+    expected = len(list(MIGRATIONS_DIR.glob("*.sql")))
+
     with PostgresContentStore(dsn=DATABASE_URL, schema=POSTGRES_TEST_SCHEMA):
         pass
     with PostgresContentStore(dsn=DATABASE_URL, schema=POSTGRES_TEST_SCHEMA) as store:
         count = store._conn.execute("SELECT COUNT(*) AS n FROM schema_migrations").fetchone()["n"]
-        assert count == 1  # exactly one migration file exists today (0001_initial_schema.sql)
+        assert count == expected

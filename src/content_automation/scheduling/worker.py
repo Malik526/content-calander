@@ -46,6 +46,7 @@ from content_automation.persistence.content_store import ContentStore
 from content_automation.publishing.publisher import Publisher
 from content_automation.scheduling import due_post_selector
 from content_automation.scheduling.publish_tiktok import PublishTikTokError, execute_claimed_platform_post
+from content_automation.storage.protocol import StorageProtocol
 
 
 def _now_iso() -> str:
@@ -77,7 +78,7 @@ class WorkerRunSummary:
 
 def run_due_posts_once(
     store: ContentStore, publisher: Publisher, *, platform: str = "tiktok", now: datetime | None = None,
-    user_id: int | None = None,
+    user_id: int | None = None, storage: StorageProtocol | None = None,
 ) -> WorkerRunSummary:
     """Discover due PENDING platform_posts rows for `platform`, attempt to
     atomically claim each one, and execute the proven publish flow for
@@ -98,6 +99,12 @@ def run_due_posts_once(
     existing test relies on. Making this required is deferred until a real
     multi-connection scheduler exists to always supply it — see the
     Milestone 3.2 evaluation record.
+
+    storage (Milestone 3.4, object storage) is optional and forwarded
+    unchanged to execute_claimed_platform_post — only consulted for a
+    video with storage_provider set; every video without one (every
+    pre-3.4 video, and every existing test) is completely unaffected by
+    whether this is supplied.
     """
     summary = WorkerRunSummary()
 
@@ -112,7 +119,7 @@ def run_due_posts_once(
         summary.claimed += 1
 
         try:
-            execute_claimed_platform_post(store, post.video_id, post.platform, publisher)
+            execute_claimed_platform_post(store, post.video_id, post.platform, publisher, storage=storage)
         except PublishTikTokError as exc:
             summary.errors.append(str(exc))
 

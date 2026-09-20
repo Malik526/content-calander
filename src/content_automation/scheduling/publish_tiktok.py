@@ -62,13 +62,16 @@ Dependencies:
 """
 
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from content_automation.config import MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_MINUTES, STATUS_CHECK_BACKOFF_SECONDS
 from content_automation.media import inspection as media
+from content_automation.media.media_storage import materialize_canonical_media
 from content_automation.persistence.content_store import ContentStore, PlatformPostRecord, VideoRecord
 from content_automation.publishing.publisher import PublishError, Publisher, PublishStatusResult
+from content_automation.storage.protocol import StorageProtocol
 from content_automation.scheduling import retry_classification
 from content_automation.scheduling.slot_matcher import now_in_config_timezone
 
@@ -88,16 +91,20 @@ def _slot_scheduled_at(store: ContentStore, video: VideoRecord) -> str | None:
     return slot.scheduled_at if slot else None
 
 
-def _validate_ready_to_publish(video: VideoRecord) -> None:
-    if not video.canonical_media_path or not Path(video.canonical_media_path).exists():
-        raise PublishTikTokError(
-            f"Local media file for video {video.id} not found ({video.canonical_media_path!r})."
-        )
+def _validate_ready_to_publish(video: VideoRecord, media_path: Path) -> None:
+    """media_path is the real local file to validate — either
+    video.canonical_media_path directly (legacy/local-direct, unchanged
+    pre-3.4 behavior) or a temp path materialized from object storage
+    (Milestone 3.4) — the caller (execute_claimed_platform_post) resolves
+    which one applies; this function no longer decides that itself, so it
+    validates identically either way."""
+    if not media_path.exists():
+        raise PublishTikTokError(f"Local media file for video {video.id} not found ({media_path!r}).")
     if not video.caption_text:
         raise PublishTikTokError(f"Video {video.id} has no stored caption_text — cannot publish without one.")
 
     info = media.MediaInfo(
-        path=Path(video.canonical_media_path), container=video.container, video_codec=video.video_codec,
+        path=media_path, container=video.container, video_codec=video.video_codec,
         audio_codec=video.audio_codec, width=video.width, height=video.height, fps=video.fps,
         duration_seconds=video.duration_seconds, file_size_bytes=video.file_size_bytes,
     )
@@ -208,7 +215,64 @@ def _poll_and_update(store: ContentStore, record, publisher: Publisher) -> None:
         print(f"TikTok reported failure: {status_result.failure_reason}")
 
 
-def execute_claimed_platform_post(store: ContentStore, video_id: int, platform: str, publisher: Publisher) -> None:
+@contextmanager
+def _resolved_media_path(store: ContentStore, video: VideoRecord, storage: StorageProtocol | None):
+    """Yield the real local Path to publish from — materialized via
+    `storage` if video.storage_provider is set (Milestone 3.4), or
+    video.canonical_media_path directly (legacy, no network) otherwise.
+    Raises PublishTikTokError immediately (before any cleanup-requiring
+    resource is opened) if the video is storage-backed but no `storage`
+    was supplied — shared by execute_claimed_platform_post and
+    publish_video so both resolve exactly the same way."""
+    if video.storage_provider:
+        if storage is None:
+            raise PublishTikTokError(
+                f"video {video.id} has storage_provider={video.storage_provider!r} but no storage backend "
+                "was supplied."
+            )
+        with materialize_canonical_media(store, storage, video.id, video.user_id) as media_path:
+            yield media_path
+        return
+
+    yield Path(video.canonical_media_path) if video.canonical_media_path else Path("")
+
+
+def _validate_and_submit(
+    store: ContentStore, video: VideoRecord, record: PlatformPostRecord, media_path: Path, publisher: Publisher,
+) -> None:
+    """The actual validate -> submit -> persist -> poll sequence, factored
+    out so execute_claimed_platform_post can run it identically whether
+    media_path came straight from video.canonical_media_path (legacy) or
+    from a Milestone 3.4 object-storage materialization — this function
+    has no idea which, and doesn't need to."""
+    try:
+        _validate_ready_to_publish(video, media_path)
+    except PublishTikTokError as exc:
+        store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc))
+        raise
+
+    try:
+        result = publisher.publish(media_path, video.caption_text)
+    except PublishError as exc:
+        _schedule_retry_or_fail(store, record, exc)
+        raise PublishTikTokError(f"Submission failed: {exc}") from exc
+
+    # Persist the publish_id immediately, separately from the eventual
+    # status outcome — this is what makes a crash between submission and
+    # polling safe: the next run sees platform_post_id set and only polls,
+    # never resubmits.
+    store.update_platform_post(
+        record.id, updated_at=_now_iso(), status="PUBLISHING", platform_post_id=result.platform_post_id
+    )
+    print(f"Submitted to TikTok: publish_id={result.platform_post_id}")
+
+    refreshed = store.get_platform_post(video.id, record.platform)
+    _poll_and_update(store, refreshed, publisher)
+
+
+def execute_claimed_platform_post(
+    store: ContentStore, video_id: int, platform: str, publisher: Publisher, storage: StorageProtocol | None = None,
+) -> None:
     """Execute the proven TikTok publish flow for a platform_posts row that
     has ALREADY been claimed (status == PUBLISHING) via
     ContentStore.claim_platform_post(). Does not claim, and does not
@@ -238,6 +302,23 @@ def execute_claimed_platform_post(store: ContentStore, video_id: int, platform: 
     docstring for why they're not routed through classification at all) —
     now caught here and marked FAILED immediately, same as any other
     terminal publishing failure.
+
+    Milestone 3.4 (object storage): `storage` is optional and, for a
+    video with no storage_provider (every pre-3.4 video, and any new one
+    that hasn't been uploaded to object storage — see
+    media.media_storage), is never even looked at — behavior is byte-for-
+    byte identical to before this milestone, reading directly from
+    video.canonical_media_path. For a video that HAS been uploaded to
+    object storage, `storage` must be supplied; the row is materialized
+    to a temp local path (media.media_storage.materialize_canonical_media)
+    for the duration of validation+submission, then cleaned up — the
+    application/job layer resolves storage, TikTokPublisher itself never
+    learns anything about Supabase/S3 (see
+    docs/decisions/0009-object-storage-media-lifecycle.md "Materialization
+    Boundary"). Missing `storage` for a storage-backed video is a
+    terminal failure (marked FAILED immediately, same as any other
+    precondition failure above) — never silently falls back to a stale/
+    nonexistent local path.
     """
     video = store.get_video(video_id)
     if video is None:
@@ -246,32 +327,21 @@ def execute_claimed_platform_post(store: ContentStore, video_id: int, platform: 
     if record is None:
         raise PublishTikTokError(f"No platform_posts row for video={video_id} platform={platform!r}.")
 
-    try:
-        _validate_ready_to_publish(video)
-    except PublishTikTokError as exc:
+    if video.storage_provider and storage is None:
+        exc = PublishTikTokError(
+            f"video {video_id} has storage_provider={video.storage_provider!r} but no storage backend was supplied."
+        )
         store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc))
-        raise
+        raise exc
 
-    try:
-        result = publisher.publish(Path(video.canonical_media_path), video.caption_text)
-    except PublishError as exc:
-        _schedule_retry_or_fail(store, record, exc)
-        raise PublishTikTokError(f"Submission failed: {exc}") from exc
-
-    # Persist the publish_id immediately, separately from the eventual
-    # status outcome — this is what makes a crash between submission and
-    # polling safe: the next run sees platform_post_id set and only polls,
-    # never resubmits.
-    store.update_platform_post(
-        record.id, updated_at=_now_iso(), status="PUBLISHING", platform_post_id=result.platform_post_id
-    )
-    print(f"Submitted to TikTok: publish_id={result.platform_post_id}")
-
-    record = store.get_platform_post(video_id, platform)
-    _poll_and_update(store, record, publisher)
+    with _resolved_media_path(store, video, storage) as media_path:
+        _validate_and_submit(store, video, record, media_path, publisher)
 
 
-def publish_video(store: ContentStore, video_id: int, publisher: Publisher, *, poll_only: bool = False) -> None:
+def publish_video(
+    store: ContentStore, video_id: int, publisher: Publisher, *, poll_only: bool = False,
+    storage: StorageProtocol | None = None,
+) -> None:
     video = store.get_video(video_id)
     if video is None:
         raise PublishTikTokError(f"No video with id={video_id}.")
@@ -294,8 +364,13 @@ def publish_video(store: ContentStore, video_id: int, publisher: Publisher, *, p
     if record is None:
         # Brand-new video: validate before ever creating a row, so a
         # precondition failure (missing file/caption) leaves nothing to
-        # clean up — matches Milestone 2.0's original guarantee.
-        _validate_ready_to_publish(video)
+        # clean up — matches Milestone 2.0's original guarantee. Milestone
+        # 3.4: _resolved_media_path raises directly (no row exists yet to
+        # mark FAILED) if the video is storage-backed but no storage was
+        # supplied — same "nothing to clean up" guarantee extended to the
+        # object-storage case.
+        with _resolved_media_path(store, video, storage) as media_path:
+            _validate_ready_to_publish(video, media_path)
         record = store.insert_platform_post(
             video_id, "tiktok", created_at=_now_iso(), scheduled_at=_slot_scheduled_at(store, video)
         )
@@ -323,4 +398,4 @@ def publish_video(store: ContentStore, video_id: int, publisher: Publisher, *, p
             "likely already claimed by another process)."
         )
 
-    execute_claimed_platform_post(store, video_id, "tiktok", publisher)
+    execute_claimed_platform_post(store, video_id, "tiktok", publisher, storage=storage)

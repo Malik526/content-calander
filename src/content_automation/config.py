@@ -289,6 +289,48 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 POSTGRES_SCHEMA = os.getenv("POSTGRES_SCHEMA", "public")
 POSTGRES_TEST_SCHEMA = os.getenv("POSTGRES_TEST_SCHEMA", "pickle_batch_test")
 
+# ---------------------------------------------------------------------------
+# Object storage (Milestone 3.4 — media lifecycle)
+# "local" (default) keeps every existing local-filesystem behavior in
+# media/processing.py and scheduling/publish_tiktok.py completely unchanged
+# — nothing in the existing ingestion/publishing pipeline requires object
+# storage to be configured. "supabase" enables the real hosted backend
+# (storage.supabase_storage.SupabaseStorage) for the new, additive
+# upload/materialize capability (media/media_storage.py) — see
+# docs/decisions/0009-object-storage-media-lifecycle.md.
+# ---------------------------------------------------------------------------
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local")
+
+# Base directory LocalStorage stores objects under. Deliberately separate
+# from CONTENT_DIR below (content/incoming|processed|failed/ are the
+# existing ingestion pipeline's own directories, untouched by this
+# milestone) — this is the new object-storage abstraction's own local
+# implementation, used for dev/test and whenever STORAGE_BACKEND=local.
+LOCAL_STORAGE_ROOT = Path(
+    os.getenv("LOCAL_STORAGE_ROOT", str(REPO_ROOT / "data" / "media_storage"))
+).expanduser()
+
+# Supabase Storage — reuses the same project as DATABASE_URL (Milestone
+# 3.3), but this is a genuinely separate decision (object storage, not
+# Postgres) — see the ADR for why Supabase Storage was still evaluated on
+# its own merits, not chosen merely for stack consistency. SUPABASE_URL is
+# the same project URL already used to derive the Postgres pooler host.
+# The service-role key is server-side only, full storage access, never
+# exposed client-side — note the .env variable is literally named
+# SERVICE_ROLE_KEY (not SUPABASE_SERVICE_ROLE_KEY), matching how it was
+# actually provisioned; config exposes it under the clearer name below.
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SERVICE_ROLE_KEY", "")
+
+# Private bucket (created via the Storage API, not the dashboard — see
+# Milestone 3.4 evaluation record) holding real canonical media.
+SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "pickle-batch-media")
+
+# Separate, disposable bucket the storage integration test suite uses
+# instead of SUPABASE_STORAGE_BUCKET — never the real media bucket. Mirrors
+# POSTGRES_TEST_SCHEMA's role for the Postgres integration tests.
+SUPABASE_STORAGE_TEST_BUCKET = os.getenv("SUPABASE_STORAGE_TEST_BUCKET", "pickle-batch-test")
+
 # File lifecycle directories for process_content.py.
 CONTENT_DIR = REPO_ROOT / "content"
 INCOMING_DIR = CONTENT_DIR / "incoming"

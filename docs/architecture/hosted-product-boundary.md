@@ -31,6 +31,23 @@ to SQLite specifically). §6 and §14/§16 are updated in place. Object storage,
 auth-provider integration, and hosted credential storage remain exactly as future as before —
 this milestone did not touch them.
 
+**Milestone 3.4 update (see `docs/decisions/0009-object-storage-media-lifecycle.md` and
+`docs/evaluations/productization/milestone-3.4-object-storage-media-lifecycle.md`):** object
+storage is no longer future work — `storage.supabase_storage.SupabaseStorage` is a real,
+tested implementation of the media boundary §7 describes, running against real Supabase
+Storage, with the five real production videos migrated (local originals retained, never
+deleted). `media/inspection.py` and `publishing/tiktok/publisher.py` were left unmodified,
+exactly as §7's original prediction hoped for — the publishing materialization boundary lives
+in `scheduling/publish_tiktok.py` instead. `media/processing.py` was **minimally extended
+during review** (two optional hooks on `process_one`, plus a new
+`process_storage_backed_video` entry point) after an initial pass left local CLI ingestion as
+the only processing path, which contradicted this document's own "local files are only
+temporary materializations" framing for a video that has actually been uploaded to object
+storage — see ADR-0009's "Media processing" section for the correction record; local
+ingestion's own behavior is unchanged, verified by the full pre-existing test suite. §7 and
+§14/§16 are updated in place. Real auth-provider integration and hosted credential storage
+remain exactly as future as before.
+
 ---
 
 ## 1. Current Local Architecture
@@ -285,6 +302,16 @@ this boundary; it already existed.
 
 ## 7. Media / Storage Boundary
 
+**Milestone 3.4 update:** implemented — see ADR-0009 and the Milestone 3.4 evaluation record.
+`storage.protocol.StorageProtocol` (put/exists/delete/materialize), two real implementations
+(`storage.local.LocalStorage`, `storage.supabase_storage.SupabaseStorage`), a
+`storage.factory.build_storage()` selector mirroring `store_factory`'s no-silent-fallback
+philosophy, and `media.media_storage` (the domain-level upload/materialize bridge, tenant-
+checked) all exist and are tested against real Supabase Storage. The rest of this section is
+kept as originally written (Milestone 3.1) to show what was predicted vs. what was actually
+built — see the "Modules requiring adaptation" paragraph below for the as-built outcome per
+module.
+
 **Local-filesystem assumptions found:**
 
 - `config.CONTENT_DIR`/`INCOMING_DIR`/`PROCESSED_DIR`/`FAILED_DIR` — local directories.
@@ -315,14 +342,45 @@ bytes on disk (`ffprobe`, `ffmpeg`, TikTok's `FILE_UPLOAD` PUT all fundamentally
 regardless of backend — object storage does not remove that requirement, it only moves where
 the bytes permanently live between operations).
 
-**Modules requiring adaptation in Milestone 3.4** (identified, not touched): `media/
-inspection.py` (`inspect_media`/`extract_audio` need a materialized local path), `media/
-processing.py` (`_move_file`'s "move between local dirs" becomes "move between storage
-locations"), `publishing/tiktok/publisher.py` (`video_path.open` needs the same
-materialize-to-local-temp step), `persistence/content_store.py` (no schema change needed —
-`canonical_media_path`/`original_path` stay `TEXT` columns; only their *meaning* changes).
+**Modules identified for adaptation in Milestone 3.1 — as-built outcome in Milestone 3.4:**
 
-No object storage was implemented or selected this milestone (explicit guardrail).
+- `media/inspection.py` — **not modified.** `inspect_media`/`extract_audio` still take a plain
+  local `Path`; the materialization step happens one layer up
+  (`media.media_storage.materialize_canonical_media`), so these functions never needed to learn
+  anything about storage.
+- `media/processing.py` — **minimally extended during review, not rewritten.** The existing
+  local ingestion pipeline (`content/incoming/` → `content/processed/`|`content/failed/`,
+  `process_one`, `discover_videos`) is behaviorally unchanged for every existing caller — verified
+  by the full pre-existing test suite passing with zero modifications. What *was* added: two
+  optional hooks on `process_one` (`on_failed`/`on_assigned`, defaulting to the exact pre-3.4
+  `_move_file` behavior) and a new `process_storage_backed_video` entry point that reuses
+  `process_one`'s inspection/transcription/caption/scheduling logic against a temporary
+  object-storage materialization instead of a permanent local file. This was a correction, not
+  part of the original milestone pass — an earlier draft left `media/processing.py` fully
+  untouched and left ingestion as the *only* processing path, which contradicted this document's
+  own "local files are only ever temporary materializations" framing (that framing was always
+  meant to describe videos that have actually been uploaded to object storage, never local CLI
+  ingestion — see ADR-0009's "Media processing" section for the full correction record). Uploading
+  an already-processed local video to object storage remains a separate, additive step
+  (`media.media_storage.upload_canonical_media`, invoked by
+  `cli/migrate_media_to_object_storage.py`) — nothing about local ingestion's own semantics
+  changed.
+- `publishing/tiktok/publisher.py` — **not modified**, deliberately, per the brief's own explicit
+  preference ("keep TikTokPublisher's platform behavior unchanged... rather than teaching
+  TikTokPublisher about Supabase/S3 directly"). `scheduling/publish_tiktok.py` (the
+  application/job layer) resolves storage instead — `execute_claimed_platform_post`/
+  `publish_video` gained an optional `storage` parameter and materialize the video to a temp
+  path *before* ever calling `publisher.publish()`, which still only ever receives a plain
+  `Path`.
+- `persistence/content_store.py` — two new nullable columns (`storage_provider`, `storage_key`)
+  on `videos`, added via the existing additive pattern (SQLite) and a new forward migration
+  (Postgres, `0002_add_media_storage_columns.sql` — `0001` was not rewritten). Exactly as
+  predicted: `canonical_media_path`/`original_path` stayed `TEXT` columns; only their *meaning*
+  changed, and only for videos that have actually been migrated (`storage_provider` set) —
+  every other video (all of them, before this milestone's own real-media migration ran) is
+  completely unaffected.
+
+Object storage is implemented — Supabase Storage, via its REST API. See §14/§16 and ADR-0009.
 
 ## 8. Credential / Platform-Connection Boundary
 
@@ -521,7 +579,7 @@ milestone's scope.
 |---|---|---|---|---|
 | API hosting | Run FastAPI, reachable by web/mobile clients | Must not block on long-running work (§4) | Standard ASGI app | No — deferred to whichever milestone builds `api/` |
 | Postgres | Multi-connection concurrency, real `ALTER TABLE`, user-scoped rows | Must preserve `ContentStoreProtocol`'s contract (§6); timestamp convention decision | `PostgresContentStore` (implemented) | **Done (Milestone 3.3)** — Supabase Postgres, via the session pooler (IPv4-compatible; the direct connection host is IPv6-only). See ADR-0008. |
-| Object storage | Durable, addressable by a logical reference; readable as bytes/stream on demand | Must support the "resolve reference → local temp path" pattern (§7) | A small storage-adapter interface (get/put by reference) — not designed this milestone | No — deferred to Milestone 3.4 |
+| Object storage | Durable, addressable by a logical reference; readable as bytes/stream on demand | Must support the "resolve reference → local temp path" pattern (§7) | `StorageProtocol` (implemented) | **Done (Milestone 3.4)** — Supabase Storage, via its REST API (private buckets, service-role key). See ADR-0009. |
 | Background execution | Run the four existing one-pass functions (§5) on triggers, possibly concurrently across users | Must not require converting them to daemons/loops — they're already one-pass | A job-runner invocation contract (function in, summary out) — already satisfied by existing signatures | No — provider/framework choice deferred |
 | Scheduled jobs | Trigger publishing/reconciliation/recovery on an interval per connection/user | Must respect existing backoff/staleness config (§9) | A scheduler that calls the existing one-pass functions | No — deferred |
 | Secrets management | Store per-user platform credentials (§8), app-level API keys | Never expose server-only credentials client-side (global `SECURITY.md`) | Whatever the credential-storage adapter in §8 ends up being | No — deferred; do not move tokens into Postgres yet (guardrail) |
@@ -583,7 +641,12 @@ selected, per guardrails.
 **Milestone 3.3 update:** Postgres provider is now decided — Supabase Postgres, via its
 session connection pooler (see ADR-0008 "Provider"). Object storage provider,
 background-execution/queue technology, scheduled-job infrastructure, secrets manager, and API
-hosting provider remain deferred exactly as before. See §14 for the current matrix.
+hosting provider remain deferred exactly as before.
+
+**Milestone 3.4 update:** Object storage provider is now decided — Supabase Storage, via its
+REST API (see ADR-0009 "Provider"). Background-execution/queue technology, scheduled-job
+infrastructure, secrets manager, and API hosting provider remain deferred. See §14 for the
+current matrix.
 
 ## 17. Summary
 
@@ -609,6 +672,20 @@ against actual Supabase Postgres (real concurrent-connection atomic claim, real 
 rejection, real cross-tenant isolation, a real SQLite→Postgres data migration preserving every
 id/relationship/publishing-state field, all backed by 20 new passing tests). `user_id` is
 `NOT NULL` under Postgres, resolving the nullable-under-SQLite compromise Milestone 3.2 made
-deliberately and only for SQLite (ADR-0007/ADR-0008). Object storage (3.4) and real hosted
-credential storage remain exactly as future as they were at the original Milestone 3.1 writing
-of this document.
+deliberately and only for SQLite (ADR-0007/ADR-0008).
+
+**Milestone 3.4 addendum:** object storage is now real — `SupabaseStorage`, tested against
+actual Supabase Storage (put/exists/materialize/delete round trips, a real 5MB streamed
+transfer, tenant-isolation proofs at the application boundary, a full real-Postgres +
+real-object-storage + `FakePublisher` end-to-end pipeline covering both processing and
+publishing). `videos.storage_provider`/`storage_key` are nullable under both backends (unlike
+`user_id` — no real row had a value to backfill before this migration existed, so there was
+nothing to make `NOT NULL` yet). `scheduling/publish_tiktok.py`'s
+`execute_claimed_platform_post`/`publish_video`, and (added during review)
+`media.processing.process_one`/the new `process_storage_backed_video`, all gained optional
+storage-related parameters/entry points consulted only for a video that has actually been
+migrated — the pre-3.4 direct-local-path behavior is unchanged for every other video, verified
+by the full 696-test suite passing with zero existing tests modified. The five real production
+videos were migrated (uploaded, SHA-256-verified, local originals retained). Real
+auth-provider integration and hosted credential storage remain exactly as future as they were
+at the original Milestone 3.1 writing of this document.

@@ -234,6 +234,16 @@ _VIDEOS_MIGRATION_COLUMNS = {
     # Milestone 3.2 (ownership) — see SCHEMA_USERS' docstring above for why
     # this is nullable rather than NOT NULL at the SQL level.
     "user_id": "INTEGER REFERENCES users(id)",
+    # Milestone 3.4 (object storage) — both NULL means "legacy/local-direct":
+    # canonical_media_path is still the authoritative local filesystem path,
+    # exactly as before this milestone. Both set means canonical_media_path
+    # is no longer authoritative — storage_provider/storage_key are, and
+    # media.media_storage.materialize_canonical_media() resolves bytes
+    # through the configured StorageProtocol backend instead. See
+    # docs/decisions/0009-object-storage-media-lifecycle.md "Canonical
+    # Media Reference".
+    "storage_provider": "TEXT",
+    "storage_key": "TEXT",
 }
 
 
@@ -496,6 +506,8 @@ class VideoRecord:
     caption_text: str | None
     caption_source: str | None
     user_id: int | None
+    storage_provider: str | None
+    storage_key: str | None
 
 
 @dataclass
