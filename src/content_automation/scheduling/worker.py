@@ -76,7 +76,8 @@ class WorkerRunSummary:
 
 
 def run_due_posts_once(
-    store: ContentStore, publisher: Publisher, *, platform: str = "tiktok", now: datetime | None = None
+    store: ContentStore, publisher: Publisher, *, platform: str = "tiktok", now: datetime | None = None,
+    user_id: int | None = None,
 ) -> WorkerRunSummary:
     """Discover due PENDING platform_posts rows for `platform`, attempt to
     atomically claim each one, and execute the proven publish flow for
@@ -85,14 +86,26 @@ def run_due_posts_once(
     due_post_selector.get_due_posts() for deterministic testing (see that
     module's docstring for the naive-local-time convention this repository
     uses for scheduling).
+
+    user_id (Milestone 3.2, ownership) is optional and, when supplied,
+    scopes both discovery and claiming to that user's own rows only — the
+    multi-tenant execution invariant
+    (docs/architecture/hosted-product-boundary.md §5: "a hosted background
+    job must never operate on one user's records using another user's
+    credentials") applied to this specific job. Every real CLI invocation
+    (cli/worker.py) resolves and passes the local user's id; omitting it
+    preserves the exact pre-3.2 unscoped single-tenant behavior every
+    existing test relies on. Making this required is deferred until a real
+    multi-connection scheduler exists to always supply it — see the
+    Milestone 3.2 evaluation record.
     """
     summary = WorkerRunSummary()
 
-    due_posts = due_post_selector.get_due_posts(store, platform, now=now)
+    due_posts = due_post_selector.get_due_posts(store, platform, now=now, user_id=user_id)
     summary.discovered = len(due_posts)
 
     for post in due_posts:
-        claimed = store.claim_platform_post(post.id, updated_at=_now_iso())
+        claimed = store.claim_platform_post(post.id, updated_at=_now_iso(), user_id=user_id)
         if not claimed:
             summary.skipped += 1
             continue

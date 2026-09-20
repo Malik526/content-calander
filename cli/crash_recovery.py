@@ -35,7 +35,9 @@ def main() -> None:
     publisher = TikTokPublisher()
 
     with ContentStore() as store:
-        summary = recover_stale_posts_once(store, publisher, platform=args.platform)
+        # Milestone 3.2 (ownership): see cli/worker.py's matching comment.
+        user = store.get_or_create_local_user()
+        summary = recover_stale_posts_once(store, publisher, platform=args.platform, user_id=user.id)
 
     print(
         f"discovered={summary.discovered} requeued={summary.requeued} polled={summary.polled} "

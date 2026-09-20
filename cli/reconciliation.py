@@ -36,7 +36,9 @@ def main() -> None:
     publisher = TikTokPublisher()
 
     with ContentStore() as store:
-        summary = reconcile_pending_status_checks_once(store, publisher, platform=args.platform)
+        # Milestone 3.2 (ownership): see cli/worker.py's matching comment.
+        user = store.get_or_create_local_user()
+        summary = reconcile_pending_status_checks_once(store, publisher, platform=args.platform, user_id=user.id)
 
     print(
         f"discovered={summary.discovered} published={summary.published} failed={summary.failed} "

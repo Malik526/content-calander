@@ -81,7 +81,9 @@ from content_automation.scheduling.slot_matcher import now_in_config_timezone
 ELIGIBLE_STATUSES = ["PENDING"]
 
 
-def get_due_posts(store: ContentStore, platform: str, now: datetime | None = None) -> list[PlatformPostRecord]:
+def get_due_posts(
+    store: ContentStore, platform: str, now: datetime | None = None, user_id: int | None = None
+) -> list[PlatformPostRecord]:
     """Due platform_posts rows for `platform`: scheduled_at is set and at
     or before `now` (inclusive — a post scheduled exactly at `now` is
     due), status is still PENDING (never yet claimed/submitted — see
@@ -93,9 +95,17 @@ def get_due_posts(store: ContentStore, platform: str, now: datetime | None = Non
     tzinfo) — matching how scheduled_at is stored (see
     slot_matcher.now_in_config_timezone). Pass a fixed naive datetime in
     tests rather than relying on wall-clock time.
+
+    user_id (Milestone 3.2, ownership) is optional and forwarded unchanged
+    to ContentStore.get_due_platform_posts — the multi-tenant execution
+    invariant (docs/architecture/hosted-product-boundary.md §5) is
+    enforced right here: a caller that supplies user_id never has another
+    user's due posts returned to it in the first place. Omitting it
+    preserves the exact pre-3.2 unscoped selection every existing caller
+    and test relies on.
     """
     resolved_now = now if now is not None else now_in_config_timezone()
-    return store.get_due_platform_posts(platform, resolved_now.isoformat(), ELIGIBLE_STATUSES)
+    return store.get_due_platform_posts(platform, resolved_now.isoformat(), ELIGIBLE_STATUSES, user_id=user_id)
 
 
 def calculate_schedule_delay(scheduled_at: str, published_at: str) -> timedelta:

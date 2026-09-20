@@ -28,15 +28,30 @@ def now_in_config_timezone() -> datetime:
     return datetime.now(ZoneInfo(TIMEZONE)).replace(tzinfo=None)
 
 
-def select_slot(store: ContentStore, pillar_key: str, now: datetime | None = None) -> SlotRecord | None:
-    """Return the earliest OPEN content_slot for pillar_key scheduled after now, if any."""
+def select_slot(
+    store: ContentStore, pillar_key: str, now: datetime | None = None, user_id: int | None = None
+) -> SlotRecord | None:
+    """Return the earliest OPEN content_slot for pillar_key scheduled after now, if any.
+
+    user_id (Milestone 3.2, ownership) is optional and forwarded unchanged
+    to ContentStore.find_earliest_open_slot — see that method's docstring
+    for the scoping contract (owned-by-user-id-or-unowned). Omitting it
+    preserves the exact pre-3.2 unscoped match.
+    """
     after = now or now_in_config_timezone()
-    return store.find_earliest_open_slot(pillar_key, after.isoformat())
+    return store.find_earliest_open_slot(pillar_key, after.isoformat(), user_id=user_id)
 
 
-def select_slot_fifo(store: ContentStore, now: datetime | None = None) -> SlotRecord | None:
+def select_slot_fifo(
+    store: ContentStore, now: datetime | None = None, user_id: int | None = None
+) -> SlotRecord | None:
     """Return the earliest OPEN content_slot scheduled at/after now, ignoring
     pillar entirely — the FIFO routing mode matcher. No AI/classifier
-    involvement, same as select_slot."""
+    involvement, same as select_slot.
+
+    user_id (Milestone 3.2, ownership) is optional and forwarded unchanged
+    to ContentStore.find_earliest_open_slot_fifo — same scoping contract as
+    select_slot above.
+    """
     after = now or now_in_config_timezone()
-    return store.find_earliest_open_slot_fifo(after.isoformat())
+    return store.find_earliest_open_slot_fifo(after.isoformat(), user_id=user_id)

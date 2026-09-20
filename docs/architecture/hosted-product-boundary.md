@@ -6,9 +6,21 @@ intended to guide Milestones 3.2–3.14, not just record this one. This document
 *boundaries and responsibilities*, not a build plan — it does not schedule work, and it does
 not select hosting providers except where a decision is genuinely unavoidable now.
 
-No code changes accompanied this document. See
-`docs/evaluations/productization/milestone-3.1-hosted-architecture-boundary.md` for the full
-investigation record, including why none were needed.
+No code changes accompanied this document at its original (Milestone 3.1) writing. See
+`docs/evaluations/productization/milestone-3.1-hosted-architecture-boundary.md` for that
+investigation record.
+
+**Milestone 3.2 update (documentation-only edit to this file; see
+`docs/decisions/0007-user-ownership-model.md` and
+`docs/evaluations/productization/milestone-3.2-user-auth-ownership.md`):** the user/ownership
+model §8–§10 described conceptually is now real — `users`/`auth_identities`/
+`platform_connections` tables exist, `videos`/`content_slots`/`platform_posts` carry a
+nullable `user_id`, and the four background job functions accept an optional `user_id` for
+tenant-scoped execution. §8–§10 below are updated in place to describe the implemented model
+rather than a future one; §6's persistence-boundary decision is updated to reflect that
+`ContentStore`'s method surface was in fact extended (optionally, backward-compatibly) rather
+than left untouched. Sections describing genuinely still-future work (Postgres, object
+storage, real auth-provider integration, hosted credential storage) are otherwise unchanged.
 
 ---
 
@@ -150,37 +162,34 @@ worker/queue), analytics ingestion, historical import (in the shape of the exist
 enhancement — distinct from today's `caption.build_caption_from_transcript`, which only
 normalizes whitespace and does not use an LLM).
 
-### Multi-Tenant Execution Invariant (Future)
-
-Not enforced today — this is a single-tenant deployment with one TikTok connection and one
-Calendar connection, so there is no second account to violate this against yet. It becomes a
-hard requirement the moment Milestone 3.2 introduces ownership, and every future background
-job design must satisfy it:
+### Multi-Tenant Execution Invariant
 
 > **A hosted background job must never operate on one user's records using another user's
 > credentials.**
 
-Concretely, once ownership and per-user `platform_connection`s exist (§8, §10): the scheduled-
-publishing job must claim and publish only `platform_posts` rows owned by the same
-user/account whose `platform_connection` supplies the `Publisher` instance it calls;
-reconciliation and crash/stale recovery must resolve a row's status only through the
-credential belonging to that same row's owner; media processing must read/write only the
-uploading user's storage location and `videos` rows. This applies uniformly to scheduled
-publishing, reconciliation, crash/stale recovery, *and* media processing — all four existing
-job functions, and any new ones added later.
+**Milestone 3.2 update:** this is now implemented and proven, not only stated. `worker.
+run_due_posts_once`, `reconciliation.reconcile_pending_status_checks_once`, and
+`crash_recovery.recover_stale_posts_once` each accept an optional `user_id`; when supplied, it
+is forwarded to the scoped selector/claim/update calls underneath (§6), so a pass scoped to
+user B provably cannot discover, claim, or update user A's rows —
+`tests/test_ownership.py`'s `test_worker_scoped_to_user_never_claims_other_users_post` (and the
+matching reconciliation/crash-recovery tests) construct two real users with due/stale rows
+each and assert the cross-tenant row is never touched. `media.processing.process_one` gained
+the equivalent optional `user_id`, stamping every row it creates; a true per-user *storage
+location* boundary (as opposed to per-user *row ownership*, which is what 3.2 delivers) is
+still §7's future object-storage work, not this milestone's.
 
-Today's four job functions (`run_due_posts_once`, `reconcile_pending_status_checks_once`,
-`recover_stale_posts_once`, `process_one`) each take one injected `publisher`/`store` and
-operate over an entire platform's due/stale/incoming set in a single pass — correct for a
-single-tenant deployment, but none of them can run against more than one real user's data
-until each is either invoked once per (user, platform_connection) with that connection's own
-scoped `Publisher` and `ContentStore` view, or rewritten to select and act within one owner's
-scope per iteration of its own loop. Which of those two shapes is right is a Milestone 3.2+
-design decision, not one this milestone makes — but whichever shape is chosen, this invariant
-is the acceptance bar it must be checked against: a credential/data leak across accounts is a
-security defect, not a missing convenience feature, and no job redesign should ship without an
-explicit test proving one user's job pass cannot touch another user's row or call another
-user's credential.
+Every real CLI entry point (`cli/worker.py`, `cli/reconciliation.py`,
+`cli/crash_recovery.py`, `cli/process_content.py`) resolves
+`ContentStore.get_or_create_local_user()` and passes that id through, so real production
+invocations are already scope-explicit today, even though only one real user exists. What
+remains open, and is explicitly not this milestone's job to decide (see ADR-0007's
+"Consequences"): **making `user_id` non-optional** once a real multi-connection
+scheduler/job-runner exists that can always supply it, and whether the credential itself
+(§8) — not just the row-ownership scope — needs to become per-connection before a second real
+user can safely go live. A credential/data leak across accounts remains a security defect, not
+a missing convenience feature; any future job redesign should be checked against this same
+invariant with the same kind of explicit cross-tenant test, not merely reasoned about.
 
 This invariant does not change persistence or concurrency semantics (§6) — atomic claim and
 optimistic concurrency remain correct and necessary *within* one owner's scope; the invariant
@@ -227,21 +236,21 @@ second backend exists would be speculative. `ContentStore` should remain *the* p
 abstraction through both the ownership (Milestone 3.2) and Postgres (Milestone 3.3)
 migrations.
 
-**This does not mean its current method signatures are frozen.** Milestone 3.2 introduces
-ownership, and user-owned queries and jobs will very likely need explicit tenant scoping
-added to methods that today assume a single global tenant — most obviously
-`get_due_platform_posts`, `get_recoverable_platform_posts`,
-`get_reconcilable_platform_posts`, `claim_platform_post`, and
-`update_platform_post_if_unchanged`, plus the rest of the `platform_posts`/`content_slots`/
-`videos` surface. That scoping could take the shape of an explicit `user_id`/
-`platform_connection_id` parameter on each method, a scoped store/session object constructed
-per request/job (e.g. `ContentStore.for_user(user_id)`), Postgres row-level security enforced
-underneath an unscoped-looking call, or some equivalent — which shape is right is a Milestone
-3.2 design decision, not one this milestone makes. What must be preserved across both
-migrations is not today's exact parameter lists but the *scheduling and concurrency
-semantics* they implement (atomic claim, optimistic concurrency — see above) and the
-multi-tenant execution invariant below, which every one of these methods' future scoped
-form must satisfy.
+**This did not mean its method signatures stayed frozen — Milestone 3.2 confirmed that.**
+`get_due_platform_posts`, `get_recoverable_platform_posts`, `get_reconcilable_platform_posts`,
+`claim_platform_post`, `update_platform_post_if_unchanged`, `insert_video`,
+`insert_slot_if_missing`, `insert_platform_post`, `insert_platform_post_if_missing`,
+`find_earliest_open_slot`, and `find_earliest_open_slot_fifo` all gained an optional
+`user_id: int | None = None` parameter (omitting it reproduces the exact pre-3.2 unscoped
+behavior — see ADR-0007 for why optional rather than required, and why a scoped-object
+wrapper like `ContentStore.for_user(user_id)` was evaluated and set aside in favor of this
+simpler shape for now). `assign_slot` gained an ownership-consistency check
+(`OwnershipMismatchError`) rather than a new parameter. What was preserved across this
+change, exactly as anticipated, is not the exact pre-3.2 parameter lists but the *scheduling
+and concurrency semantics* these methods implement (atomic claim, optimistic concurrency —
+see above) and the multi-tenant execution invariant below, which every scoped call now
+satisfies — proven directly by `tests/test_ownership.py`'s cross-tenant isolation tests, not
+merely asserted.
 
 `ContentStore`'s SQLite-specific internals (the two migration functions above, the PRAGMAs)
 remain exactly the parts expected to be replaced outright, not adapted, regardless of how the
@@ -293,6 +302,15 @@ No object storage was implemented or selected this milestone (explicit guardrail
 
 ## 8. Credential / Platform-Connection Boundary
 
+**Milestone 3.2 update:** the `user -> platform_connection` *identity/status* model described
+below as conceptual is now real (`platform_connections` table, `UNIQUE(user_id, platform)`,
+`external_account_id`, `status` — see ADR-0007). What remains exactly as conceptual as
+before: the actual credential *secret* (TikTok's access/refresh token) still lives nowhere but
+`config.TIKTOK_TOKEN_PATH`'s single local file — `platform_connections` deliberately stores no
+secret material, so this section's "current single-global assumptions" list below is still
+accurate for the credential itself, only now paired with a real per-user connection row that
+identifies *whose* credential it conceptually is.
+
 **Current single-global assumptions, all confirmed by direct inspection:**
 
 - `config.TIKTOK_TOKEN_PATH` (`~/.config/content-calendar/tiktok_token.json`) — one TikTok
@@ -321,8 +339,17 @@ proven by `update_platform_post_if_unchanged` (a DB-row-scoped compare-and-swap)
 natural replacement, not a new mechanism. The same reasoning applies symmetrically to Google
 Calendar's OAuth identity and dedicated-calendar ownership.
 
-**Explicitly deferred:** tokens do not move into Postgres this milestone (guardrail); this
-section only maps *where* that boundary will sit, not where the bytes live yet.
+**What Milestone 3.2 actually built toward this:** `platform_connections(user_id, platform,
+external_account_id, status)` — the identity/status half of this model — plus a one-time
+bridge (`cli/backfill_ownership.py`) that reads the existing cached token file's `open_id`
+(never `get_access_token()` — a local file read only, no network call, no refresh) into that
+row's `external_account_id`. **Still explicitly deferred, unchanged from the original
+Milestone 3.1 writing:** the credential secret itself does not move into this table, into
+Postgres, or into any hosted store — `TIKTOK_TOKEN_PATH` remains the single source of truth
+for the actual token, and `get_access_token()`/`TikTokPublisher` are unchanged (still read
+that one fixed path, not a connection identifier). This section only maps *where* the
+credential boundary will eventually sit, not where the bytes live yet — see ADR-0007's
+"Current Local Credential Bridge" for the full reasoning.
 
 See §5's multi-tenant execution invariant for the job-side requirement this credential model
 exists to support: once credentials are per-`platform_connection`, every job that calls
@@ -348,10 +375,19 @@ schema/settings-API design (Milestones 3.2+), not to change `config.py` now.
 
 ## 10. User-Ownership Impact Map
 
+**Milestone 3.2 update:** the first three rows below are now implemented, not just
+identified — see ADR-0007 for the schema and `docs/evaluations/productization/
+milestone-3.2-user-auth-ownership.md` for validation evidence. The remaining rows are
+unchanged from the original Milestone 3.1 mapping.
+
 **Will eventually require `user_id`/ownership:**
 
-- `videos`, `content_slots`, `platform_posts` (today's three core tables).
-- Platform connections (TikTok token state, Google Calendar OAuth token state — see §8).
+- `videos`, `content_slots`, `platform_posts` (today's three core tables) — **implemented**:
+  each now carries a nullable `user_id` (see ADR-0007 for why nullable, not `NOT NULL`, under
+  SQLite).
+- Platform connections — **implemented** as `platform_connections(user_id, platform,
+  external_account_id, status)`; the credential secret itself (TikTok token state, Google
+  Calendar OAuth token state) is not yet part of this table — see §8.
 - Creator settings (`POSTS_PER_WEEK`, `POSTING_DAYS`, `POSTING_TIME`, `ROUTING_MODE`,
   `CAPTION_MODE`, `CONTENT_TYPES`, `TARGET_PUBLISHING_PLATFORMS`).
 - Calendar configuration (the dedicated-calendar identity currently in
@@ -373,7 +409,11 @@ schema/settings-API design (Milestones 3.2+), not to change `config.py` now.
   `TIKTOK_API_BASE`/`TIKTOK_AUTHORIZE_BASE`) — one Developer Portal app shared by every
   user's individual `platform_connection`, not duplicated per user.
 
-No DB schema was altered this milestone (guardrail) — this is a forward-looking map only.
+No DB schema was altered by the original Milestone 3.1 writing of this section (guardrail) —
+it was a forward-looking map only. Milestone 3.2 implemented the `users`/`auth_identities`/
+`platform_connections` tables and the `user_id` columns above; see ADR-0007. The remaining
+entities in this map (creator settings, calendar configuration, uploaded media) are still
+forward-looking only — no schema change was made for them.
 
 ## 11. Target Request / Job Flows (Conceptual)
 
@@ -524,7 +564,14 @@ functions, and a thin CLI with no logic of its own. What remained genuinely unde
 API/background split, the media/storage contract, the credential/user-ownership model, the
 configuration classification, the migration risk ranking, and the multi-tenant execution
 invariant every future job design must satisfy (§5) — is now documented above.
-`ContentStore` remains the persistence abstraction going forward, but its method signatures
-are explicitly not frozen: Milestone 3.2's ownership work will likely need to extend them with
-tenant scoping, and that scoping is exactly what makes the multi-tenant execution invariant
-enforceable. No code changes were required to establish any of this.
+`ContentStore` remains the persistence abstraction going forward; its method signatures were
+explicitly not frozen.
+
+**Milestone 3.2 addendum:** the user/ownership model predicted above is now real —
+`users`/`auth_identities`/`platform_connections` tables, nullable `user_id` on
+`videos`/`content_slots`/`platform_posts`, an `OwnershipMismatchError` invariant on
+`assign_slot`, and optional tenant scoping proven end-to-end on all four background job
+functions (§5). See ADR-0007 and the Milestone 3.2 evaluation record for the full
+implementation and validation evidence. Postgres (3.3), object storage (3.4), and real hosted
+credential storage remain exactly as future as they were at the original Milestone 3.1
+writing of this document.

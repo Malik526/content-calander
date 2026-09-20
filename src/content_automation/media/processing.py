@@ -135,13 +135,25 @@ def process_one(
     *,
     dry_run: bool,
     routing_mode: str = ROUTING_MODE,
+    user_id: int | None = None,
 ) -> Outcome:
+    """user_id (Milestone 3.2, ownership) is optional and, when supplied,
+    stamps every row this call creates (the video itself, and — via
+    slot_matcher/platform_post_materializer — the slot it's matched to and
+    the platform_posts row(s) materialized for it) with that owner. Only
+    applied at insert time: a video already known to the store (a re-run)
+    keeps whatever owner it was first created with, regardless of what
+    user_id this call is given — process_one never reassigns ownership.
+    Omitting it preserves the exact pre-3.2 unscoped pipeline. The real
+    CLI entry point (cli/process_content.py) always resolves and passes
+    the local user's id.
+    """
     now_iso = datetime.now(timezone.utc).isoformat()
     file_hash = media.file_hash(path)
 
     video = store.get_video_by_hash(file_hash)
     if video is None:
-        video = store.insert_video(file_hash, path.name, str(path), now_iso)
+        video = store.insert_video(file_hash, path.name, str(path), now_iso, user_id=user_id)
 
     if video.status == "ASSIGNED":
         return Outcome(path, video, "ALREADY_ASSIGNED")
@@ -245,7 +257,7 @@ def process_one(
             video = store.get_video_by_hash(file_hash)
 
     if routing_mode == "fifo":
-        slot = slot_matcher.select_slot_fifo(store)
+        slot = slot_matcher.select_slot_fifo(store, user_id=user_id)
     elif routing_mode == "pillar":
         # --- Classify (skip if already classified) ---
         if video.classified_pillar is None and video.status != "NEEDS_REVIEW":
@@ -275,7 +287,7 @@ def process_one(
         if video.status == "NEEDS_REVIEW":
             return Outcome(path, video, "NEEDS_REVIEW")
 
-        slot = slot_matcher.select_slot(store, video.classified_pillar)
+        slot = slot_matcher.select_slot(store, video.classified_pillar, user_id=user_id)
     else:
         raise ValueError(f"Unsupported routing_mode: {routing_mode!r}")
 
@@ -292,7 +304,9 @@ def process_one(
     # can discover this scheduled delivery ahead of publish time instead of
     # only after a manual publish_tiktok.py run — see
     # docs/evaluations/scheduling/milestone-2.1.2-platform-post-materialization.md.
-    platform_post_materializer.materialize_platform_posts_for_assignment(store, video.id, slot.id, now_iso)
+    platform_post_materializer.materialize_platform_posts_for_assignment(
+        store, video.id, slot.id, now_iso, user_id=user_id
+    )
     dest = _move_file(path, PROCESSED_DIR)
     # canonical_media_path was set once at inspect time to the incoming/
     # discovery path; without updating it here it goes stale the instant

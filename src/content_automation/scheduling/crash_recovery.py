@@ -77,6 +77,7 @@ def recover_stale_posts_once(
     platform: str = "tiktok",
     now: datetime | None = None,
     stale_after_minutes: int | None = None,
+    user_id: int | None = None,
 ) -> RecoverySummary:
     """Find PUBLISHING platform_posts rows for `platform` that have had no
     activity for at least stale_after_minutes (default:
@@ -88,6 +89,11 @@ def recover_stale_posts_once(
     `now` must be an aware UTC datetime if supplied (matching how
     updated_at is always written) — pass a fixed value in tests rather
     than relying on wall-clock time.
+
+    user_id (Milestone 3.2, ownership) is optional; see
+    worker.run_due_posts_once's docstring for the same scoping contract —
+    recovery only ever discovers and touches that user's own stale rows
+    when supplied.
     """
     now = now if now is not None else datetime.now(timezone.utc)
     threshold_minutes = (
@@ -96,14 +102,15 @@ def recover_stale_posts_once(
     stale_before_iso = (now - timedelta(minutes=threshold_minutes)).isoformat()
 
     summary = RecoverySummary()
-    stale_rows = store.get_recoverable_platform_posts(platform, stale_before_iso)
+    stale_rows = store.get_recoverable_platform_posts(platform, stale_before_iso, user_id=user_id)
     summary.discovered = len(stale_rows)
 
     for record in stale_rows:
         if record.platform_post_id is None:
             # Case A: no evidence of a real submission — safe to requeue.
             requeued = store.update_platform_post_if_unchanged(
-                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), status="PENDING"
+                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(),
+                user_id=user_id, status="PENDING",
             )
             if requeued:
                 summary.requeued += 1
@@ -129,13 +136,13 @@ def recover_stale_posts_once(
         outcome, fields = _resolve_poll_outcome(status_result)
         if outcome == "PUBLISHED":
             updated = store.update_platform_post_if_unchanged(
-                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), **fields
+                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), user_id=user_id, **fields
             )
             if updated:
                 summary.published += 1
         elif outcome == "FAILED":
             updated = store.update_platform_post_if_unchanged(
-                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), **fields
+                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), user_id=user_id, **fields
             )
             if updated:
                 summary.failed += 1

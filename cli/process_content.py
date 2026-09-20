@@ -82,6 +82,10 @@ def main() -> None:
     outcomes: list[Outcome] = []
 
     with ContentStore() as store:
+        # Milestone 3.2 (ownership): see cli/worker.py's matching comment —
+        # every video this run creates is stamped with the local user's id.
+        user = store.get_or_create_local_user()
+
         videos = discover_videos(store, INCOMING_DIR)
         if not videos:
             print(f"No videos found in {INCOMING_DIR}")
@@ -94,7 +98,10 @@ def main() -> None:
             print()
 
         for path in videos:
-            outcome = process_one(store, transcriber, classifier, path, dry_run=args.dry_run, routing_mode=ROUTING_MODE)
+            outcome = process_one(
+                store, transcriber, classifier, path, dry_run=args.dry_run, routing_mode=ROUTING_MODE,
+                user_id=user.id,
+            )
             outcomes.append(outcome)
             _print_progress(outcome, verbose=args.verbose)
 

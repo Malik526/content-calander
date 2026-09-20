@@ -35,7 +35,13 @@ def main() -> None:
     publisher = TikTokPublisher()
 
     with ContentStore() as store:
-        summary = run_due_posts_once(store, publisher, platform=args.platform)
+        # Milestone 3.2 (ownership): resolves/creates the single local
+        # bootstrap user (see ContentStore.get_or_create_local_user) so
+        # this run is scoped, not the pre-3.2 unscoped behavior — every
+        # due platform_posts row this pass can discover or claim must
+        # belong to this user.
+        user = store.get_or_create_local_user()
+        summary = run_due_posts_once(store, publisher, platform=args.platform, user_id=user.id)
 
     print(
         f"discovered={summary.discovered} claimed={summary.claimed} skipped={summary.skipped} "

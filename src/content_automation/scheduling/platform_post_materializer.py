@@ -47,7 +47,7 @@ from content_automation.config import TARGET_PUBLISHING_PLATFORMS
 
 
 def materialize_platform_posts_for_assignment(
-    store: ContentStore, video_id: int, slot_id: int, created_at: str
+    store: ContentStore, video_id: int, slot_id: int, created_at: str, user_id: int | None = None
 ) -> None:
     """Create a PENDING platform_posts row (scheduled_at = the assigned
     slot's scheduled_at) for every platform in
@@ -56,6 +56,12 @@ def materialize_platform_posts_for_assignment(
     ContentStore.assign_slot(video_id, slot_id) succeeds. Idempotent — safe
     to call more than once for the same assignment; never touches an
     existing row's publishing state.
+
+    user_id (Milestone 3.2, ownership) is optional and forwarded unchanged
+    to ContentStore.insert_platform_post_if_missing — the real production
+    caller (media.processing.process_one) always passes the assigned
+    video's own user_id, so every materialized platform_posts row is owned
+    by the same user as its video from the moment it's created.
     """
     slot = store.get_slot(slot_id)
     if slot is None:
@@ -63,5 +69,5 @@ def materialize_platform_posts_for_assignment(
 
     for platform in TARGET_PUBLISHING_PLATFORMS:
         store.insert_platform_post_if_missing(
-            video_id, platform, scheduled_at=slot.scheduled_at, created_at=created_at
+            video_id, platform, scheduled_at=slot.scheduled_at, created_at=created_at, user_id=user_id
         )

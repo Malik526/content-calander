@@ -209,7 +209,9 @@ def build_event_body(post: ScheduledPost) -> dict:
     return body
 
 
-def push_events(service, calendar_id: str, schedule: list[ScheduledPost], store: ContentStore) -> tuple[int, int]:
+def push_events(
+    service, calendar_id: str, schedule: list[ScheduledPost], store: ContentStore, user_id: int | None = None,
+) -> tuple[int, int]:
     """
     Insert all scheduled posts as Google Calendar events, and mirror each one
     into content_slots for process_content.py to route videos against.
@@ -222,6 +224,12 @@ def push_events(service, calendar_id: str, schedule: list[ScheduledPost], store:
     changed strategy never mutates a slot that already exists. Google
     Calendar events themselves can still duplicate on rerun — that is
     pre-existing behavior, unchanged here.
+
+    user_id (Milestone 3.2, ownership) is optional and forwarded unchanged
+    to ContentStore.insert_slot_if_missing — the real CLI entry point
+    (cli/generate_calendar.py) always resolves and passes the local user's
+    id, so every newly created content_slot is owned from creation.
+    Omitting it preserves the exact pre-3.2 unscoped behavior.
     """
     created = 0
     slots_created = 0
@@ -243,6 +251,7 @@ def push_events(service, calendar_id: str, schedule: list[ScheduledPost], store:
             prompt=post.prompt,
             created_at=datetime.now(timezone.utc).isoformat(),
             google_calendar_event_id=event.get("id"),
+            user_id=user_id,
         )
         if was_new:
             slots_created += 1

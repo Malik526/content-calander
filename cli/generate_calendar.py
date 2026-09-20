@@ -140,7 +140,11 @@ def main() -> None:
 
     # --- Push all events and mirror them into content_slots ---
     with ContentStore() as store:
-        events_created, slots_created = push_events(service, calendar_id, schedule, store)
+        # Milestone 3.2 (ownership): see cli/worker.py's matching comment —
+        # every content_slot this run creates is stamped with the local
+        # user's id.
+        user = store.get_or_create_local_user()
+        events_created, slots_created = push_events(service, calendar_id, schedule, store, user_id=user.id)
     print(f"\n  {slots_created} new content_slots persisted ({events_created} calendar events created).")
 
     # --- Final summary ---

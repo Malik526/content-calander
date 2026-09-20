@@ -82,6 +82,7 @@ class ReconciliationSummary:
 
 def reconcile_pending_status_checks_once(
     store: ContentStore, publisher: Publisher, *, platform: str = "tiktok", now: datetime | None = None,
+    user_id: int | None = None,
 ) -> ReconciliationSummary:
     """Find PUBLISHING platform_posts rows for `platform` with a
     platform_post_id that are due for another status check, and check
@@ -124,11 +125,16 @@ def reconcile_pending_status_checks_once(
     for deterministic testing (see that method's docstring for the
     aware-UTC convention this module uses, distinct from
     due_post_selector's naive-local-time `now`).
+
+    user_id (Milestone 3.2, ownership) is optional; see
+    worker.run_due_posts_once's docstring for the same scoping contract
+    applied here — reconciliation only ever discovers and updates that
+    user's own PUBLISHING rows when supplied.
     """
     now = now if now is not None else datetime.now(timezone.utc)
     summary = ReconciliationSummary()
 
-    rows = store.get_reconcilable_platform_posts(platform, now.isoformat())
+    rows = store.get_reconcilable_platform_posts(platform, now.isoformat(), user_id=user_id)
     summary.discovered = len(rows)
 
     for record in rows:
@@ -137,7 +143,7 @@ def reconcile_pending_status_checks_once(
         except PublishError as exc:
             if retry_classification.is_retryable(exc.reason_code, getattr(exc, "http_status", None)):
                 store.update_platform_post_if_unchanged(
-                    record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(),
+                    record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), user_id=user_id,
                     next_status_check_at=_next_status_check_at(record.status_check_count, now),
                     status_check_count=record.status_check_count + 1,
                 )
@@ -146,7 +152,7 @@ def reconcile_pending_status_checks_once(
                 # polling: mark FAILED with the actionable message, never
                 # schedule another check. No new lifecycle status.
                 updated = store.update_platform_post_if_unchanged(
-                    record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(),
+                    record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), user_id=user_id,
                     status="FAILED", failure_reason=str(exc),
                 )
                 if updated:
@@ -162,14 +168,14 @@ def reconcile_pending_status_checks_once(
                 "status_check_count": record.status_check_count + 1,
             }
             updated = store.update_platform_post_if_unchanged(
-                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), **fields
+                record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), user_id=user_id, **fields
             )
             if updated:
                 summary.still_processing += 1
             continue
 
         updated = store.update_platform_post_if_unchanged(
-            record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), **fields
+            record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), user_id=user_id, **fields
         )
         if updated:
             if outcome == "PUBLISHED":
