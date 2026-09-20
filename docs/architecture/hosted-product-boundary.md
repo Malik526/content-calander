@@ -150,6 +150,42 @@ worker/queue), analytics ingestion, historical import (in the shape of the exist
 enhancement — distinct from today's `caption.build_caption_from_transcript`, which only
 normalizes whitespace and does not use an LLM).
 
+### Multi-Tenant Execution Invariant (Future)
+
+Not enforced today — this is a single-tenant deployment with one TikTok connection and one
+Calendar connection, so there is no second account to violate this against yet. It becomes a
+hard requirement the moment Milestone 3.2 introduces ownership, and every future background
+job design must satisfy it:
+
+> **A hosted background job must never operate on one user's records using another user's
+> credentials.**
+
+Concretely, once ownership and per-user `platform_connection`s exist (§8, §10): the scheduled-
+publishing job must claim and publish only `platform_posts` rows owned by the same
+user/account whose `platform_connection` supplies the `Publisher` instance it calls;
+reconciliation and crash/stale recovery must resolve a row's status only through the
+credential belonging to that same row's owner; media processing must read/write only the
+uploading user's storage location and `videos` rows. This applies uniformly to scheduled
+publishing, reconciliation, crash/stale recovery, *and* media processing — all four existing
+job functions, and any new ones added later.
+
+Today's four job functions (`run_due_posts_once`, `reconcile_pending_status_checks_once`,
+`recover_stale_posts_once`, `process_one`) each take one injected `publisher`/`store` and
+operate over an entire platform's due/stale/incoming set in a single pass — correct for a
+single-tenant deployment, but none of them can run against more than one real user's data
+until each is either invoked once per (user, platform_connection) with that connection's own
+scoped `Publisher` and `ContentStore` view, or rewritten to select and act within one owner's
+scope per iteration of its own loop. Which of those two shapes is right is a Milestone 3.2+
+design decision, not one this milestone makes — but whichever shape is chosen, this invariant
+is the acceptance bar it must be checked against: a credential/data leak across accounts is a
+security defect, not a missing convenience feature, and no job redesign should ship without an
+explicit test proving one user's job pass cannot touch another user's row or call another
+user's credential.
+
+This invariant does not change persistence or concurrency semantics (§6) — atomic claim and
+optimistic concurrency remain correct and necessary *within* one owner's scope; the invariant
+is about which rows/credentials a given job invocation is allowed to reach in the first place.
+
 No queue system was implemented or selected this milestone (explicit guardrail).
 
 ## 6. Persistence Boundary
@@ -179,16 +215,37 @@ upward:**
 depends on — `claim_platform_post` (atomic `UPDATE ... WHERE status = 'PENDING'`, success
 read from `rowcount`) and `update_platform_post_if_unchanged` (optimistic-concurrency
 `UPDATE ... WHERE updated_at = ?`) — are standard SQL patterns with no SQLite-specific
-behavior. They should port to Postgres unchanged in *shape*; Milestone 3.3 should verify
-this under real concurrent Postgres connections rather than assume parity (see §16).
+behavior. They should port to Postgres unchanged in *concurrency shape* (still a conditional
+`UPDATE ... WHERE`), even as their parameter lists grow to carry ownership scoping (see
+below); Milestone 3.3 should verify this under real concurrent Postgres connections rather
+than assume parity (see §16).
 
 **Decision: do not extract a persistence interface/repository abstraction now.**
 `ContentStore`'s existing method surface *is* the persistence boundary every other module
 already depends on exclusively — introducing an additional interface on top of it before a
-second backend exists would be speculative. When Postgres migration happens (Milestone 3.3),
-`ContentStore`'s public method signatures are the contract a Postgres-backed implementation
-must preserve; its SQLite-specific internals (the two migration functions above, the PRAGMAs)
-are exactly the parts expected to be replaced, not adapted.
+second backend exists would be speculative. `ContentStore` should remain *the* persistence
+abstraction through both the ownership (Milestone 3.2) and Postgres (Milestone 3.3)
+migrations.
+
+**This does not mean its current method signatures are frozen.** Milestone 3.2 introduces
+ownership, and user-owned queries and jobs will very likely need explicit tenant scoping
+added to methods that today assume a single global tenant — most obviously
+`get_due_platform_posts`, `get_recoverable_platform_posts`,
+`get_reconcilable_platform_posts`, `claim_platform_post`, and
+`update_platform_post_if_unchanged`, plus the rest of the `platform_posts`/`content_slots`/
+`videos` surface. That scoping could take the shape of an explicit `user_id`/
+`platform_connection_id` parameter on each method, a scoped store/session object constructed
+per request/job (e.g. `ContentStore.for_user(user_id)`), Postgres row-level security enforced
+underneath an unscoped-looking call, or some equivalent — which shape is right is a Milestone
+3.2 design decision, not one this milestone makes. What must be preserved across both
+migrations is not today's exact parameter lists but the *scheduling and concurrency
+semantics* they implement (atomic claim, optimistic concurrency — see above) and the
+multi-tenant execution invariant below, which every one of these methods' future scoped
+form must satisfy.
+
+`ContentStore`'s SQLite-specific internals (the two migration functions above, the PRAGMAs)
+remain exactly the parts expected to be replaced outright, not adapted, regardless of how the
+rest of its method surface evolves for ownership.
 
 No code changes were made to `ContentStore` this milestone — none were required to establish
 this boundary; it already existed.
@@ -266,6 +323,13 @@ Calendar's OAuth identity and dedicated-calendar ownership.
 
 **Explicitly deferred:** tokens do not move into Postgres this milestone (guardrail); this
 section only maps *where* that boundary will sit, not where the bytes live yet.
+
+See §5's multi-tenant execution invariant for the job-side requirement this credential model
+exists to support: once credentials are per-`platform_connection`, every job that calls
+`get_access_token()`/`TikTokPublisher` (or the Calendar OAuth equivalent) must resolve the one
+connection belonging to the row/user it is currently acting on — never a different one, and
+never a single shared connection standing in for all users, which is what today's single
+global token file effectively is.
 
 ## 9. Configuration Boundary
 
@@ -458,5 +522,9 @@ hosted-architecture boundary this document was asked to define: a clean persiste
 (`ContentStore`), a clean publishing boundary (`Publisher`), four already-one-pass background
 functions, and a thin CLI with no logic of its own. What remained genuinely undefined — the
 API/background split, the media/storage contract, the credential/user-ownership model, the
-configuration classification, and the migration risk ranking — is now documented above. No
-code changes were required to establish it.
+configuration classification, the migration risk ranking, and the multi-tenant execution
+invariant every future job design must satisfy (§5) — is now documented above.
+`ContentStore` remains the persistence abstraction going forward, but its method signatures
+are explicitly not frozen: Milestone 3.2's ownership work will likely need to extend them with
+tenant scoping, and that scoping is exactly what makes the multi-tenant execution invariant
+enforceable. No code changes were required to establish any of this.

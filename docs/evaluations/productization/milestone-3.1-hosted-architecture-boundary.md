@@ -68,7 +68,20 @@ this milestone was asked to leave behind for 3.2–3.14). Summary of what each p
   found the SQLite-specific behavior that exists (PRAGMAs, rebuild-based migrations) is fully
   contained inside `ContentStore` itself, never leaked upward — **decision: do not extract a
   repository/interface abstraction now**, per the brief's own stated preference against
-  premature abstraction, since one already effectively exists.
+  premature abstraction, since one already effectively exists. Clarified during review (before
+  this milestone was treated as closed): `ContentStore` remaining *the* persistence
+  abstraction through Milestones 3.2 (ownership) and 3.3 (Postgres) does not mean its current
+  method signatures are frozen — user-owned queries/jobs will likely need explicit tenant
+  scoping (`user_id`/`platform_connection_id`, a scoped store context, Postgres row-level
+  security, or equivalent) added to methods that assume a single global tenant today. What
+  must survive both migrations unchanged is the *scheduling and concurrency semantics*
+  (atomic claim, optimistic concurrency), not today's exact parameter lists.
+- **Multi-tenant execution invariant (§5, added during review):** made explicit, at the same
+  review point, that a hosted background job must never operate on one user's records using
+  another user's credentials — scheduled publishing, reconciliation, crash/stale recovery, and
+  media processing must all eventually execute within explicit ownership/account scope. Not
+  enforced today (single-tenant, no second account to violate it against), but recorded now as
+  the acceptance bar any Milestone 3.2+ job redesign must be checked against.
 - **Media/storage boundary (§7):** every local-filesystem call site enumerated directly (grep
   for `Path(`/`shutil`/`.open(` patterns across `media/` and `publishing/tiktok/`), not
   inferred from module docstrings alone.
@@ -168,8 +181,12 @@ Investigated the full post-3.0 package/CLI surface (~7,700 lines) directly rathe
 persistence boundary, `Publisher` is the sole publishing boundary, every background operation
 is already a one-pass function, and the CLI carries no logic of its own. Documented the parts
 that were genuinely undefined before this milestone — the API/background-job split, the
-media/storage contract, the credential/user-ownership model, configuration classification, and
-a ranked migration-risk list — in `docs/architecture/hosted-product-boundary.md`. No code
+media/storage contract, the credential/user-ownership model, configuration classification, a
+ranked migration-risk list, and (added during review, before this milestone was treated as
+closed) the multi-tenant execution invariant every future background job must satisfy and the
+explicit statement that `ContentStore`'s method signatures are not frozen through the 3.2
+(ownership)/3.3 (Postgres) migrations even though `ContentStore` itself remains the
+persistence abstraction — in `docs/architecture/hosted-product-boundary.md`. No code
 changes were required or made; the full test suite (596) passed unchanged; the real database
 was read only, never mutated; no live TikTok or Google Calendar calls were made.
 
