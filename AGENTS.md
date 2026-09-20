@@ -14,8 +14,8 @@ Do not rename internal modules, database tables, or backend concepts to "Pickle 
 ## Current Product Stage
 
 - **Milestone 2.1 (TikTok scheduled-publishing reliability): complete.** Due detection, atomic claiming, worker execution, crash recovery, retry/backoff, missed-schedule handling, token lifecycle/auto-refresh, and asynchronous publish reconciliation are all implemented and validated against the real TikTok Sandbox account — see `docs/evaluations/scheduling/`.
-- **Milestone 3 (productization) is underway. Milestones 3.0 (backend package refactor), 3.1 (hosted architecture boundary), and 3.2 (user authentication + ownership model) are complete** — see `docs/evaluations/productization/milestone-3.0-backend-package-refactor.md`, `-3.1-hosted-architecture-boundary.md`, and `-3.2-user-auth-ownership.md`. The target hosted architecture is documented in `docs/architecture/hosted-product-boundary.md`; the ownership model (`users`/`auth_identities`/`platform_connections`, nullable `user_id` on `videos`/`content_slots`/`platform_posts`) is documented in `docs/decisions/0007-user-ownership-model.md` — read both before starting any Milestone 3.3+ work. `user_id` scoping is **optional** on every touched `ContentStore` method and background job function (backward-compatible default, real production callers already pass it via `ContentStore.get_or_create_local_user()`) — see ADR-0007 for why, before assuming it should be made required as a "cleanup."
-- **Next up: Milestone 3.3+ (Postgres migration).** As of this writing, still SQLite — no Postgres/Supabase, no FastAPI (or other web framework) app, no real authentication provider integration, no object storage, no hosted scheduler, no hosted credential storage. Do not introduce any of these, and do not change existing scheduling/publishing/retry/reconciliation/auth behavior, unless the task you were given explicitly asks for it. Check `CHANGELOG.md`'s most recent entries and `PROJECT_STATE.md` before assuming what "current" means — both change often.
+- **Milestone 3 (productization) is underway. Milestones 3.0 (backend package refactor), 3.1 (hosted architecture boundary), 3.2 (user authentication + ownership model), and 3.3 (Postgres persistence migration) are complete** — see `docs/evaluations/productization/milestone-3.0-backend-package-refactor.md` through `-3.3-postgres-migration.md`. The target hosted architecture is documented in `docs/architecture/hosted-product-boundary.md`; the ownership model in `docs/decisions/0007-user-ownership-model.md`; the Postgres persistence architecture (why two parallel concrete `ContentStore`/`PostgresContentStore` classes, driver/migration-framework/timestamp/RLS decisions) in `docs/decisions/0008-postgres-persistence-migration.md` — read all three before starting any Milestone 3.4+ work. Two real, independently-supported persistence backends now exist: SQLite (`ContentStore`, still the default — `DATABASE_URL` unset) and Postgres (`PostgresContentStore`, real Supabase — `DATABASE_URL` set). `persistence.store_factory.build_content_store()` selects between them (no CLI entry point calls it yet — every `cli/*.py` still constructs `ContentStore()` directly, unchanged). `user_id` is **optional** on the SQLite backend's methods (backward-compatible default, per ADR-0007) but **required** (and `NOT NULL` at the schema level) on the Postgres backend's — see ADR-0008 for why this is a deliberate divergence, not an inconsistency to "fix."
+- **Next up: Milestone 3.4+ (object storage / media lifecycle).** As of this writing: no FastAPI (or other web framework) app, no real authentication provider integration, no object storage, no hosted scheduler/worker, no hosted credential storage — Postgres is available but no CLI entry point is wired to use it by default yet. Do not introduce any of the still-missing pieces, and do not change existing scheduling/publishing/retry/reconciliation/auth behavior, unless the task you were given explicitly asks for it. Check `CHANGELOG.md`'s most recent entries and `PROJECT_STATE.md` before assuming what "current" means — both change often.
 
 ## Instruction Hierarchy
 
@@ -49,7 +49,7 @@ src/content_automation/   runtime application package (import as content_automat
   media/                     video inspection, transcription, captions, classification, the ingestion pipeline
   scheduling/                 due-post selection, worker, retry/backoff, reconciliation, crash recovery
   publishing/                   platform-neutral Publisher contract; publishing/tiktok/ (auth, publisher)
-  persistence/                    ContentStore (SQLite)
+  persistence/                    ContentStore (SQLite, default) + PostgresContentStore (Milestone 3.3, real Supabase)
   calendar/                        Google Calendar generation/management, posting cadence (cadence.py)
 
 cli/                       thin CLI entry points — `python3 cli/<name>.py` — argument parsing only;
@@ -77,7 +77,7 @@ Preserve these boundaries — place new runtime code in the package matching wha
 - **`media/`** — anything about a video file itself or turning it into scheduling-ready metadata: inspection, transcription, captioning, classification, the ingestion pipeline.
 - **`scheduling/`** — anything about *when* and *whether* a platform post executes: slot matching, due-post selection, atomic claiming, the worker, retry classification/backoff, reconciliation, crash recovery. Not to be confused with `calendar/cadence.py` (see next bullet) — different concern that happens to share the word "scheduling."
 - **`publishing/`** — the platform-neutral `Publisher` contract and platform-specific implementations (`publishing/tiktok/`). A future second platform gets its own `publishing/<platform>/`, not a branch inside `tiktok/`.
-- **`persistence/`** — `ContentStore` and all direct SQLite access. No other module should touch the database directly.
+- **`persistence/`** — `ContentStore` (SQLite) and `PostgresContentStore` (Milestone 3.3, Postgres) — the two implementations of `ContentStoreProtocol`, this repository's persistence boundary. No other module should touch a database directly (`import sqlite3`/`import psycopg`).
 - **`calendar/`** — Google Calendar integration and posting-cadence math (`cadence.py` — posting dates, pillar allocation; unrelated to `scheduling/`'s due-post concerns above despite the name).
 - **`cli/`** — thin wrappers only (argument parsing, constructing the real publisher/store, printing the result). If you find yourself adding a conditional or a loop to a `cli/*.py` file, that logic almost certainly belongs in the package instead.
 - **`tools/evaluation/`** — engineering benchmarking tooling, not part of the runtime application; safe to have heavier/optional dependencies (`requirements-eval.txt`) that the runtime package should never need.
@@ -94,7 +94,7 @@ Follow `~/.agents/CODING.md`. In addition, specific to this repository's own est
 
 Follow `~/.agents/VERIFICATION.md`. Specific to this repository:
 
-- `python3 -m pytest` — current baseline: **626 passing**. Check `CHANGELOG.md`'s most recent entries for the current count before trusting this number; it moves often.
+- `python3 -m pytest` — current baseline: **646 passing**. Check `CHANGELOG.md`'s most recent entries for the current count before trusting this number; it moves often. 20 of these are new in Milestone 3.3 (`tests/test_postgres_content_store.py` ×18, `tests/test_store_factory.py` ×2); of those, the 18 in `test_postgres_content_store.py` run against real Supabase Postgres and are skipped automatically when `DATABASE_URL` is unset — they never run against `config.POSTGRES_SCHEMA` ("public", the real application schema), only `config.POSTGRES_TEST_SCHEMA` (dropped/recreated per test session). The 2 in `test_store_factory.py` run unconditionally and need no real Postgres connection.
 - No live TikTok API calls, no real Google Calendar writes, and no real-DB (`data/content.db`) mutation from automated tests — every test that needs a `ContentStore` uses `tmp_path`; every test that needs a TikTok/Calendar client mocks it. If a task requires touching the real TikTok account or real Calendar, treat that as a hard-to-reverse external action requiring explicit user confirmation first (see `~/.agents/SECURITY.md` and this repository's own pattern in `docs/evaluations/scheduling/milestone-2.1.9-real-unattended-tiktok-validation.md` for how that confirmation was sought and scoped).
 - Never delete or weaken an existing test to make a refactor pass. If a test count changes, the reason must be explainable (see Milestone 3.0's evaluation doc for what that explanation should look like).
 
@@ -118,7 +118,7 @@ Follow `~/.agents/SECURITY.md`. Specific to this repository's credentials, none 
 
 - `data/content.db` — the real production SQLite database. Real business data. Read real rows read-only when investigating; never mutate them outside an explicitly-confirmed, explicitly-scoped task.
 - `~/.config/content-calendar/` — TikTok OAuth token (`tiktok_token.json`), Google Calendar OAuth token/client secrets. Never print token values to terminal output or into a file.
-- `.env` — `TIKTOK_CLIENT_KEY`/`TIKTOK_CLIENT_SECRET`, `ANTHROPIC_API_KEY`. Never commit, never echo into logs or docs.
+- `.env` — `TIKTOK_CLIENT_KEY`/`TIKTOK_CLIENT_SECRET`, `ANTHROPIC_API_KEY`, `DATABASE_URL` (Milestone 3.3 — real Postgres connection string with credentials). Never commit, never echo into logs or docs. `DATABASE_URL` specifically: never print it, even partially, in terminal output or a file — if you need to confirm which host it points to, parse and print only the host portion.
 - `~/growth_agency/credentials/service-account.json` — shared Google service account, used only for the explicit `--calendar <id>` override path, not the normal OAuth path.
 
 ## Scope Guardrails
@@ -135,6 +135,7 @@ Do not introduce, unless a task explicitly asks for it:
 - `README.md` — setup, run commands, current project structure.
 - `PROJECT_STATE.md` — current architecture and behavior, by area (routing strategy, captions, TikTok publishing, credentials, testing, etc.).
 - `docs/architecture/hosted-product-boundary.md` — the target hosted architecture (API vs. background-job boundary, persistence/media/credential boundaries, migration risks) that Milestones 3.2+ should build toward.
+- `docs/decisions/0008-postgres-persistence-migration.md` — why Postgres was added as a second persistence backend the way it was (two parallel concrete classes, driver, migration framework, timestamp representation, RLS deferral).
 - `docs/decisions/` — why the architecture is shaped the way it is (ADRs).
 - `docs/evaluations/<domain>/` — what was built and how it was validated, per milestone.
 - `CHANGELOG.md` — the most current, dated record of what actually changed and why; check it first when "current state" matters and this file might be stale.

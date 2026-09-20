@@ -22,6 +22,15 @@ rather than a future one; §6's persistence-boundary decision is updated to refl
 than left untouched. Sections describing genuinely still-future work (Postgres, object
 storage, real auth-provider integration, hosted credential storage) are otherwise unchanged.
 
+**Milestone 3.3 update (see `docs/decisions/0008-postgres-persistence-migration.md` and
+`docs/evaluations/productization/milestone-3.3-postgres-migration.md`):** Postgres is no longer
+future work — `PostgresContentStore` is a real, tested, second implementation of the
+persistence boundary §6 describes, running against real Supabase Postgres, with `user_id` now
+`NOT NULL` there (the nullable-under-SQLite compromise §6/ADR-0007 describes was always scoped
+to SQLite specifically). §6 and §14/§16 are updated in place. Object storage, real
+auth-provider integration, and hosted credential storage remain exactly as future as before —
+this milestone did not touch them.
+
 ---
 
 ## 1. Current Local Architecture
@@ -199,7 +208,20 @@ No queue system was implemented or selected this milestone (explicit guardrail).
 
 ## 6. Persistence Boundary
 
-**Current boundary: already clean.** `ContentStore` (`persistence/content_store.py`) is
+**Milestone 3.3 update:** Postgres is implemented — `persistence/postgres_content_store.py`'s
+`PostgresContentStore` is a real second implementation of the method surface described below,
+tested against real Supabase Postgres (`tests/test_postgres_content_store.py`). See
+ADR-0008 for the full architecture decision (why two parallel concrete classes rather than a
+shared abstraction, the driver/migration-framework/timestamp/RLS decisions) and the Milestone
+3.3 evaluation record for validation evidence. `ContentStoreProtocol`
+(`persistence/protocol.py`) now exists as the documented shared contract — a `typing.Protocol`,
+not a base class; neither concrete store inherits from it or from each other. One real
+divergence from what §6 originally anticipated: Postgres's `user_id` columns are `NOT NULL`,
+not optional like SQLite's — see "Ownership" in ADR-0008 for why the nullable compromise below
+was always SQLite-specific, not a shape Postgres needed to inherit.
+
+**Current boundary (as of Milestone 3.1's original writing — SQLite side unchanged): already
+clean.** `ContentStore` (`persistence/content_store.py`) is
 verified (via `grep -rl "^import sqlite3\|^import sqlite3 as" src/ cli/ tools/`) to be the
 only module that imports `sqlite3` anywhere in the runtime package or CLI. Every other module
 — `scheduling/*`, `publishing/*`, `media/*`, `calendar/*` — reaches persistence exclusively
@@ -220,14 +242,16 @@ upward:**
   `ALTER TABLE ... DROP CONSTRAINT`), so these specific functions have no Postgres
   equivalent need, not just a portable one.
 
-**What *is* portable as-is:** the two concurrency primitives every scheduling module
-depends on — `claim_platform_post` (atomic `UPDATE ... WHERE status = 'PENDING'`, success
-read from `rowcount`) and `update_platform_post_if_unchanged` (optimistic-concurrency
-`UPDATE ... WHERE updated_at = ?`) — are standard SQL patterns with no SQLite-specific
-behavior. They should port to Postgres unchanged in *concurrency shape* (still a conditional
-`UPDATE ... WHERE`), even as their parameter lists grow to carry ownership scoping (see
-below); Milestone 3.3 should verify this under real concurrent Postgres connections rather
-than assume parity (see §16).
+**What *is* portable as-is — confirmed, not just anticipated:** the two concurrency primitives
+every scheduling module depends on — `claim_platform_post` (atomic `UPDATE ... WHERE status =
+'PENDING'`, success read from `rowcount`) and `update_platform_post_if_unchanged`
+(optimistic-concurrency `UPDATE ... WHERE updated_at = ?`) — ported to
+`PostgresContentStore` unchanged in concurrency shape. Milestone 3.3 verified this under real
+concurrent Postgres connections, not assumed parity: five real threads with five independent
+Postgres connections racing to claim the same row (exactly one wins, four lose cleanly — no
+exception, `rowcount = 0`), and a real stale-CAS-update-cannot-overwrite-newer-state proof (two
+sequential real connections, the second holding an already-superseded `expected_updated_at`).
+See `tests/test_postgres_content_store.py`.
 
 **Decision: do not extract a persistence interface/repository abstraction now.**
 `ContentStore`'s existing method surface *is* the persistence boundary every other module
@@ -496,7 +520,7 @@ milestone's scope.
 | Category | Requirements | Constraints | Interface the code should depend on | Decision needed now? |
 |---|---|---|---|---|
 | API hosting | Run FastAPI, reachable by web/mobile clients | Must not block on long-running work (§4) | Standard ASGI app | No — deferred to whichever milestone builds `api/` |
-| Postgres | Multi-connection concurrency, real `ALTER TABLE`, user-scoped rows | Must preserve `ContentStore`'s method contract (§6); timestamp convention decision (§16) | `ContentStore`'s existing method surface | No — exact provider open until Milestone 3.3 |
+| Postgres | Multi-connection concurrency, real `ALTER TABLE`, user-scoped rows | Must preserve `ContentStoreProtocol`'s contract (§6); timestamp convention decision | `PostgresContentStore` (implemented) | **Done (Milestone 3.3)** — Supabase Postgres, via the session pooler (IPv4-compatible; the direct connection host is IPv6-only). See ADR-0008. |
 | Object storage | Durable, addressable by a logical reference; readable as bytes/stream on demand | Must support the "resolve reference → local temp path" pattern (§7) | A small storage-adapter interface (get/put by reference) — not designed this milestone | No — deferred to Milestone 3.4 |
 | Background execution | Run the four existing one-pass functions (§5) on triggers, possibly concurrently across users | Must not require converting them to daemons/loops — they're already one-pass | A job-runner invocation contract (function in, summary out) — already satisfied by existing signatures | No — provider/framework choice deferred |
 | Scheduled jobs | Trigger publishing/reconciliation/recovery on an interval per connection/user | Must respect existing backoff/staleness config (§9) | A scheduler that calls the existing one-pass functions | No — deferred |
@@ -523,22 +547,24 @@ Ranked by urgency, all found by direct inspection (not assumed):
 
 **Milestone-specific (tied to a specific future milestone, not urgent now):**
 - Local absolute media paths stored in `videos.canonical_media_path`/`original_path` (§7) —
-  Milestone 3.4 (object storage).
-- SQLite's naive-local-time (`scheduled_at`) vs. aware-UTC (`updated_at`/`published_at`/
-  `next_status_check_at`) timestamp convention split — deliberate today (see `AGENTS.md`
-  "Coding / Refactor Rules"), but Milestone 3.3 (Postgres) must decide how to represent these
-  columns (native `TIMESTAMP` vs. `TIMESTAMPTZ`) without silently normalizing one into the
-  other and breaking the naive/aware comparisons scattered across `due_post_selector.py`/
-  `reconciliation.py`/`crash_recovery.py`.
+  Milestone 3.4 (object storage). Not touched by 3.3 — the SQLite→Postgres migration copied
+  these path strings verbatim; their *meaning* still needs 3.4's object-storage boundary.
 - `tiktok_auth._refresh_lock()`'s `fcntl.flock`-based process/host-local advisory lock — fine
   for a single-host CLI, will not correctly serialize refreshes across multiple hosted worker
   processes/containers. Becomes a per-connection DB-row lock (same optimistic-concurrency
   pattern as `update_platform_post_if_unchanged`) once hosted background workers exist —
-  whichever milestone introduces those.
+  whichever milestone introduces those. Still open; Postgres migration alone doesn't touch
+  credential refresh locking.
+
+**Resolved by Milestone 3.3** (listed here for continuity with the original 3.1 risk ranking):
+- SQLite's naive-local-time (`scheduled_at`) vs. aware-UTC (`updated_at`/`published_at`/
+  `next_status_check_at`) timestamp convention split — preserved exactly under Postgres
+  (`TIMESTAMP` for naive-local columns, `TIMESTAMPTZ` for aware-UTC ones, session time zone
+  forced to UTC at connect time), not normalized. See ADR-0008 "Timestamps".
 - SQLite's single-writer/file-lock concurrency model vs. Postgres's real concurrent-connection
-  model — the existing atomic-claim and optimistic-concurrency patterns are standard SQL and
-  *should* port unchanged in shape (§6), but Milestone 3.3 should verify this against real
-  concurrent Postgres connections rather than assume parity.
+  model — verified directly under real concurrent Postgres connections (five real threads
+  racing to claim one row; a real stale-CAS proof), not assumed. See
+  `tests/test_postgres_content_store.py`.
 
 **Safe to defer:**
 - Local model/cache directories (`EMBEDDING_CACHE_DIR`, faster-whisper's own cache) — public
@@ -550,10 +576,14 @@ Ranked by urgency, all found by direct inspection (not assumed):
 
 ## 16. Deferred Provider Decisions
 
-Explicitly not selected this milestone, per guardrails: Postgres provider, object storage
-provider, background-execution/queue technology, scheduled-job infrastructure, secrets
-manager, API hosting provider. See §14 for the full matrix of what's deferred and why each
-is safe to leave open until its corresponding milestone.
+As of Milestone 3.1: Postgres provider, object storage provider, background-execution/queue
+technology, scheduled-job infrastructure, secrets manager, API hosting provider — none
+selected, per guardrails.
+
+**Milestone 3.3 update:** Postgres provider is now decided — Supabase Postgres, via its
+session connection pooler (see ADR-0008 "Provider"). Object storage provider,
+background-execution/queue technology, scheduled-job infrastructure, secrets manager, and API
+hosting provider remain deferred exactly as before. See §14 for the current matrix.
 
 ## 17. Summary
 
@@ -572,6 +602,13 @@ explicitly not frozen.
 `videos`/`content_slots`/`platform_posts`, an `OwnershipMismatchError` invariant on
 `assign_slot`, and optional tenant scoping proven end-to-end on all four background job
 functions (§5). See ADR-0007 and the Milestone 3.2 evaluation record for the full
-implementation and validation evidence. Postgres (3.3), object storage (3.4), and real hosted
-credential storage remain exactly as future as they were at the original Milestone 3.1
-writing of this document.
+implementation and validation evidence.
+
+**Milestone 3.3 addendum:** Postgres persistence is now real — `PostgresContentStore`, tested
+against actual Supabase Postgres (real concurrent-connection atomic claim, real stale-CAS
+rejection, real cross-tenant isolation, a real SQLite→Postgres data migration preserving every
+id/relationship/publishing-state field, all backed by 20 new passing tests). `user_id` is
+`NOT NULL` under Postgres, resolving the nullable-under-SQLite compromise Milestone 3.2 made
+deliberately and only for SQLite (ADR-0007/ADR-0008). Object storage (3.4) and real hosted
+credential storage remain exactly as future as they were at the original Milestone 3.1 writing
+of this document.

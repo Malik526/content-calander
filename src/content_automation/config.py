@@ -255,13 +255,39 @@ EVENT_DURATION_MINUTES = 30
 # and slot routing. See docs/decisions/0001-video-ingestion-pipeline.md.
 # ---------------------------------------------------------------------------
 
-# SQLite database holding videos and content_slots records.
+# SQLite database holding videos and content_slots records. Still the
+# default/dev/test backend after Milestone 3.3 — see
+# docs/decisions/0008-postgres-persistence-migration.md's "Local Development
+# Strategy" for why SQLite was kept for fast unit tests rather than requiring
+# networked Postgres for every test run.
 DB_PATH = Path(
     os.getenv(
         "CONTENT_CALENDAR_DB_PATH",
         str(REPO_ROOT / "data" / "content.db"),
     )
 ).expanduser()
+
+# ---------------------------------------------------------------------------
+# Postgres (Milestone 3.3 — hosted persistence backend)
+# Added: September 2026. A real, standard libpq connection string
+# (postgresql://user:password@host:port/dbname), never committed — set in
+# .env only. Empty by default, matching TIKTOK_CLIENT_KEY/SECRET's own
+# "missing setup fails with a clear, actionable error rather than silently
+# doing something wrong" pattern: an empty DATABASE_URL means "use SQLite"
+# (persistence.store_factory.build_content_store's explicit selection rule),
+# never a silent partial/broken Postgres attempt. See
+# docs/decisions/0008-postgres-persistence-migration.md.
+# ---------------------------------------------------------------------------
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+# Which Postgres schema PostgresContentStore operates against. "public" is
+# the real hosted-application schema; the Postgres integration test suite
+# overrides this (POSTGRES_TEST_SCHEMA) to a dedicated, disposable schema so
+# tests never touch real business rows — see
+# tests/test_postgres_content_store.py and Phase 22 of the Milestone 3.3
+# evaluation record.
+POSTGRES_SCHEMA = os.getenv("POSTGRES_SCHEMA", "public")
+POSTGRES_TEST_SCHEMA = os.getenv("POSTGRES_TEST_SCHEMA", "pickle_batch_test")
 
 # File lifecycle directories for process_content.py.
 CONTENT_DIR = REPO_ROOT / "content"
