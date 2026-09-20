@@ -14,8 +14,8 @@ Do not rename internal modules, database tables, or backend concepts to "Pickle 
 ## Current Product Stage
 
 - **Milestone 2.1 (TikTok scheduled-publishing reliability): complete.** Due detection, atomic claiming, worker execution, crash recovery, retry/backoff, missed-schedule handling, token lifecycle/auto-refresh, and asynchronous publish reconciliation are all implemented and validated against the real TikTok Sandbox account — see `docs/evaluations/scheduling/`.
-- **Milestone 3 (productization) is underway. Milestone 3.0 (this backend package refactor — behavior-preserving only, no new functionality) is complete** — see `docs/evaluations/productization/milestone-3.0-backend-package-refactor.md`.
-- **Next up: Milestone 3.1 (hosted architecture boundary).** As of this writing, no hosted service layer exists yet: no FastAPI (or other web framework) app, no Postgres/Supabase, no user authentication, no object storage, no hosted scheduler. Do not introduce any of these, and do not change existing scheduling/publishing/retry/reconciliation/auth behavior, unless the task you were given explicitly asks for it. Check `CHANGELOG.md`'s most recent entries and `PROJECT_STATE.md` before assuming what "current" means — both change often.
+- **Milestone 3 (productization) is underway. Milestone 3.0 (backend package refactor) and Milestone 3.1 (hosted architecture boundary — documentation only, no code changes) are both complete** — see `docs/evaluations/productization/milestone-3.0-backend-package-refactor.md` and `docs/evaluations/productization/milestone-3.1-hosted-architecture-boundary.md`. The target hosted architecture (API vs. background-job boundary, persistence/media/credential boundaries, user-ownership map, migration risk list) is now documented in `docs/architecture/hosted-product-boundary.md` — read it before starting any Milestone 3.2+ work.
+- **Next up: Milestone 3.2+.** As of this writing, no hosted service layer exists yet: no FastAPI (or other web framework) app, no Postgres/Supabase, no user authentication, no object storage, no hosted scheduler. Do not introduce any of these, and do not change existing scheduling/publishing/retry/reconciliation/auth behavior, unless the task you were given explicitly asks for it. Check `CHANGELOG.md`'s most recent entries and `PROJECT_STATE.md` before assuming what "current" means — both change often.
 
 ## Instruction Hierarchy
 
@@ -58,6 +58,7 @@ tools/evaluation/          engineering evaluation tooling (classifier/transcript
                             not runtime code; distinct from the evaluation/ data directory below
 
 tests/                     automated verification (pytest)
+docs/architecture/         target hosted-architecture reference (hosted-product-boundary.md) — read before Milestone 3.2+ work
 docs/decisions/            ADRs — genuine architecture decisions only
 docs/evaluations/          recorded validation evidence, organized by domain (scheduling/, tiktok/, productization/)
 evaluation/                golden dataset for tools/evaluation/evaluate_classifier.py (gitignored contents)
@@ -133,6 +134,7 @@ Do not introduce, unless a task explicitly asks for it:
 
 - `README.md` — setup, run commands, current project structure.
 - `PROJECT_STATE.md` — current architecture and behavior, by area (routing strategy, captions, TikTok publishing, credentials, testing, etc.).
+- `docs/architecture/hosted-product-boundary.md` — the target hosted architecture (API vs. background-job boundary, persistence/media/credential boundaries, migration risks) that Milestones 3.2+ should build toward.
 - `docs/decisions/` — why the architecture is shaped the way it is (ADRs).
 - `docs/evaluations/<domain>/` — what was built and how it was validated, per milestone.
 - `CHANGELOG.md` — the most current, dated record of what actually changed and why; check it first when "current state" matters and this file might be stale.
