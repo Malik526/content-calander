@@ -209,6 +209,59 @@ CREATE TABLE IF NOT EXISTS platform_connections (
 );
 """
 
+# Added Milestone 3.6 (real authentication + hosted TikTok connection — see
+# docs/decisions/0011-real-authentication-and-tiktok-connection.md).
+# Deliberately its own table, not new columns on platform_connections:
+# platform_connections is documented (above) to carry no credential
+# secrets, and that boundary is preserved here rather than broken —
+# identity/status stays in platform_connections, the actual encrypted
+# access/refresh token pair lives only here. UNIQUE(platform_connection_id)
+# — one credential per connection, matching platform_connections' own
+# UNIQUE(user_id, platform). encrypted_payload is a Fernet ciphertext of the
+# same token JSON shape publishing/tiktok/auth.py's save_token() already
+# writes (access_token, refresh_token, access_token_expires_at,
+# refresh_token_expires_at, open_id, scope) — see
+# publishing/tiktok/credential_store.py. updated_at backs an optimistic-
+# concurrency (CAS) refresh, the same update_platform_post_if_unchanged
+# pattern already used elsewhere in this store, replacing tiktok_auth.py's
+# fcntl-based lock for this hosted, multi-process-safe path specifically —
+# the existing local-file/fcntl path for the CLI's own token is untouched.
+SCHEMA_PLATFORM_CREDENTIALS = """
+CREATE TABLE IF NOT EXISTS platform_credentials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform_connection_id INTEGER NOT NULL UNIQUE REFERENCES platform_connections(id),
+    encrypted_payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+# Added Milestone 3.6. Server-side, DB-backed pending-OAuth-attempt state —
+# the hosted equivalent of tiktok_auth.py's TIKTOK_PENDING_AUTH_PATH file,
+# but user-bound (so a callback can only ever complete the flow it belongs
+# to — see api/routes/platforms_tiktok.py) and usable across separate
+# stateless API requests (connect and callback are two different HTTP
+# requests, possibly handled by two different processes, unlike the local
+# CLI's single long-lived process). `state` is UNIQUE so a raw duplicate
+# insert is rejected outright; `consumed_at` (set exactly once, via an
+# atomic CAS update — see consume_oauth_state()) makes replaying an
+# already-used state a no-op rejection rather than a second successful
+# completion, and `expires_at` bounds how long an abandoned attempt stays
+# valid (config.OAUTH_STATE_TTL_SECONDS).
+SCHEMA_OAUTH_STATES = """
+CREATE TABLE IF NOT EXISTS oauth_states (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    platform TEXT NOT NULL,
+    state TEXT NOT NULL UNIQUE,
+    code_verifier TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT
+);
+"""
+
 # The one local bootstrap identity every pre-3.2 row (and every CLI
 # invocation, until a real auth layer exists) is attributed to. Not a
 # secret, not exposed externally — a fixed, documented anchor, exactly the
@@ -573,6 +626,28 @@ class PlatformConnectionRecord:
     updated_at: str
 
 
+@dataclass
+class PlatformCredentialRecord:
+    id: int
+    platform_connection_id: int
+    encrypted_payload: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class OAuthStateRecord:
+    id: int
+    user_id: int
+    platform: str
+    state: str
+    code_verifier: str
+    redirect_uri: str
+    created_at: str
+    expires_at: str
+    consumed_at: str | None
+
+
 def _row_to_video(row: sqlite3.Row) -> VideoRecord:
     return VideoRecord(**dict(row))
 
@@ -595,6 +670,14 @@ def _row_to_auth_identity(row: sqlite3.Row) -> AuthIdentityRecord:
 
 def _row_to_platform_connection(row: sqlite3.Row) -> PlatformConnectionRecord:
     return PlatformConnectionRecord(**dict(row))
+
+
+def _row_to_platform_credential(row: sqlite3.Row) -> PlatformCredentialRecord:
+    return PlatformCredentialRecord(**dict(row))
+
+
+def _row_to_oauth_state(row: sqlite3.Row) -> OAuthStateRecord:
+    return OAuthStateRecord(**dict(row))
 
 
 class ContentStore:
@@ -625,6 +708,10 @@ class ContentStore:
         self._conn.executescript(SCHEMA_USERS)
         self._conn.executescript(SCHEMA_AUTH_IDENTITIES)
         self._conn.executescript(SCHEMA_PLATFORM_CONNECTIONS)
+        # Milestone 3.6: created after platform_connections/users so their
+        # REFERENCES clauses are meaningful from the first run.
+        self._conn.executescript(SCHEMA_PLATFORM_CREDENTIALS)
+        self._conn.executescript(SCHEMA_OAUTH_STATES)
 
     def close(self) -> None:
         self._conn.close()
@@ -1265,6 +1352,120 @@ class ContentStore:
             return existing
         now = _utc_now_iso()
         return self.create_platform_connection(user_id, platform, external_account_id, "ACTIVE", now)
+
+    def update_platform_connection_status(self, connection_id: int, status: str, updated_at: str) -> None:
+        """Used by the hosted OAuth connect/disconnect flow (Milestone
+        3.6) — e.g. DISCONNECTED on disconnect, back to ACTIVE on a
+        reconnect. Unconditional (no CAS) — status transitions here are
+        always driven by one explicit, authenticated user action at a
+        time, not a background refresh race like platform_credentials'
+        update_platform_credential_if_unchanged."""
+        self._conn.execute(
+            "UPDATE platform_connections SET status = ?, updated_at = ? WHERE id = ?",
+            (status, updated_at, connection_id),
+        )
+
+    # -- platform_credentials / oauth_states (Milestone 3.6) -------------
+
+    def get_platform_credential(self, platform_connection_id: int) -> PlatformCredentialRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM platform_credentials WHERE platform_connection_id = ?", (platform_connection_id,)
+        ).fetchone()
+        return _row_to_platform_credential(row) if row else None
+
+    def upsert_platform_credential(
+        self, platform_connection_id: int, encrypted_payload: str, now: str,
+    ) -> PlatformCredentialRecord:
+        """Create-or-unconditionally-overwrite a connection's stored
+        credential. Used by the OAuth connect flow (a fresh, explicit
+        user-initiated authorization always wins, exactly like
+        tiktok_auth.save_token()'s own unconditional overwrite) — never
+        used by the refresh path, which must use
+        update_platform_credential_if_unchanged instead so a concurrent
+        refresh can't silently clobber a newer one."""
+        existing = self.get_platform_credential(platform_connection_id)
+        if existing is None:
+            self._conn.execute(
+                "INSERT INTO platform_credentials (platform_connection_id, encrypted_payload, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                (platform_connection_id, encrypted_payload, now, now),
+            )
+        else:
+            self._conn.execute(
+                "UPDATE platform_credentials SET encrypted_payload = ?, updated_at = ? WHERE platform_connection_id = ?",
+                (encrypted_payload, now, platform_connection_id),
+            )
+        return self.get_platform_credential(platform_connection_id)
+
+    def update_platform_credential_if_unchanged(
+        self, platform_connection_id: int, encrypted_payload: str, expected_updated_at: str, new_updated_at: str,
+    ) -> bool:
+        """Optimistic-concurrency (CAS) update for the refresh path — the
+        same update_platform_post_if_unchanged pattern (compare-and-swap on
+        updated_at) used elsewhere in this store, so two concurrent hosted
+        requests refreshing the same expired TikTok credential can't both
+        win: the second writer's expected_updated_at is stale by the time it
+        writes, its update affects zero rows, and it re-reads instead of
+        overwriting an already-refreshed (and possibly already-rotated-away)
+        token. Returns True if this call's write won."""
+        cur = self._conn.execute(
+            "UPDATE platform_credentials SET encrypted_payload = ?, updated_at = ? "
+            "WHERE platform_connection_id = ? AND updated_at = ?",
+            (encrypted_payload, new_updated_at, platform_connection_id, expected_updated_at),
+        )
+        return cur.rowcount > 0
+
+    def delete_platform_credential(self, platform_connection_id: int) -> None:
+        """Used by disconnect (Phase 20) — removes only the credential
+        secret, never the platform_connections row itself (which retains
+        identity/status history; its status is set to DISCONNECTED by the
+        caller, not deleted)."""
+        self._conn.execute(
+            "DELETE FROM platform_credentials WHERE platform_connection_id = ?", (platform_connection_id,)
+        )
+
+    def create_oauth_state(
+        self, user_id: int, platform: str, state: str, code_verifier: str, redirect_uri: str,
+        created_at: str, expires_at: str,
+    ) -> OAuthStateRecord:
+        """Raises sqlite3.IntegrityError on a state collision (UNIQUE) —
+        astronomically unlikely (state is secrets.token_urlsafe-generated)
+        but fails loudly rather than silently reusing another attempt's
+        row."""
+        cur = self._conn.execute(
+            "INSERT INTO oauth_states (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at),
+        )
+        row = self._conn.execute("SELECT * FROM oauth_states WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return _row_to_oauth_state(row)
+
+    def consume_oauth_state(self, state: str, now: str) -> OAuthStateRecord | None:
+        """Atomically marks a pending OAuth state consumed and returns the
+        row that was consumed — or None if `state` doesn't exist, was
+        already consumed (replay), or is past expires_at. The read (to
+        return the row's user_id/code_verifier/redirect_uri/platform to the
+        caller) happens before the CAS write, but the write's own
+        `WHERE consumed_at IS NULL` clause is what actually prevents two
+        concurrent callback requests presenting the same state from both
+        succeeding — only one UPDATE can win; the loser gets rowcount=0 and
+        this returns None to it, exactly like
+        update_platform_credential_if_unchanged's race handling above."""
+        row = self._conn.execute("SELECT * FROM oauth_states WHERE state = ?", (state,)).fetchone()
+        if row is None:
+            return None
+        record = _row_to_oauth_state(row)
+        if record.consumed_at is not None:
+            return None
+        if now >= record.expires_at:
+            return None
+        cur = self._conn.execute(
+            "UPDATE oauth_states SET consumed_at = ? WHERE state = ? AND consumed_at IS NULL", (now, state)
+        )
+        if cur.rowcount == 0:
+            return None
+        record.consumed_at = now
+        return record
 
 
 class SlotUnavailableError(Exception):

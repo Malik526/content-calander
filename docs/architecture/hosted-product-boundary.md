@@ -60,6 +60,19 @@ no real authentication provider was selected or integrated. See §18 (new) for t
 boundary description and ADR-0010 for the durable decisions. Nothing in §1-§17 below changed; this
 milestone was entirely additive on the frontend side of the stack this document otherwise describes.
 
+**Milestone 3.6 update (see `docs/decisions/0011-real-authentication-and-tiktok-connection.md` and
+`docs/evaluations/productization/milestone-3.6-auth-tiktok-connection.md`):** real authentication and
+the first real FastAPI surface both exist now — Milestone 3.5's mock session is gone (no bypass flag
+anywhere), `web/lib/session.tsx` wraps real Supabase Auth (Google), and a new
+`src/content_automation/api/` package (`GET /api/me`, `/api/platforms/tiktok/{status,connect,callback,disconnect}`)
+verifies every request via a real bearer token — never a client-supplied `user_id`. §5's multi-tenant
+execution invariant and §8's credential boundary both move from conceptual to partially real: a new
+`platform_credentials` table (encrypted, CAS-refreshed) holds a hosted TikTok connection's access/refresh
+token per `platform_connection`, alongside (not replacing) the pre-existing single local token file the
+CLI still uses. §8 is updated in place; §18 gains an "Authentication (Milestone 3.6)" subsection. See
+the ADR for the full provider evaluation, token-verification design, OAuth state-binding mechanism, and
+the one honestly-documented residual concurrency limitation in hosted credential refresh.
+
 ---
 
 ## 1. Current Local Architecture
@@ -405,6 +418,20 @@ secret material, so this section's "current single-global assumptions" list belo
 accurate for the credential itself, only now paired with a real per-user connection row that
 identifies *whose* credential it conceptually is.
 
+**Milestone 3.6 update:** the credential *secret* itself is now real and per-connection for the
+hosted path — a new `platform_credentials` table (`UNIQUE(platform_connection_id)`,
+Fernet-encrypted `encrypted_payload`, `updated_at`-CAS-refreshed) holds a hosted TikTok
+connection's access/refresh token, populated by a real hosted OAuth connect/callback flow
+(`api/routes/platforms_tiktok.py`) that reuses `publishing/tiktok/auth.py`'s PKCE/token-exchange
+logic unmodified. This is genuinely additive, not a replacement: the single-global local file
+(`config.TIKTOK_TOKEN_PATH`) and its `fcntl` lock remain exactly as described below, still the
+CLI's own path, untouched. See ADR-0011 "Credential Storage" for the full design, including the
+one honestly-documented residual concurrency limitation (no real distributed lock across hosted
+worker processes yet — the same category of gap this section's `TIKTOK_REFRESH_LOCK_PATH` bullet
+already flagged for the CLI's own lock, now also true of the hosted path's CAS-based mitigation).
+Google Calendar's OAuth identity and dedicated-calendar ownership remain exactly as
+single-global/conceptual as before — this milestone touched only the TikTok credential path.
+
 **Current single-global assumptions, all confirmed by direct inspection:**
 
 - `config.TIKTOK_TOKEN_PATH` (`~/.config/content-calendar/tiktok_token.json`) — one TikTok
@@ -563,6 +590,16 @@ files were scaffolded this milestone — per the brief's own preference for docu
 speculative empty files, and because there is nothing yet for an empty `api/` package to
 import or be tested against.
 
+**Milestone 3.6 update:** this package is real now, matching the predicted shape exactly
+(`app.py`, `routes/`, `schemas/`, `dependencies/`) — FastAPI, four real routes
+(`/api/me`, `/api/platforms/tiktok/{status,connect,callback,disconnect}`), run via
+`cli/run_api.py` (matching the existing thin-CLI-wrapper convention). See ADR-0011 and §18's
+"Authentication" subsection. `identity/` (a new top-level package, not nested under `api/`) holds
+token verification and user-mapping logic — kept separate from `api/` itself so the same identity
+logic isn't coupled to FastAPI specifically, and separate in name from `publishing/tiktok/auth.py`/
+`calendar_manager.py`'s own unrelated OAuth flows, which already used "auth" to mean two different
+things before this milestone added a third, distinct meaning that needed its own word.
+
 ## 13. Service Layer: What Already Exists, What Doesn't
 
 Milestone 3.0's package/CLI split already produced the application-service layer this phase
@@ -589,12 +626,12 @@ milestone's scope.
 
 | Category | Requirements | Constraints | Interface the code should depend on | Decision needed now? |
 |---|---|---|---|---|
-| API hosting | Run FastAPI, reachable by web/mobile clients | Must not block on long-running work (§4) | Standard ASGI app | No — deferred to whichever milestone builds `api/` |
+| API hosting | Run FastAPI, reachable by web/mobile clients | Must not block on long-running work (§4) | Standard ASGI app | **`api/` now exists and runs (Milestone 3.6)** — locally only (`cli/run_api.py`); a real hosting provider is still deferred. |
 | Postgres | Multi-connection concurrency, real `ALTER TABLE`, user-scoped rows | Must preserve `ContentStoreProtocol`'s contract (§6); timestamp convention decision | `PostgresContentStore` (implemented) | **Done (Milestone 3.3)** — Supabase Postgres, via the session pooler (IPv4-compatible; the direct connection host is IPv6-only). See ADR-0008. |
 | Object storage | Durable, addressable by a logical reference; readable as bytes/stream on demand | Must support the "resolve reference → local temp path" pattern (§7) | `StorageProtocol` (implemented) | **Done (Milestone 3.4)** — Supabase Storage, via its REST API (private buckets, service-role key). See ADR-0009. |
 | Background execution | Run the four existing one-pass functions (§5) on triggers, possibly concurrently across users | Must not require converting them to daemons/loops — they're already one-pass | A job-runner invocation contract (function in, summary out) — already satisfied by existing signatures | No — provider/framework choice deferred |
 | Scheduled jobs | Trigger publishing/reconciliation/recovery on an interval per connection/user | Must respect existing backoff/staleness config (§9) | A scheduler that calls the existing one-pass functions | No — deferred |
-| Secrets management | Store per-user platform credentials (§8), app-level API keys | Never expose server-only credentials client-side (global `SECURITY.md`) | Whatever the credential-storage adapter in §8 ends up being | No — deferred; do not move tokens into Postgres yet (guardrail) |
+| Secrets management | Store per-user platform credentials (§8), app-level API keys | Never expose server-only credentials client-side (global `SECURITY.md`) | Whatever the credential-storage adapter in §8 ends up being | **Partially done (Milestone 3.6)** — TikTok credentials now live in Postgres/SQLite (`platform_credentials`), application-level Fernet-encrypted (`config.CREDENTIAL_ENCRYPTION_KEY`), not a managed secrets service — see ADR-0011 "Credential Storage" for why that's the right-sized choice for now. |
 | Frontend hosting | Serve `web/` (Next.js, already deployed via `netlify.toml`) | Explicitly no shared code with the Python backend in either direction | N/A — already decided and running (Netlify) | Already decided. **Milestone 3.5:** now also serving a real product app shell (§18), not only the marketing site — still a static export, no Next.js server runtime needed. |
 
 No provider was selected purely because it is familiar (guardrail respected) — every open
@@ -709,6 +746,18 @@ auth-provider integration and hosted credential storage remain exactly as future
 an explicit frontend-side blocker recorded (§18) against the temporary mock-session deployment
 configuration.
 
+**Milestone 3.6 addendum:** the Milestone 3.5 blocker is closed — real authentication (Supabase Auth,
+Google) now protects `/app/*` end to end, verified server-side by a new `src/content_automation/api/`
+FastAPI surface (`GET /api/me`, `/api/platforms/tiktok/*`) via `identity/token_verification.py`, never
+by anything the browser supplies. The first real user-owned integration also shipped: a hosted TikTok
+OAuth connection flow, reusing `publishing/tiktok/auth.py`'s proven PKCE/token logic unmodified, with
+a new encrypted, per-connection `platform_credentials` table (Fernet, CAS-refreshed) alongside — not
+replacing — the pre-existing single local token file the CLI still uses. §5's multi-tenant execution
+invariant and §8's credential boundary both move from conceptual to partially real for the hosted path.
+See ADR-0011 and §18's "Authentication" subsection for full detail, including the one honestly-
+documented residual concurrency limitation in hosted credential refresh and the still-deferred real
+distributed-lock/API-hosting-provider decisions.
+
 ## 18. Frontend Application Boundary (Milestone 3.5)
 
 `web/` was a public marketing site only through Milestone 3.4 (`/`, `/privacy`, `/terms`). Milestone
@@ -745,3 +794,16 @@ jobs acting on tenant-scoped rows.
 storage, credentials, configuration, background jobs) — this milestone touched only `web/`, which has
 no shared code with the Python backend in either direction, per this repository's own standing
 guardrail (`AGENTS.md`).
+
+**Authentication (Milestone 3.6 update):** the blocker above is closed. `web/lib/session.tsx` wraps
+real Supabase Auth (`@supabase/supabase-js`, PKCE flow, Google as the first provider) instead of an
+always-on mock; `NEXT_PUBLIC_ALLOW_MOCK_SESSION` no longer exists anywhere in this codebase — a
+production build with Supabase unconfigured now fails closed unconditionally, with no bypass flag in
+either direction. `web/lib/api/client.ts`'s `apiRequest()` now has a real backend to call
+(`src/content_automation/api/`, new this milestone) and does — `web/lib/api/platforms.ts`'s typed
+functions attach the session's current access token as `Authorization: Bearer <token>`, verified
+server-side on every request (see §5/§8 above and ADR-0011). `/app/*` additionally redirects an
+unauthenticated visitor to `/login` client-side (`components/app/AppAuthGate.tsx`) — a UX affordance
+only, since this is a static export with no server-side session check possible; the backend's own
+independent token verification is the real boundary. Full design, the provider evaluation, and the
+hosted TikTok OAuth connection flow this milestone also built: ADR-0011.

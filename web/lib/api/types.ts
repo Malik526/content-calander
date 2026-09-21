@@ -48,3 +48,25 @@ export interface PlatformConnectionSummary {
   accountLabel: string | null;
   status: "connected" | "disconnected" | "needs_attention";
 }
+
+/**
+ * The real GET /api/me and /api/platforms/tiktok/status response shapes
+ * (Milestone 3.6) — see api/schemas/me.py and api/schemas/platforms.py on
+ * the backend. Deliberately mirrors those Pydantic models' field names
+ * (snake_case, matching the backend's actual JSON) rather than
+ * reformatting to camelCase, since these are read directly from the wire
+ * with no transform layer in between — unlike PlatformConnectionSummary
+ * above, which is a UI-only shape for still-mocked data.
+ */
+export interface CurrentUser {
+  id: number;
+  email: string;
+  display_name: string | null;
+}
+
+export interface TikTokConnectionStatus {
+  platform: "tiktok";
+  connected: boolean;
+  status: string;
+  account_label: string | null;
+}

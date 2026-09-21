@@ -1,28 +1,50 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionProvider, useSession } from "@/lib/session";
 
 /**
- * Locks in the fail-closed invariant from lib/session.tsx: a production
- * build must refuse to render the dev-only mock session unless
- * NEXT_PUBLIC_ALLOW_MOCK_SESSION is explicitly set (as netlify.toml
- * currently does, deliberately, for the Milestone 3.5 shell only). See
- * "BLOCKER BEFORE REAL DATA ACCESS" in lib/session.tsx and netlify.toml.
+ * Milestone 3.6: lib/session.tsx now wraps real Supabase Auth instead of
+ * an always-on mock. These tests mock lib/supabase/client.ts's exported
+ * surface (isSupabaseConfigured / getSupabaseClient) rather than hitting
+ * a real Supabase project — the fail-closed invariant this file locks in
+ * (a production build with Supabase unconfigured must fail closed, with
+ * NO bypass flag — the Milestone 3.5 NEXT_PUBLIC_ALLOW_MOCK_SESSION flag
+ * was removed entirely this milestone) is what actually matters here, not
+ * live Supabase behavior.
  */
 
+const mockState = vi.hoisted(() => ({ configured: false }));
+
+vi.mock("@/lib/supabase/client", () => ({
+  get isSupabaseConfigured() {
+    return mockState.configured;
+  },
+  getSupabaseClient: vi.fn(),
+}));
+
+import { getSupabaseClient } from "@/lib/supabase/client";
+
 function Probe() {
-  const { user } = useSession();
-  return <span>{user?.email}</span>;
+  const { status, user, accessToken } = useSession();
+  return (
+    <div>
+      <span data-testid="status">{status}</span>
+      <span data-testid="email">{user?.email ?? ""}</span>
+      <span data-testid="token">{accessToken ?? ""}</span>
+    </div>
+  );
 }
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  mockState.configured = false;
+  vi.clearAllMocks();
 });
 
-describe("SessionProvider", () => {
+describe("SessionProvider — dev fallback (Supabase not configured)", () => {
   it("renders the dev mock user outside of a production build", () => {
     vi.stubEnv("NODE_ENV", "test");
-    vi.stubEnv("NEXT_PUBLIC_ALLOW_MOCK_SESSION", "");
+    mockState.configured = false;
 
     render(
       <SessionProvider>
@@ -30,14 +52,14 @@ describe("SessionProvider", () => {
       </SessionProvider>,
     );
 
-    expect(screen.getByText("local@pickle-batch.local")).toBeInTheDocument();
+    expect(screen.getByTestId("status")).toHaveTextContent("authenticated");
+    expect(screen.getByTestId("email")).toHaveTextContent("local@pickle-batch.local");
+    // The dev mock never carries a real backend-verifiable token.
+    expect(screen.getByTestId("token")).toHaveTextContent("");
   });
 
-  it("fails closed in a production build without the explicit opt-in flag", () => {
+  it("fails closed in a production build with no bypass flag of any kind", () => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("NEXT_PUBLIC_ALLOW_MOCK_SESSION", "");
-    // React logs the thrown render error to console.error even when the
-    // test expects and catches it — silence that expected noise only.
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(() =>
@@ -46,14 +68,29 @@ describe("SessionProvider", () => {
           <Probe />
         </SessionProvider>,
       ),
-    ).toThrow(/development-only stand-in/i);
+    ).toThrow(/Supabase is not configured/i);
 
     consoleError.mockRestore();
   });
+});
 
-  it("renders the mock user in production only with the explicit opt-in flag set", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("NEXT_PUBLIC_ALLOW_MOCK_SESSION", "true");
+describe("SessionProvider — Supabase configured", () => {
+  function mockSupabaseSession(session: { user: { id: string; email: string; user_metadata?: object } } | null) {
+    const onAuthStateChange = vi.fn().mockReturnValue({ data: { subscription: { unsubscribe: vi.fn() } } });
+    const getSession = vi.fn().mockResolvedValue({
+      data: { session: session ? { ...session, access_token: "real-access-token" } : null },
+    });
+    const signOut = vi.fn().mockResolvedValue({ error: null });
+    vi.mocked(getSupabaseClient).mockReturnValue({
+      auth: { getSession, onAuthStateChange, signOut },
+    } as unknown as ReturnType<typeof getSupabaseClient>);
+    return { signOut };
+  }
+
+  it("renders an authenticated session derived from a real Supabase session", async () => {
+    vi.stubEnv("NODE_ENV", "test");
+    mockState.configured = true;
+    mockSupabaseSession({ user: { id: "u1", email: "creator@example.com", user_metadata: { name: "Creator One" } } });
 
     render(
       <SessionProvider>
@@ -61,6 +98,23 @@ describe("SessionProvider", () => {
       </SessionProvider>,
     );
 
-    expect(screen.getByText("local@pickle-batch.local")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated"));
+    expect(screen.getByTestId("email")).toHaveTextContent("creator@example.com");
+    expect(screen.getByTestId("token")).toHaveTextContent("real-access-token");
+  });
+
+  it("renders unauthenticated when Supabase has no session", async () => {
+    vi.stubEnv("NODE_ENV", "test");
+    mockState.configured = true;
+    mockSupabaseSession(null);
+
+    render(
+      <SessionProvider>
+        <Probe />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("unauthenticated"));
+    expect(screen.getByTestId("email")).toHaveTextContent("");
   });
 });

@@ -393,6 +393,76 @@ TIKTOK_CONTAINERS = {"mov", "mp4", "webm"}
 TIKTOK_VIDEO_CODECS = {"h264", "hevc", "vp8", "vp9"}
 
 # ---------------------------------------------------------------------------
+# Real user authentication (Milestone 3.6 — Supabase Auth)
+# Replaces the frontend's Milestone 3.5 mock session. The backend never
+# authenticates a user directly — it verifies a Supabase Auth JWT the
+# frontend already obtained (Google as the first provider), the same
+# "browser -> identity provider -> backend verifies" shape ADR-0010's
+# session boundary was written to support. See
+# docs/decisions/0011-real-authentication-and-tiktok-connection.md.
+#
+# SUPABASE_AUTH_JWT_MODE selects how the backend verifies a token:
+#   "jwks"  (default) — Supabase's newer asymmetric signing keys. No shared
+#            secret needed server-side; the public JWKS is fetched (and
+#            cached) from SUPABASE_AUTH_JWKS_URL, derived from SUPABASE_URL
+#            when not set explicitly. Strictly preferred when available.
+#   "hs256" — Supabase's legacy shared JWT secret. Requires
+#            SUPABASE_JWT_SECRET, which must never be exposed client-side
+#            or logged (see ~/.agents/SECURITY.md).
+# ---------------------------------------------------------------------------
+SUPABASE_AUTH_JWT_MODE = os.getenv("SUPABASE_AUTH_JWT_MODE", "jwks")
+SUPABASE_AUTH_JWKS_URL = os.getenv(
+    "SUPABASE_AUTH_JWKS_URL",
+    f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else "",
+)
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
+# Supabase's default JWT "aud" (audience) claim for a signed-in user.
+SUPABASE_AUTH_AUDIENCE = os.getenv("SUPABASE_AUTH_AUDIENCE", "authenticated")
+
+# ---------------------------------------------------------------------------
+# Hosted platform-credential encryption (Milestone 3.6)
+# A hosted TikTok connection's access/refresh token pair is encrypted at
+# rest with this symmetric key (Fernet — AES-128-CBC + HMAC, from the
+# `cryptography` package already a transitive dependency of google-auth)
+# before being stored in platform_credentials.encrypted_payload. Server-side
+# only; never exposed client-side, never logged. Generate one with
+# `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+# and set it in .env — there is no default, matching TIKTOK_CLIENT_KEY's
+# "missing setup fails clearly" pattern. See
+# docs/decisions/0011-real-authentication-and-tiktok-connection.md
+# "Credential Storage".
+# ---------------------------------------------------------------------------
+CREDENTIAL_ENCRYPTION_KEY = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
+
+# ---------------------------------------------------------------------------
+# API (Milestone 3.6 — first real FastAPI surface, src/content_automation/api/)
+# CORS allowlist for the frontend origin(s) actually allowed to call the
+# authenticated API — deliberately never "*" (a wildcard would defeat the
+# point of verifying identity at all). Comma-separated in .env.
+# ---------------------------------------------------------------------------
+API_CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("API_CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
+
+# Where the TikTok OAuth callback (api/routes/platforms_tiktok.py) redirects
+# the user's browser back to once it has finished — a top-level browser
+# navigation TikTok controls, not an XHR the frontend's own fetch client
+# handles, so this must be a real, absolute frontend URL. First entry of
+# API_CORS_ALLOWED_ORIGINS by default (same origin the frontend is already
+# configured to call this API from) unless explicitly overridden.
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", API_CORS_ALLOWED_ORIGINS[0] if API_CORS_ALLOWED_ORIGINS else "")
+
+# How long a pending OAuth attempt's server-side state (oauth_states row) is
+# considered valid before it's treated as expired — mirrors the intent of
+# tiktok_auth.py's manual-fallback pending cache, but DB-backed and
+# user-bound instead of file-backed and single-process, since the hosted
+# callback runs in a stateless API request, not the same process that
+# started the flow.
+OAUTH_STATE_TTL_SECONDS = int(os.getenv("OAUTH_STATE_TTL_SECONDS", "600"))
+
+# ---------------------------------------------------------------------------
 # TikTok publishing (Milestone 2.0, corrected)
 # Added: September 2026 — proves one local MP4 can be published to a
 # dedicated TikTok test account via the real Content Posting API v2, using

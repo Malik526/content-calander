@@ -49,8 +49,10 @@ from content_automation.config import DATABASE_URL, POSTGRES_SCHEMA
 from content_automation.persistence import postgres_migrate
 from content_automation.persistence.content_store import (
     AuthIdentityRecord,
+    OAuthStateRecord,
     OwnershipMismatchError,
     PlatformConnectionRecord,
+    PlatformCredentialRecord,
     PlatformPostRecord,
     SlotRecord,
     SlotUnavailableError,
@@ -109,6 +111,14 @@ def _row_to_user(row: dict) -> UserRecord:
 
 def _row_to_auth_identity(row: dict) -> AuthIdentityRecord:
     return AuthIdentityRecord(**_normalize_row(row))
+
+
+def _row_to_platform_credential(row: dict) -> PlatformCredentialRecord:
+    return PlatformCredentialRecord(**_normalize_row(row))
+
+
+def _row_to_oauth_state(row: dict) -> OAuthStateRecord:
+    return OAuthStateRecord(**_normalize_row(row))
 
 
 def _row_to_platform_connection(row: dict) -> PlatformConnectionRecord:
@@ -227,6 +237,76 @@ class PostgresContentStore:
             return existing
         now = _utc_now_iso()
         return self.create_platform_connection(user_id, platform, external_account_id, "ACTIVE", now)
+
+    def update_platform_connection_status(self, connection_id: int, status: str, updated_at: str) -> None:
+        self._conn.execute(
+            "UPDATE platform_connections SET status = %s, updated_at = %s WHERE id = %s",
+            (status, updated_at, connection_id),
+        )
+
+    # -- platform_credentials / oauth_states (Milestone 3.6) -------------
+
+    def get_platform_credential(self, platform_connection_id: int) -> PlatformCredentialRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM platform_credentials WHERE platform_connection_id = %s", (platform_connection_id,)
+        ).fetchone()
+        return _row_to_platform_credential(row) if row else None
+
+    def upsert_platform_credential(
+        self, platform_connection_id: int, encrypted_payload: str, now: str,
+    ) -> PlatformCredentialRecord:
+        row = self._conn.execute(
+            "INSERT INTO platform_credentials (platform_connection_id, encrypted_payload, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (platform_connection_id) DO UPDATE SET "
+            "encrypted_payload = EXCLUDED.encrypted_payload, updated_at = EXCLUDED.updated_at "
+            "RETURNING *",
+            (platform_connection_id, encrypted_payload, now, now),
+        ).fetchone()
+        return _row_to_platform_credential(row)
+
+    def update_platform_credential_if_unchanged(
+        self, platform_connection_id: int, encrypted_payload: str, expected_updated_at: str, new_updated_at: str,
+    ) -> bool:
+        cur = self._conn.execute(
+            "UPDATE platform_credentials SET encrypted_payload = %s, updated_at = %s "
+            "WHERE platform_connection_id = %s AND updated_at = %s",
+            (encrypted_payload, new_updated_at, platform_connection_id, expected_updated_at),
+        )
+        return cur.rowcount > 0
+
+    def delete_platform_credential(self, platform_connection_id: int) -> None:
+        self._conn.execute(
+            "DELETE FROM platform_credentials WHERE platform_connection_id = %s", (platform_connection_id,)
+        )
+
+    def create_oauth_state(
+        self, user_id: int, platform: str, state: str, code_verifier: str, redirect_uri: str,
+        created_at: str, expires_at: str,
+    ) -> OAuthStateRecord:
+        row = self._conn.execute(
+            "INSERT INTO oauth_states (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
+            (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at),
+        ).fetchone()
+        return _row_to_oauth_state(row)
+
+    def consume_oauth_state(self, state: str, now: str) -> OAuthStateRecord | None:
+        row = self._conn.execute("SELECT * FROM oauth_states WHERE state = %s", (state,)).fetchone()
+        if row is None:
+            return None
+        record = _row_to_oauth_state(row)
+        if record.consumed_at is not None:
+            return None
+        if now >= record.expires_at:
+            return None
+        cur = self._conn.execute(
+            "UPDATE oauth_states SET consumed_at = %s WHERE state = %s AND consumed_at IS NULL", (now, state)
+        )
+        if cur.rowcount == 0:
+            return None
+        record.consumed_at = now
+        return record
 
     # -- videos ------------------------------------------------------------
 

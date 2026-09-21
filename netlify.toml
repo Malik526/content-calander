@@ -14,24 +14,21 @@
 
 [build.environment]
   NODE_VERSION = "22"
-  # Milestone 3.5 ONLY — temporary shell-development configuration.
-  # The /app shell ships with only a dev-marked mock session
-  # (web/lib/session.tsx) because this milestone has no real
-  # authentication and no authenticated backend/data access at all.
-  # SessionProvider throws in a production build unless this is set, so
-  # this flag is the deliberate, documented acknowledgment that the
-  # deployed shell is running the mock user — not a silent default, and
-  # not itself a secret (it is NEXT_PUBLIC_ and browser-visible by
-  # design; nothing that IS secret — a real user id, service-role key,
-  # database credential, or privileged token — may ever be bundled
-  # alongside it).
-  #
-  # BLOCKER BEFORE REAL DATA ACCESS: before any product route is
-  # allowed to read/write real user-owned data or call an authenticated
-  # API, the deployment must fail closed unless a real,
-  # server-verifiable authentication mechanism is configured. That
-  # means: replace web/lib/session.tsx's mock session with real auth,
-  # then DELETE this line so the production guard reverts to failing
-  # closed by default. See
-  # docs/decisions/0010-frontend-app-shell.md "Authentication Boundary".
-  NEXT_PUBLIC_ALLOW_MOCK_SESSION = "true"
+
+# Milestone 3.6 — the Milestone 3.5 blocker is closed: real Supabase Auth
+# replaced the mock session (web/lib/session.tsx), and
+# NEXT_PUBLIC_ALLOW_MOCK_SESSION no longer exists anywhere in this
+# codebase — a production build with Supabase unconfigured now fails
+# closed unconditionally, with no bypass flag.
+#
+# NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, and
+# NEXT_PUBLIC_API_BASE_URL are NOT set here (deliberately, not an
+# oversight): real values aren't committed as a matter of habit even
+# though they are meant to be public (the Supabase anon key is a public
+# API key by design — Row Level Security, not secrecy, protects data
+# behind it), and they weren't available yet at the time this file was
+# last edited. Set them via Netlify's dashboard (Site configuration ->
+# Environment variables) before the next deploy — until then, the
+# deployed /app shell will correctly fail closed (see
+# web/lib/session.tsx) rather than silently rendering broken. See
+# docs/decisions/0011-real-authentication-and-tiktok-connection.md.

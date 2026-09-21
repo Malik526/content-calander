@@ -29,6 +29,10 @@ Dependencies:
 from typing import Protocol
 
 from content_automation.persistence.content_store import (
+    AuthIdentityRecord,
+    OAuthStateRecord,
+    PlatformConnectionRecord,
+    PlatformCredentialRecord,
     PlatformPostRecord,
     SlotRecord,
     UserRecord,
@@ -58,3 +62,47 @@ class ContentStoreProtocol(Protocol):
     def get_platform_post(self, video_id: int, platform: str) -> PlatformPostRecord | None: ...
 
     def update_platform_post(self, post_id: int, updated_at: str, **fields) -> None: ...
+
+    # -- Milestone 3.6 (real authentication + hosted TikTok connection) —
+    # the methods api/ and cli/link_bootstrap_user.py consume through this
+    # Protocol rather than a concrete store class, so either backend works
+    # unchanged.
+
+    def get_user(self, user_id: int) -> UserRecord | None: ...
+
+    def get_user_by_email(self, email: str) -> UserRecord | None: ...
+
+    def create_user(self, email: str, display_name: str | None, created_at: str) -> UserRecord: ...
+
+    def get_user_by_auth_identity(self, provider: str, provider_subject: str) -> UserRecord | None: ...
+
+    def create_auth_identity(
+        self, user_id: int, provider: str, provider_subject: str, provider_email: str | None, created_at: str,
+    ) -> AuthIdentityRecord: ...
+
+    def get_platform_connection(self, user_id: int, platform: str) -> PlatformConnectionRecord | None: ...
+
+    def get_or_create_platform_connection(
+        self, user_id: int, platform: str, external_account_id: str | None = None,
+    ) -> PlatformConnectionRecord: ...
+
+    def update_platform_connection_status(self, connection_id: int, status: str, updated_at: str) -> None: ...
+
+    def get_platform_credential(self, platform_connection_id: int) -> PlatformCredentialRecord | None: ...
+
+    def upsert_platform_credential(
+        self, platform_connection_id: int, encrypted_payload: str, now: str,
+    ) -> PlatformCredentialRecord: ...
+
+    def update_platform_credential_if_unchanged(
+        self, platform_connection_id: int, encrypted_payload: str, expected_updated_at: str, new_updated_at: str,
+    ) -> bool: ...
+
+    def delete_platform_credential(self, platform_connection_id: int) -> None: ...
+
+    def create_oauth_state(
+        self, user_id: int, platform: str, state: str, code_verifier: str, redirect_uri: str,
+        created_at: str, expires_at: str,
+    ) -> OAuthStateRecord: ...
+
+    def consume_oauth_state(self, state: str, now: str) -> OAuthStateRecord | None: ...

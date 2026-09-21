@@ -5,11 +5,11 @@ import { useSession } from "@/lib/session";
 
 /** Product app header — distinct from the marketing site's SiteHeader
  * (components/layout/SiteHeader.tsx): shows the current session instead
- * of marketing nav/CTA. No logout wiring yet (Phase 14 — session
- * boundary exists, real auth does not), but the affordance is real so
- * adding it later is a small change, not a new layout. */
+ * of marketing nav/CTA. Sign-out (Milestone 3.6) calls the real session
+ * boundary's signOut() — a no-op for the dev mock session, a real
+ * Supabase sign-out otherwise (see lib/session.tsx). */
 export function AppHeader() {
-  const { user } = useSession();
+  const { user, signOut } = useSession();
 
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-surface/90 backdrop-blur">
@@ -18,7 +18,7 @@ export function AppHeader() {
           Pickle Batch
         </Link>
         {user ? (
-          <div className="flex items-center gap-2 text-sm text-ink-muted">
+          <div className="flex items-center gap-3 text-sm text-ink-muted">
             <span className="hidden sm:inline">{user.displayName}</span>
             <span
               aria-hidden="true"
@@ -26,6 +26,13 @@ export function AppHeader() {
             >
               {user.displayName.charAt(0)}
             </span>
+            <button
+              type="button"
+              onClick={() => void signOut()}
+              className="rounded-md px-2 py-1 text-xs font-medium text-ink-muted hover:text-ink"
+            >
+              Sign out
+            </button>
           </div>
         ) : null}
       </div>

@@ -3,14 +3,18 @@
  * (Milestone 3.5, Phase 12).
  *
  * No component should call `fetch()` directly — every request goes
- * through `apiRequest()` so error handling, the base URL, and (later)
- * auth-token attachment all live in exactly one place. The backend API
- * itself does not exist yet (see
- * docs/architecture/hosted-product-boundary.md — no FastAPI app as of
- * this milestone), so nothing in this shell actually calls this module
- * yet; product pages read from lib/api/mockData.ts instead. This module
- * exists so that swap-in is a one-file change later, not an
- * application-wide rewrite.
+ * through `apiRequest()` so error handling, the base URL, and auth-token
+ * attachment all live in exactly one place. As of Milestone 3.6, a real
+ * FastAPI backend exists (src/content_automation/api/) and this module is
+ * genuinely used — see lib/api/tiktok.ts for the first real typed calls.
+ *
+ * `accessToken` (Milestone 3.6) attaches `Authorization: Bearer
+ * <accessToken>` when provided — the caller supplies it (typically
+ * `useSession().accessToken`), this module never imports lib/session.tsx
+ * or the Supabase client itself, so it stays framework/session-agnostic
+ * (see docs/decisions/0010-frontend-app-shell.md "Future native
+ * compatibility assumption" — a future native client can reuse this
+ * exact module with its own token source).
  *
  * Deliberately assumes `browser -> API -> Postgres/storage`, never
  * `browser -> Supabase directly` — see
@@ -38,6 +42,7 @@ export class ApiError extends Error {
 
 export interface ApiRequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
+  accessToken?: string | null;
 }
 
 /**
@@ -49,7 +54,7 @@ export interface ApiRequestOptions extends Omit<RequestInit, "body"> {
  * handling reads the same way on both sides of the stack.
  */
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const { body, headers, ...rest } = options;
+  const { body, headers, accessToken, ...rest } = options;
 
   let response: Response;
   try {
@@ -57,6 +62,7 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
       ...rest,
       headers: {
         "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...headers,
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,

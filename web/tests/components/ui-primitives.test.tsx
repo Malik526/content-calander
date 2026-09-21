@@ -31,6 +31,28 @@ describe("Button", () => {
     expect(link).toHaveAttribute("href", "mailto:support@example.com");
     expect(link).not.toHaveAttribute("target");
   });
+
+  it("renders a real onClick action as a real <button>, never a disguised link", () => {
+    const onClick = vi.fn();
+    render(
+      <Button type="button" onClick={onClick}>
+        Connect
+      </Button>,
+    );
+    const button = screen.getByRole("button", { name: "Connect" });
+    expect(button.tagName).toBe("BUTTON");
+    button.click();
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders an action button as disabled when disabled is passed", () => {
+    render(
+      <Button type="button" onClick={() => {}} disabled>
+        Connecting…
+      </Button>,
+    );
+    expect(screen.getByRole("button", { name: "Connecting…" })).toBeDisabled();
+  });
 });
 
 describe("Card", () => {
