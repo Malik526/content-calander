@@ -1,0 +1,86 @@
+/**
+ * client.ts — the one place frontend code makes backend HTTP calls
+ * (Milestone 3.5, Phase 12).
+ *
+ * No component should call `fetch()` directly — every request goes
+ * through `apiRequest()` so error handling, the base URL, and (later)
+ * auth-token attachment all live in exactly one place. The backend API
+ * itself does not exist yet (see
+ * docs/architecture/hosted-product-boundary.md — no FastAPI app as of
+ * this milestone), so nothing in this shell actually calls this module
+ * yet; product pages read from lib/api/mockData.ts instead. This module
+ * exists so that swap-in is a one-file change later, not an
+ * application-wide rewrite.
+ *
+ * Deliberately assumes `browser -> API -> Postgres/storage`, never
+ * `browser -> Supabase directly` — see
+ * docs/decisions/0010-frontend-app-shell.md "Backend API Boundary
+ * Alignment". NEXT_PUBLIC_API_BASE_URL is the only backend-related value
+ * ever read here; nothing server-only (DATABASE_URL, a service-role key)
+ * has any reason to exist in this package at all — anything with
+ * NEXT_PUBLIC_ in its name is bundled into the browser and must be
+ * treated as public.
+ */
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+
+export class ApiError extends Error {
+  readonly status: number | null;
+  readonly reasonCode: string;
+
+  constructor(message: string, { status = null, reasonCode = "UNKNOWN" }: { status?: number | null; reasonCode?: string } = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.reasonCode = reasonCode;
+  }
+}
+
+export interface ApiRequestOptions extends Omit<RequestInit, "body"> {
+  body?: unknown;
+}
+
+/**
+ * Typed fetch wrapper. Normalizes every failure mode (network failure,
+ * non-2xx response, malformed JSON) into an ApiError with a stable
+ * `reasonCode` — mirrors the backend's own PublishError/StorageError
+ * shape (docs/decisions/0006-tiktok-publisher-foundation.md,
+ * docs/decisions/0009-object-storage-media-lifecycle.md) so error
+ * handling reads the same way on both sides of the stack.
+ */
+export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const { body, headers, ...rest } = options;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...rest,
+      headers: {
+        "Content-Type": "application/json",
+        ...headers,
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new ApiError("Could not reach the server. Check your connection and try again.", {
+      reasonCode: "NETWORK_ERROR",
+    });
+  }
+
+  if (!response.ok) {
+    let message = `Request failed (HTTP ${response.status}).`;
+    try {
+      const errorBody = (await response.json()) as { message?: string };
+      if (errorBody?.message) message = errorBody.message;
+    } catch {
+      // response body wasn't JSON — keep the generic message above
+    }
+    throw new ApiError(message, { status: response.status, reasonCode: "HTTP_ERROR" });
+  }
+
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new ApiError("The server returned an unexpected response.", { reasonCode: "MALFORMED_RESPONSE" });
+  }
+}

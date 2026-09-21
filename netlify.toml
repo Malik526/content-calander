@@ -14,3 +14,24 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # Milestone 3.5 ONLY — temporary shell-development configuration.
+  # The /app shell ships with only a dev-marked mock session
+  # (web/lib/session.tsx) because this milestone has no real
+  # authentication and no authenticated backend/data access at all.
+  # SessionProvider throws in a production build unless this is set, so
+  # this flag is the deliberate, documented acknowledgment that the
+  # deployed shell is running the mock user — not a silent default, and
+  # not itself a secret (it is NEXT_PUBLIC_ and browser-visible by
+  # design; nothing that IS secret — a real user id, service-role key,
+  # database credential, or privileged token — may ever be bundled
+  # alongside it).
+  #
+  # BLOCKER BEFORE REAL DATA ACCESS: before any product route is
+  # allowed to read/write real user-owned data or call an authenticated
+  # API, the deployment must fail closed unless a real,
+  # server-verifiable authentication mechanism is configured. That
+  # means: replace web/lib/session.tsx's mock session with real auth,
+  # then DELETE this line so the production guard reverts to failing
+  # closed by default. See
+  # docs/decisions/0010-frontend-app-shell.md "Authentication Boundary".
+  NEXT_PUBLIC_ALLOW_MOCK_SESSION = "true"

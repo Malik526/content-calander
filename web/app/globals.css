@@ -16,6 +16,25 @@
   --color-accent: #4338ca; /* the one restrained accent color */
   --color-accent-hover: #362da6;
   --color-accent-soft: #eef2ff; /* accent tint for subtle backgrounds/badges */
+
+  /* Status colors (Milestone 3.5) — presentation only, for Badge/status
+     labels backed by lib/status.ts. Deliberately generic names (success/
+     warning/danger/pending), not tied to platform_posts' literal enum
+     values — see lib/status.ts for that mapping. */
+  --color-status-pending: #475467;
+  --color-status-pending-soft: #f2f4f7;
+  --color-status-progress: #b54708;
+  --color-status-progress-soft: #fef0c7;
+  --color-status-success: #067647;
+  --color-status-success-soft: #ecfdf3;
+  --color-status-danger: #b42318;
+  --color-status-danger-soft: #fef3f2;
+
+  /* App shell content width (Milestone 3.5) — narrower than the
+     marketing site's max-w-6xl (bg-hero/sections read better wide;
+     product screens read better narrower, closer to a document/list
+     width). One token, not a magic number repeated per page. */
+  --width-app-content: 42rem;
 }
 
 @theme inline {
@@ -27,6 +46,15 @@
   --color-accent: var(--color-accent);
   --color-accent-hover: var(--color-accent-hover);
   --color-accent-soft: var(--color-accent-soft);
+  --color-status-pending: var(--color-status-pending);
+  --color-status-pending-soft: var(--color-status-pending-soft);
+  --color-status-progress: var(--color-status-progress);
+  --color-status-progress-soft: var(--color-status-progress-soft);
+  --color-status-success: var(--color-status-success);
+  --color-status-success-soft: var(--color-status-success-soft);
+  --color-status-danger: var(--color-status-danger);
+  --color-status-danger-soft: var(--color-status-danger-soft);
+  --width-app-content: var(--width-app-content);
   --font-sans: var(--font-geist-sans);
 }
 
