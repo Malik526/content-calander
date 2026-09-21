@@ -47,12 +47,15 @@ export default function SettingsPage() {
           </h2>
           <div className="flex flex-col gap-3">
             {mockPlatformConnections.map((connection) => (
-              <Card key={connection.id} className="flex items-center justify-between gap-4">
-                <div>
+              <Card
+                key={connection.id}
+                className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex items-center gap-2">
                   <p className="text-sm font-medium capitalize text-ink">{connection.platform}</p>
-                  <p className="mt-0.5 text-xs text-ink-muted">
-                    {connection.accountLabel ?? "Not connected"}
-                  </p>
+                  {connection.accountLabel ? (
+                    <span className="text-xs text-ink-muted">{connection.accountLabel}</span>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-3">
                   <Badge tone={connection.status === "connected" ? "success" : "pending"}>

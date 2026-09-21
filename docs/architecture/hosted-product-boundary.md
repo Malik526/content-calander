@@ -48,6 +48,18 @@ ingestion's own behavior is unchanged, verified by the full pre-existing test su
 §14/§16 are updated in place. Real auth-provider integration and hosted credential storage
 remain exactly as future as before.
 
+**Milestone 3.5 update (see `docs/decisions/0010-frontend-app-shell.md` and
+`docs/evaluations/productization/milestone-3.5-mobile-web-shell.md`):** the frontend side of this
+boundary is no longer entirely unbuilt — `web/` now has a real, mobile-first product app shell
+(`/app`, `/app/library`, `/app/queue`, `/app/settings`) alongside the pre-existing public marketing
+site, with a route-structural public/product boundary, a single `apiRequest()` API-client seam
+(`web/lib/api/client.ts`) nothing calls yet (no FastAPI backend exists — see §12), a frontend
+domain-type layer decoupled from the database schema (`web/lib/api/types.ts`), and a session boundary
+(`web/lib/session.tsx`) backed only by a loudly-marked, fail-closed-by-default development mock user —
+no real authentication provider was selected or integrated. See §18 (new) for the full frontend
+boundary description and ADR-0010 for the durable decisions. Nothing in §1-§17 below changed; this
+milestone was entirely additive on the frontend side of the stack this document otherwise describes.
+
 ---
 
 ## 1. Current Local Architecture
@@ -583,7 +595,7 @@ milestone's scope.
 | Background execution | Run the four existing one-pass functions (§5) on triggers, possibly concurrently across users | Must not require converting them to daemons/loops — they're already one-pass | A job-runner invocation contract (function in, summary out) — already satisfied by existing signatures | No — provider/framework choice deferred |
 | Scheduled jobs | Trigger publishing/reconciliation/recovery on an interval per connection/user | Must respect existing backoff/staleness config (§9) | A scheduler that calls the existing one-pass functions | No — deferred |
 | Secrets management | Store per-user platform credentials (§8), app-level API keys | Never expose server-only credentials client-side (global `SECURITY.md`) | Whatever the credential-storage adapter in §8 ends up being | No — deferred; do not move tokens into Postgres yet (guardrail) |
-| Frontend hosting | Serve `web/` (Next.js, already deployed via `netlify.toml`) | Explicitly no shared code with the Python backend in either direction | N/A — already decided and running (Netlify) | Already decided; out of this milestone's scope |
+| Frontend hosting | Serve `web/` (Next.js, already deployed via `netlify.toml`) | Explicitly no shared code with the Python backend in either direction | N/A — already decided and running (Netlify) | Already decided. **Milestone 3.5:** now also serving a real product app shell (§18), not only the marketing site — still a static export, no Next.js server runtime needed. |
 
 No provider was selected purely because it is familiar (guardrail respected) — every open
 row above is explicitly left open.
@@ -689,3 +701,47 @@ by the full 696-test suite passing with zero existing tests modified. The five r
 videos were migrated (uploaded, SHA-256-verified, local originals retained). Real
 auth-provider integration and hosted credential storage remain exactly as future as they were
 at the original Milestone 3.1 writing of this document.
+
+**Milestone 3.5 addendum:** the frontend now has a real product app shell, not only a marketing
+site — see §18 below for the full boundary description, ADR-0010 for the durable decisions, and the
+Milestone 3.5 evaluation record for validation evidence. None of §1-§17 above changed; real
+auth-provider integration and hosted credential storage remain exactly as future as before, now with
+an explicit frontend-side blocker recorded (§18) against the temporary mock-session deployment
+configuration.
+
+## 18. Frontend Application Boundary (Milestone 3.5)
+
+`web/` was a public marketing site only through Milestone 3.4 (`/`, `/privacy`, `/terms`). Milestone
+3.5 added the mobile-first product app shell Milestones 3.6+ will build the real product UI inside —
+not those features themselves. Full reasoning and consequences: ADR-0010; validation evidence: the
+Milestone 3.5 evaluation record. Summarized here so this document stays the single architecture
+reference across both halves of the stack.
+
+**Route structure:** two Next.js route groups, no shared chrome. `app/(marketing)/` (`/`, `/privacy`,
+`/terms` — unchanged URLs) and `app/app/` (`/app`, `/app/library`, `/app/queue`, `/app/settings` —
+new). The true root layout (`app/layout.tsx`) owns only `<html>`/`<body>`/font/metadata defaults; each
+route group owns its own header/nav via its own nested layout.
+
+**API boundary alignment:** `web/lib/api/client.ts`'s `apiRequest()` assumes `browser -> API ->
+Postgres/storage`, matching this document's own five-layer model (§2) and ADR-0008/0009's choice to
+keep Postgres/Storage credentials server-side only — never `browser -> Supabase directly`. No FastAPI
+app exists yet (§12 is still unbuilt), so nothing calls it today; product pages read
+`web/lib/api/mockData.ts` instead, or ship genuinely empty.
+
+**Session/auth boundary:** `web/lib/session.tsx`'s `useSession()` is the one seam every product
+page/component depends on for "who is the current user" — backed today only by a loudly-marked,
+fail-closed-by-default development mock user (`DEV_MOCK_USER`). The current Netlify deployment sets
+`NEXT_PUBLIC_ALLOW_MOCK_SESSION=true` (see `netlify.toml`) as a temporary, explicitly-flagged
+shell-development configuration — not a decision about how real authentication will work, and not
+itself a secret. **This directly extends §8's still-open credential/platform-connection boundary and
+§5's multi-tenant execution invariant to the frontend:** before `/app` may read/mutate real user-owned
+data or call an authenticated API, real server-verifiable authentication must replace the mock session,
+the Netlify flag must be removed, and the production fail-closed behavior must be re-verified — see
+ADR-0010's "BLOCKER BEFORE REAL USER DATA ACCESS" for the exact checklist. A client-supplied `user_id`
+must never be trusted as the authenticated identity, exactly as §5 already requires for background
+jobs acting on tenant-scoped rows.
+
+**What did not change:** every layer §1-§17 describe on the Python/backend side (persistence, media/
+storage, credentials, configuration, background jobs) — this milestone touched only `web/`, which has
+no shared code with the Python backend in either direction, per this repository's own standing
+guardrail (`AGENTS.md`).

@@ -328,20 +328,21 @@ Idempotent: exactly one `platform_posts` row exists per (video, platform), enfor
 
 Non-goals for this milestone (see the ADR): automatic publishing when a slot's `scheduled_at` arrives, background workers, retry/backoff, Instagram/YouTube, object storage, audited/public posting. Those come after one real TikTok publish is proven.
 
-## Public Website (Milestone 2.0.1)
+## Frontend (Public Website + Product App Shell)
 
-`web/` is a separate Next.js (App Router, TypeScript, Tailwind CSS v4) app — the beginning of the eventual SaaS frontend, not a throwaway compliance site. It's kept logically separate from this Python backend/CLI tooling (its own `package.json`/`node_modules`, no shared code), but lives in the same repository since both are the same product going forward.
+`web/` is a separate Next.js (App Router, TypeScript, Tailwind CSS v4) app — kept logically separate from this Python backend/CLI tooling (its own `package.json`/`node_modules`, no shared code), but lives in the same repository since both are the same product going forward.
 
 ```bash
 cd web
 npm install
 npm run dev      # http://localhost:3000
+npm run test     # Vitest + React Testing Library
 npm run build    # static export -> web/out/
 ```
 
-Routes: `/` (homepage), `/privacy`, `/terms` — real, stable public pages needed for TikTok Developer Portal configuration. Deployed via the repo-root `netlify.toml` (`base = "web"`, static export, no server-rendered routes yet). Design tokens (colors/fonts) are centralized in `web/app/globals.css`; site text/contact details in `web/lib/site-config.ts` — see `web/README.md` for the full breakdown, including the **placeholder contact email that must be replaced before deploying publicly**.
+Public routes: `/` (homepage), `/privacy`, `/terms` — real, stable public pages needed for TikTok Developer Portal configuration. **Milestone 3.5** added a real product app shell alongside them: `/app`, `/app/library`, `/app/queue`, `/app/settings` — mobile-first, with mobile bottom nav / desktop side nav, running on a development-only mock session (no real authentication yet; see `docs/decisions/0010-frontend-app-shell.md`'s "BLOCKER BEFORE REAL USER DATA ACCESS" before any future milestone wires in real user-owned data). Deployed via the repo-root `netlify.toml` (`base = "web"`, static export, no server-rendered routes yet — `netlify.toml` also sets `NEXT_PUBLIC_ALLOW_MOCK_SESSION=true`, a deliberate temporary flag, not a secret). Design tokens (colors/fonts/status colors) are centralized in `web/app/globals.css`; site text/contact details in `web/lib/site-config.ts` — see `web/README.md` for the full breakdown, including the **placeholder contact email that must be replaced before deploying publicly**.
 
-No authenticated product screens, uploads, billing, or dashboard exist yet — see `docs/decisions/` and `PROJECT_STATE.md` if a durable frontend architecture decision is recorded later.
+No real authentication, TikTok connection UI, batch upload, real scheduling controls, real queue/calendar backend data, hosted workers, billing, or analytics exist yet — see `docs/decisions/0010-frontend-app-shell.md` for the frontend architecture decisions and `docs/architecture/hosted-product-boundary.md` §18 for how the frontend and backend boundaries line up.
 
 ## Calendar Ownership
 
