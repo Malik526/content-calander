@@ -112,6 +112,12 @@ bearer header available) validates and atomically consumes the state (`consume_o
 state's own bound `user_id` — never a value the request itself could supply. See ADR-0011 "TikTok
 OAuth" for the full flow diagram and security reasoning.
 
+**2026-09-21 correction:** the request-derived `redirect_uri` described above was found to be wrong in a
+real deployment (no `proxy_headers` trust configured for uvicorn, so it resolves from the raw connection,
+not the public HTTPS URL TikTok needs to match) — see the dated addendum at the end of this document and
+`CHANGELOG.md`'s 2026-09-21 fix entry. It is now `config.TIKTOK_WEB_REDIRECT_URI`, explicitly configured
+and validated at connect-time.
+
 ## Phase 13 — Multi-User TikTok Credential Storage
 
 New `platform_credentials` table (`UNIQUE(platform_connection_id)`, SQLite + Postgres migration
@@ -459,5 +465,26 @@ rather than COMPLETE, is entirely external to what this session could build: rea
 setup was still in progress with the user as of this writing, so no real TikTok connection and no
 real-Postgres run of the two new tables have happened yet. Closing those is a follow-up validation pass
 once the user finishes that setup, not further implementation work.
+
+## Addendum (2026-09-21) — Real Login Confirmed; Redirect-URI Bug Found and Fixed
+
+Since the above was written: real Supabase login and `cli/link_bootstrap_user.py` have been completed
+against real data — verified directly against real Postgres (one real `auth_identities` row, provider
+`supabase`; all 5 pre-existing `videos` rows linked to the real user, not the bootstrap user). While
+attempting the still-outstanding real TikTok OAuth connection validation, found that Phase 12's hosted
+`redirect_uri` (derived from `request.url_for(...)`) could never work behind a real reverse
+proxy/hosting-platform deployment — `cli/run_api.py`'s uvicorn has no `proxy_headers`/`forwarded_allow_ips`
+configured, so the resolved URL reflects the raw connection uvicorn sees, not the public HTTPS URL a
+browser or TikTok's own redirect needs, and TikTok's Login Kit requires an exact registered match. Fixed
+by adding `config.TIKTOK_WEB_REDIRECT_URI` — explicit, required, validated at connect-time to be an
+absolute `https://` URL, failing closed (500) otherwise before any TikTok call or `oauth_states` write.
+5 new tests in `tests/test_api_platforms_tiktok.py` prove the configured value is used consistently
+(authorization URL, and the callback's token exchange via the unchanged `oauth_states.redirect_uri`
+persistence), is unaffected by a spoofed request `Host`/`X-Forwarded-Proto`, and fails closed when unset
+or non-https. Full backend suite: 758 passed (753 baseline + 5 new); `tests/test_tiktok_auth.py` (local
+CLI flow) re-run unchanged. Full detail in `CHANGELOG.md`'s 2026-09-21 fix entry and ADR-0011's own dated
+correction note. The real live TikTok OAuth connect→callback cycle itself is still not yet completed —
+this addendum fixes a real bug found in the attempt, it does not itself close that remaining gap. Milestone
+3.6 therefore remains **PARTIAL**.
 
 Do not commit until reviewed.

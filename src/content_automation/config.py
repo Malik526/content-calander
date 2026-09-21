@@ -454,6 +454,26 @@ API_CORS_ALLOWED_ORIGINS = [
 # configured to call this API from) unless explicitly overridden.
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", API_CORS_ALLOWED_ORIGINS[0] if API_CORS_ALLOWED_ORIGINS else "")
 
+# The TikTok redirect_uri the hosted OAuth flow (api/routes/platforms_tiktok.py)
+# sends to TikTok and registers state under — TikTok's own callback URL,
+# not FRONTEND_BASE_URL above. Deliberately a fixed, explicitly configured
+# value rather than derived from the incoming request (Starlette's
+# `request.url_for()`): behind a reverse proxy/hosting platform, uvicorn
+# sees the raw (often http://internal-host:port) connection unless
+# proxy-header trust is separately configured, so a request-derived value
+# can silently drift from whatever exact URI is registered in TikTok's
+# Developer Portal, breaking the flow (or worse, matching a proxy's
+# internal host and never being registerable at all). Every leg of the
+# transaction (authorization URL, oauth_states persistence, callback token
+# exchange) must use this exact same string — see
+# api/routes/platforms_tiktok.py's connect/callback handlers. No default
+# and no scheme fallback: an empty or non-https value fails clearly at
+# connect-time rather than silently sending TikTok a value that can never
+# match a real registration. Distinct from TIKTOK_REDIRECT_URI above,
+# which only feeds the separate local desktop/CLI flow (tiktok_auth.py)
+# and is allowed to be a plain-http loopback address.
+TIKTOK_WEB_REDIRECT_URI = os.getenv("TIKTOK_WEB_REDIRECT_URI", "")
+
 # How long a pending OAuth attempt's server-side state (oauth_states row) is
 # considered valid before it's treated as expired — mirrors the intent of
 # tiktok_auth.py's manual-fallback pending cache, but DB-backed and

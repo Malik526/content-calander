@@ -30,13 +30,14 @@ What it does:
 """
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
 from content_automation.api.dependencies.auth import get_current_user, get_store
 from content_automation.api.schemas.platforms import TikTokConnectionStatus, TikTokConnectStartResponse
-from content_automation.config import FRONTEND_BASE_URL, OAUTH_STATE_TTL_SECONDS
+from content_automation.config import FRONTEND_BASE_URL, OAUTH_STATE_TTL_SECONDS, TIKTOK_WEB_REDIRECT_URI
 from content_automation.persistence.content_store import UserRecord
 from content_automation.persistence.protocol import ContentStoreProtocol
 from content_automation.publishing.tiktok import auth as tiktok_auth
@@ -52,6 +53,25 @@ def _settings_redirect(reason: str) -> RedirectResponse:
     product page, never a bare JSON error a browser would show raw —
     Phase 19's "clear error UX," not "expose sensitive error details."""
     return RedirectResponse(f"{FRONTEND_BASE_URL}/app/settings?tiktok={reason}", status_code=302)
+
+
+def _resolve_web_redirect_uri() -> str:
+    """The one redirect_uri value used for the entire hosted OAuth
+    transaction (authorization URL, oauth_states persistence, callback
+    token exchange) — explicitly configured (config.TIKTOK_WEB_REDIRECT_URI)
+    rather than derived from the incoming request, so it can't silently
+    drift from whatever exact URI is registered in TikTok's Developer
+    Portal (see config.py's TIKTOK_WEB_REDIRECT_URI comment for why).
+    Fails clearly at connect-time — before any TikTok call or state is
+    persisted — rather than sending TikTok a value that can never match a
+    real registration."""
+    redirect_uri = TIKTOK_WEB_REDIRECT_URI
+    if not redirect_uri:
+        raise HTTPException(status_code=500, detail="TIKTOK_WEB_REDIRECT_URI is not configured.")
+    parsed = urlparse(redirect_uri)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise HTTPException(status_code=500, detail="TIKTOK_WEB_REDIRECT_URI must be an absolute https:// URL.")
+    return redirect_uri
 
 
 @router.get("/platforms/tiktok/status", response_model=TikTokConnectionStatus)
@@ -74,10 +94,9 @@ def get_tiktok_status(
 
 @router.post("/platforms/tiktok/connect", response_model=TikTokConnectStartResponse)
 def start_tiktok_connect(
-    request: Request,
     user: UserRecord = Depends(get_current_user), store: ContentStoreProtocol = Depends(get_store),
 ) -> TikTokConnectStartResponse:
-    redirect_uri = str(request.url_for("tiktok_oauth_callback"))
+    redirect_uri = _resolve_web_redirect_uri()
     state = tiktok_auth.generate_state()
     verifier, challenge = tiktok_auth.generate_pkce_pair()
 

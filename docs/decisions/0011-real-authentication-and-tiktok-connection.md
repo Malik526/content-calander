@@ -150,6 +150,19 @@ would help an attacker. A denial or error from TikTok itself, an invalid state, 
 failure each redirect back to `/app/settings` with a distinct-but-non-leaking `?tiktok=<reason>` query
 param — no raw TikTok error detail, stack trace, or credential ever reaches the browser.
 
+**2026-09-21 correction:** the claim above that a request-derived `redirect_uri` is "correct in both local
+dev and any real deployment without hardcoding a host" was wrong in practice — found while attempting this
+milestone's own still-outstanding real TikTok OAuth validation. `cli/run_api.py` runs uvicorn with no
+`proxy_headers`/`forwarded_allow_ips`, so behind any reverse proxy or hosting platform terminating TLS in
+front of it, `request.url_for()` resolves from the raw (often internal, often plain-`http://`) connection
+uvicorn actually sees, not the public HTTPS URL a browser or TikTok would use — and TikTok's Login Kit
+requires an exact registered match, so this could never work in a real deployment. Replaced with a new
+explicitly configured `config.TIKTOK_WEB_REDIRECT_URI` (validated at connect-time: must be a non-empty,
+absolute `https://` URL, failing closed with a clear error otherwise), resolved once via
+`_resolve_web_redirect_uri()` and used for both authorization-URL generation and (via the persisted
+`oauth_states.redirect_uri`, unchanged) callback token exchange. See `CHANGELOG.md`'s 2026-09-21 "Fix —
+Hosted TikTok OAuth Used a Request-Derived Redirect URI" entry for full detail.
+
 ### Credential storage: a new table, application-level encryption, CAS-based hosted refresh
 
 `platform_credentials` (new table, SQLite + Postgres migration `0003_...sql`) stays **separate** from

@@ -11,8 +11,11 @@ from fastapi.testclient import TestClient
 
 from content_automation.api import app as app_module
 from content_automation.api.dependencies import auth as auth_deps
+from content_automation.api.routes import platforms_tiktok
 from content_automation.persistence.content_store import ContentStore
 from content_automation.publishing.tiktok import auth as tiktok_auth
+
+FAKE_WEB_REDIRECT_URI = "https://api.example.com/api/platforms/tiktok/callback"
 
 
 @pytest.fixture
@@ -66,6 +69,16 @@ def credential_encryption_key(monkeypatch):
     from content_automation.publishing.tiktok import credential_store as cs
 
     monkeypatch.setattr(cs, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+
+
+@pytest.fixture(autouse=True)
+def tiktok_web_redirect_uri(monkeypatch):
+    """A fixed, valid TIKTOK_WEB_REDIRECT_URI for every test by default —
+    the hosted connect flow now fails closed without one (see
+    test_connect_fails_closed_* below for that behavior itself), so every
+    other test needs a real value to exercise the connect/callback flow
+    at all."""
+    monkeypatch.setattr(platforms_tiktok, "TIKTOK_WEB_REDIRECT_URI", FAKE_WEB_REDIRECT_URI)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +169,104 @@ def test_callback_never_returns_the_access_or_refresh_token(client, users, monke
     # The callback itself is a bare redirect — no response body at all,
     # let alone one carrying a token.
     assert callback_response.text == ""
+
+
+# ---------------------------------------------------------------------------
+# Explicit web redirect_uri configuration (Milestone 3.6 correction) — the
+# hosted flow's redirect_uri used to be derived from request.url_for(),
+# which can silently drift from whatever's actually registered in TikTok's
+# Developer Portal behind a reverse proxy. It's now TIKTOK_WEB_REDIRECT_URI,
+# used identically for authorization-URL generation and callback token
+# exchange, validated at connect-time.
+# ---------------------------------------------------------------------------
+
+def test_connect_uses_the_configured_web_redirect_uri(client, users, monkeypatch):
+    user_a, _ = users
+    _act_as(user_a)
+    monkeypatch.setattr(tiktok_auth, "TIKTOK_CLIENT_KEY", "fake_key")
+    monkeypatch.setattr(tiktok_auth, "TIKTOK_CLIENT_SECRET", "fake_secret")
+
+    response = client.post("/api/platforms/tiktok/connect")
+
+    assert response.status_code == 200
+    from urllib.parse import parse_qs, urlparse
+
+    query = parse_qs(urlparse(response.json()["authorization_url"]).query)
+    assert query["redirect_uri"][0] == FAKE_WEB_REDIRECT_URI
+
+
+def test_callback_token_exchange_uses_the_same_configured_redirect_uri(client, users, monkeypatch):
+    user_a, _ = users
+    _act_as(user_a)
+    monkeypatch.setattr(tiktok_auth, "TIKTOK_CLIENT_KEY", "fake_key")
+    monkeypatch.setattr(tiktok_auth, "TIKTOK_CLIENT_SECRET", "fake_secret")
+    captured = {}
+
+    def _capture_exchange(code, code_verifier, redirect_uri):
+        captured["redirect_uri"] = redirect_uri
+        return _fake_token()
+
+    monkeypatch.setattr(tiktok_auth, "exchange_code_for_token", _capture_exchange)
+    connect_response = client.post("/api/platforms/tiktok/connect")
+    from urllib.parse import parse_qs, urlparse
+
+    state = parse_qs(urlparse(connect_response.json()["authorization_url"]).query)["state"][0]
+
+    client.get("/api/platforms/tiktok/callback", params={"code": "c", "state": state}, follow_redirects=False)
+
+    assert captured["redirect_uri"] == FAKE_WEB_REDIRECT_URI
+
+
+def test_connect_ignores_the_incoming_request_host_and_scheme(client, users, monkeypatch):
+    """Proves the redirect_uri no longer comes from the request at all —
+    a request that looks like it arrived via a completely different
+    host/scheme (as if behind a proxy, or a spoofed Host header) still
+    produces the one configured redirect_uri, never something derived
+    from what the request claims about itself."""
+    user_a, _ = users
+    _act_as(user_a)
+    monkeypatch.setattr(tiktok_auth, "TIKTOK_CLIENT_KEY", "fake_key")
+    monkeypatch.setattr(tiktok_auth, "TIKTOK_CLIENT_SECRET", "fake_secret")
+
+    response = client.post(
+        "/api/platforms/tiktok/connect",
+        headers={"host": "attacker-controlled.example.net", "x-forwarded-proto": "http"},
+    )
+
+    assert response.status_code == 200
+    from urllib.parse import parse_qs, urlparse
+
+    query = parse_qs(urlparse(response.json()["authorization_url"]).query)
+    assert query["redirect_uri"][0] == FAKE_WEB_REDIRECT_URI
+
+
+def test_connect_fails_closed_when_web_redirect_uri_is_not_configured(client, users, monkeypatch, db_path):
+    user_a, _ = users
+    _act_as(user_a)
+    monkeypatch.setattr(platforms_tiktok, "TIKTOK_WEB_REDIRECT_URI", "")
+
+    response = client.post("/api/platforms/tiktok/connect")
+
+    assert response.status_code == 500
+    assert "TIKTOK_WEB_REDIRECT_URI" in response.json()["detail"]
+    # No oauth_states row was persisted from the failed attempt — the
+    # validation happens before any TikTok call or state write.
+    import sqlite3
+
+    with sqlite3.connect(db_path) as raw_conn:
+        (count,) = raw_conn.execute("SELECT COUNT(*) FROM oauth_states").fetchone()
+    assert count == 0
+
+
+def test_connect_fails_closed_when_web_redirect_uri_is_not_https(client, users, monkeypatch):
+    user_a, _ = users
+    _act_as(user_a)
+    monkeypatch.setattr(platforms_tiktok, "TIKTOK_WEB_REDIRECT_URI", "http://insecure.example.com/callback")
+
+    response = client.post("/api/platforms/tiktok/connect")
+
+    assert response.status_code == 500
+    assert "https" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
