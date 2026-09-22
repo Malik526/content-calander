@@ -20,6 +20,7 @@ function jsonResponse(body: unknown, init: { status?: number; ok?: boolean } = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("apiRequest", () => {
@@ -81,5 +82,41 @@ describe("apiRequest", () => {
       })) as unknown as typeof fetch,
     );
     await expect(apiRequest("/videos")).rejects.toMatchObject({ reasonCode: "MALFORMED_RESPONSE" });
+  });
+});
+
+describe("apiRequest — NEXT_PUBLIC_API_BASE_URL trailing-slash normalization", () => {
+  // API_BASE_URL is resolved once at module load, so each case needs its
+  // own fresh module instance (vi.resetModules + a dynamic import) after
+  // stubbing the env var — a plain module-level import can't be re-read
+  // per test.
+  it("does not double the slash when the base URL is configured with a trailing slash", async () => {
+    vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "https://api.example.com/");
+    vi.resetModules();
+    const fetchMock = vi.fn(async () => jsonResponse({ connected: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { apiRequest: freshApiRequest } = await import("@/lib/api/client");
+    await freshApiRequest("/api/platforms/tiktok/status");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.com/api/platforms/tiktok/status",
+      expect.anything(),
+    );
+  });
+
+  it("still works correctly when the base URL has no trailing slash", async () => {
+    vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "https://api.example.com");
+    vi.resetModules();
+    const fetchMock = vi.fn(async () => jsonResponse({ connected: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { apiRequest: freshApiRequest } = await import("@/lib/api/client");
+    await freshApiRequest("/api/platforms/tiktok/status");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.com/api/platforms/tiktok/status",
+      expect.anything(),
+    );
   });
 });

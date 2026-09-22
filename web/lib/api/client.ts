@@ -26,7 +26,14 @@
  * treated as public.
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+// Trailing slash(es) stripped — every call site's `path` already starts
+// with "/" (see lib/api/platforms.ts), so a base URL configured with one
+// (e.g. NEXT_PUBLIC_API_BASE_URL=https://api.example.com/) would otherwise
+// silently double it into "https://api.example.com//api/..." — FastAPI/
+// Starlette does not treat that as equivalent to a single slash, so it
+// 404s. Normalizing here is defensive: correct either way the deployment
+// env var happens to be set, no deploy-config guess required.
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/+$/, "");
 
 export class ApiError extends Error {
   readonly status: number | null;
