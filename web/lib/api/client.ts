@@ -83,8 +83,16 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   if (!response.ok) {
     let message = `Request failed (HTTP ${response.status}).`;
     try {
-      const errorBody = (await response.json()) as { message?: string };
-      if (errorBody?.message) message = errorBody.message;
+      // FastAPI's HTTPException always serializes as {"detail": "..."} —
+      // this backend never sends {"message": ...}. The `message` fallback
+      // is kept only in case a future non-FastAPI-shaped error response
+      // uses it; `detail` is checked first since it's what every real
+      // backend error actually carries, and was previously never read at
+      // all, silently discarding the real reason behind every backend
+      // error (401/404/409/etc.) in favor of the generic message below.
+      const errorBody = (await response.json()) as { detail?: string; message?: string };
+      if (errorBody?.detail) message = errorBody.detail;
+      else if (errorBody?.message) message = errorBody.message;
     } catch {
       // response body wasn't JSON — keep the generic message above
     }

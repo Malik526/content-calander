@@ -54,6 +54,16 @@ describe("apiRequest", () => {
     expect(error.message).toBe("Video not found.");
   });
 
+  it("uses the real backend's {detail} field, not just {message} — FastAPI's actual error shape", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ detail: "Token verification failed: Signature has expired" }, { status: 401, ok: false })),
+    );
+    const error = (await apiRequest("/api/platforms/tiktok/status").catch((e) => e)) as ApiError;
+    expect(error.status).toBe(401);
+    expect(error.message).toBe("Token verification failed: Signature has expired");
+  });
+
   it("falls back to a generic message when a non-2xx response body isn't JSON", async () => {
     vi.stubGlobal(
       "fetch",
