@@ -19,7 +19,14 @@ import uvicorn
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Pickle Batch API (development server).")
-    parser.add_argument("--host", default="127.0.0.1")
+    # Defaults to 0.0.0.0 whenever $PORT is set (Railway, and hosting
+    # platforms generally, set it; local dev never does) — same "correct
+    # even without an explicit flag" reasoning as --port below, since a
+    # deploy's actual start command isn't guaranteed to be exactly what
+    # railway.json declares (e.g. a dashboard-configured start command
+    # overrides it) and binding to 127.0.0.1 in a hosted container makes
+    # the app unreachable from outside it.
+    parser.add_argument("--host", default="0.0.0.0" if "PORT" in os.environ else "127.0.0.1")
     # Defaults to the hosting platform's assigned $PORT (Railway sets this)
     # when present, else the local-dev default — so a deploy's start
     # command works even without an explicit --port flag.
