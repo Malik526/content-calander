@@ -626,7 +626,7 @@ milestone's scope.
 
 | Category | Requirements | Constraints | Interface the code should depend on | Decision needed now? |
 |---|---|---|---|---|
-| API hosting | Run FastAPI, reachable by web/mobile clients | Must not block on long-running work (§4) | Standard ASGI app | **`api/` now exists and runs (Milestone 3.6)** — locally only (`cli/run_api.py`); a real hosting provider is still deferred. |
+| API hosting | Run FastAPI, reachable by web/mobile clients | Must not block on long-running work (§4) | Standard ASGI app | **Milestone 3.6.1 (in progress):** Railway selected (`railway.json` at repo root — Nixpacks build, `python3 cli/run_api.py --host 0.0.0.0 --port $PORT`, `/api/health` healthcheck); repo is deploy-ready, actual project creation/env vars/live verification pending — check `CHANGELOG.md` before assuming this is live. |
 | Postgres | Multi-connection concurrency, real `ALTER TABLE`, user-scoped rows | Must preserve `ContentStoreProtocol`'s contract (§6); timestamp convention decision | `PostgresContentStore` (implemented) | **Done (Milestone 3.3)** — Supabase Postgres, via the session pooler (IPv4-compatible; the direct connection host is IPv6-only). See ADR-0008. |
 | Object storage | Durable, addressable by a logical reference; readable as bytes/stream on demand | Must support the "resolve reference → local temp path" pattern (§7) | `StorageProtocol` (implemented) | **Done (Milestone 3.4)** — Supabase Storage, via its REST API (private buckets, service-role key). See ADR-0009. |
 | Background execution | Run the four existing one-pass functions (§5) on triggers, possibly concurrently across users | Must not require converting them to daemons/loops — they're already one-pass | A job-runner invocation contract (function in, summary out) — already satisfied by existing signatures | No — provider/framework choice deferred |
@@ -696,6 +696,12 @@ hosting provider remain deferred exactly as before.
 REST API (see ADR-0009 "Provider"). Background-execution/queue technology, scheduled-job
 infrastructure, secrets manager, and API hosting provider remain deferred. See §14 for the
 current matrix.
+
+**Milestone 3.6.1 update (in progress):** API hosting provider is now decided — Railway
+(`railway.json` at repo root). Background-execution/queue technology, scheduled-job
+infrastructure, and secrets manager (beyond the hosting provider's own env-var store) remain
+deferred exactly as before. See §14 for the current matrix and `CHANGELOG.md` for whether the
+actual deployment has been completed and live-verified yet.
 
 ## 17. Summary
 

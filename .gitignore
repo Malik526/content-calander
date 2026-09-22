@@ -9,6 +9,11 @@ __pycache__/
 # never committed. See pyproject.toml / Milestone 3.0's package refactor.
 *.egg-info/
 
+# setuptools' staging dir from a non-editable `pip install .` (Milestone
+# 3.6.1 — Railway's build command uses this, not -e .) — regenerated,
+# never committed.
+build/
+
 # Local safety backups created during manual migrations.
 *.backup
 
