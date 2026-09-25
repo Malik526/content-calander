@@ -1,5 +1,15 @@
 # Content Automation — Changelog
 
+## 2026-09-24
+
+### Fix — Local `.env` Had the Hosted TikTok Redirect URI Under the Wrong Variable Name
+
+Diagnosed a `TikTok web redirect URI is not configured` error from the hosted connect endpoint (`api/routes/platforms_tiktok.py`'s `_resolve_web_redirect_uri()` failing closed as designed). Root cause was a local `.env` editing mistake, not a code defect: the `TIKTOK_WEB_REDIRECT_URI` entry (copied from `.env.example`, comment block intact — including its own "Distinct from `TIKTOK_REDIRECT_URI` above" line) had its key manually retyped to `TIKTOK_REDIRECT_URI`, so the hosted flow's variable was effectively unset while the unrelated local desktop/CLI variable (`publishing/tiktok/auth.py`, `cli/tiktok_auth.py`) silently held the Railway callback URL instead — a value that code path never reads. Confirmed via full trace that `TIKTOK_WEB_REDIRECT_URI` and `TIKTOK_REDIRECT_URI` are already correctly separate end to end (distinct `config.py` entries, distinct consumers, no shared fallback, no request-host/proxy-derived redirect URI in the hosted path), so no runtime code changed.
+
+Fixed the local `.env` key name back to `TIKTOK_WEB_REDIRECT_URI` (same value: `https://content-calander-production.up.railway.app/api/platforms/tiktok/callback`). Added a forward-reference to `.env.example`'s `TIKTOK_REDIRECT_URI` block pointing to `TIKTOK_WEB_REDIRECT_URI` for the hosted case, since the desktop variable's own doc block previously gave no signal that a separate hosted variable existed elsewhere in the file — the likely reason the wrong one was set. Added `test_desktop_redirect_uri_does_not_configure_the_hosted_web_flow` to `tests/test_api_platforms_tiktok.py`, closing the one property the existing redirect-URI test group didn't already cover (that setting `TIKTOK_REDIRECT_URI` alone never satisfies the hosted flow's requirement). `tests/test_api_platforms_tiktok.py` + `tests/test_tiktok_auth.py`: 56 passed (55 pre-existing + 1 new), zero existing tests modified.
+
+Same correction needs to be made in Railway's dashboard variables: confirm `TIKTOK_WEB_REDIRECT_URI` (not `TIKTOK_REDIRECT_URI`) is set there to the Railway callback URL — not verified from this environment, since Railway's dashboard isn't accessible from here.
+
 ## 2026-09-21
 
 ### Milestone 3.6.1 — Production API Deployment (Railway) — in progress

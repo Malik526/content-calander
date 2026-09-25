@@ -269,6 +269,24 @@ def test_connect_fails_closed_when_web_redirect_uri_is_not_https(client, users, 
     assert "https" in response.json()["detail"]
 
 
+def test_desktop_redirect_uri_does_not_configure_the_hosted_web_flow(client, users, monkeypatch):
+    """TIKTOK_REDIRECT_URI (the separate local desktop/CLI flow's variable
+    — see publishing/tiktok/auth.py) has no effect on the hosted flow: the
+    hosted connect endpoint reads only config.TIKTOK_WEB_REDIRECT_URI, so
+    setting the desktop variable alone must not satisfy it. Regression
+    guard for the config.py TIKTOK_REDIRECT_URI/TIKTOK_WEB_REDIRECT_URI
+    naming confusion (see CHANGELOG.md)."""
+    user_a, _ = users
+    _act_as(user_a)
+    monkeypatch.setattr(tiktok_auth, "TIKTOK_REDIRECT_URI", "https://example.com/some/desktop/callback")
+    monkeypatch.setattr(platforms_tiktok, "TIKTOK_WEB_REDIRECT_URI", "")
+
+    response = client.post("/api/platforms/tiktok/connect")
+
+    assert response.status_code == 500
+    assert "TIKTOK_WEB_REDIRECT_URI" in response.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # OAuth security (Phase 23)
 # ---------------------------------------------------------------------------
