@@ -2,6 +2,38 @@
 
 ## 2026-09-26
 
+### Production Fix — CORS DELETE Preflight
+
+Fixed a production bug reported as "DELETE /api/videos/{id} fails from
+https://picklebatch.netlify.app with a CORS error." Investigation (both a local
+`TestClient` repro mirroring the browser's exact preflight and a live `OPTIONS` request
+against the deployed Railway API) isolated the failure to a single layer:
+`CORSMiddleware`'s `allow_methods` in `api/app.py` was `["GET", "POST"]` and had never
+been updated when `DELETE /api/videos/{id}` was added (the Milestone 3.7 Delete Video
+follow-up, above) — Starlette's `CORSMiddleware` rejects any preflight whose
+`Access-Control-Request-Method` isn't in that list with a 400 `"Disallowed CORS
+method"`, entirely inside the middleware, before the request reaches routing or the
+`get_current_user` auth dependency. The frontend origin allowlist, its parsing, and the
+auth layer were all confirmed correct and were not the cause. Fix: added `"DELETE"` to
+`allow_methods`; no other methods added (no route needs `PUT`/`PATCH` yet).
+
+Added `tests/test_api_cors.py`: asserts `allow_methods` includes `DELETE`/`GET`/`POST`
+directly on the middleware config, exercises a real DELETE preflight end-to-end via
+`TestClient` (200, `DELETE` present in `Access-Control-Allow-Methods`), confirms GET/POST
+preflights are unaffected, and confirms a still-disallowed method (`PUT`) continues to
+fail closed. Tests read the allowed origin from `config.API_CORS_ALLOWED_ORIGINS` rather
+than hardcoding the production origin literal, since that allowlist is environment-
+specific configuration (this repo's local `.env` and Railway's real dashboard value
+differ) — the bug was in method matching, not origin matching, so the fix is verified
+against whichever origin an environment actually has configured.
+
+Tests: backend 814 passed (810 baseline + 4 net new, all in `test_api_cors.py`). Before
+this fix, a live `OPTIONS /api/videos/{id}` preflight against the deployed Railway API
+with `Origin: https://picklebatch.netlify.app` and `Access-Control-Request-Method:
+DELETE` was confirmed returning 400 with `Access-Control-Allow-Methods: GET, POST`. Not
+yet deployed as of this entry — see `PROJECT_STATE.md`/this repo's own commit history for
+whether the post-deploy live re-check has been recorded.
+
 ### Milestone 3.7 — Re-upload Architecture + Controlled Evaluation Snapshot
 
 **`videos.file_hash` is no longer globally unique.** `videos.id` is a record's real
