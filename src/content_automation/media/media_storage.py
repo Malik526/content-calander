@@ -40,6 +40,37 @@ What it does:
   the current protection... do not create an expensive locking subsystem
   unless evidence requires one").
 
+Future media intelligence (Milestone 3.7 follow-up — deliberately not
+built here; see this module's own guardrail against synchronous probing
+in the upload path):
+  A video created by create_video_from_upload has every media-metadata
+  column NULL — container, video_codec, audio_codec, width, height, fps,
+  duration_seconds — exactly like a freshly-`insert_video`'d row from the
+  local pipeline before media.inspection.inspect_media ever runs on it.
+  Nothing about this milestone changes what those columns mean or how
+  they'd be populated: media.inspection.inspect_media(path) already
+  computes every one of them via a single ffprobe call, and already
+  accepts a plain local Path — media.media_storage.materialize_canonical_media
+  (or, for a storage-backed video specifically, storage.materialize(key)
+  directly) already resolves exactly that kind of path for a video
+  regardless of where its bytes actually live. The natural, no-new-
+  abstraction way to enrich a hosted upload's row is therefore: a
+  background job (matching docs/architecture/hosted-product-boundary.md
+  §5's existing job-boundary shape — a plain function over "videos with
+  storage_provider set and container IS NULL", invoked on an interval,
+  not a request) that materializes each one temporarily and calls
+  inspect_media, then update_video()s the result. This is deliberately
+  NOT wired up by this milestone: hosted-product-boundary.md §4 lists
+  ffprobe as explicitly *not* FastAPI-request-appropriate (subprocess,
+  unbounded-ish duration), and this milestone's own scope guardrail
+  ("upload success must remain independent of transcription, scheduling,
+  or publishing") means the upload endpoint must keep working exactly as
+  it does today even after that job exists — it should never become a
+  precondition for a successful upload. transcript/classification/
+  caption/scheduling fields are a separate, later concern (real
+  transcription/classification, not just file metadata) — out of scope
+  for even this future job, let alone this milestone.
+
 Dependencies:
   content_automation.persistence.content_store (ContentStore, VideoRecord),
   content_automation.persistence.protocol (ContentStoreProtocol — used only
@@ -77,7 +108,14 @@ class DuplicateVideoContentError(Exception):
     own note on schema changes being out of scope), so this is a real,
     expected outcome a multi-tenant upload has to handle, not a bug to fix
     by loosening the constraint. Never reveals which other user/video holds
-    the content — see api/routes/videos.py for the caller-facing message."""
+    the content — see api/routes/videos.py for the caller-facing message.
+
+    reason_code (Milestone 3.7 follow-up — upload_attempts.error_code)
+    mirrors the same structured-failure-signal shape as
+    publishing/tiktok/auth.py's TikTokAuthError and
+    storage/supabase_storage.py's StorageError."""
+
+    reason_code = "DUPLICATE_CONTENT"
 
 
 def build_storage_key(user_id: int, video_id: int, suffix: str) -> str:

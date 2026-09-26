@@ -222,3 +222,42 @@ Verified with a real 5MB round trip against Supabase
   read back against every real entry point before it ships, not just the one milestone's own new
   code — this correction exists because that check was skipped for the local-ingestion path the
   first time this document was written.
+
+## Addendum (2026-09-26, Milestone 3.7 follow-up) — `storage_provider="local"` on real hosted uploads; `canonical_media_path` for a video with no local file at all
+
+Real hosted browser uploads (`api/routes/videos.py`, `media.media_storage.create_video_from_upload` —
+Milestone 3.7) were observed persisting `storage_provider="local"` in production. Investigated and
+confirmed **not a code defect**: `create_video_from_upload`, exactly like `upload_canonical_media`
+above, always stamps `storage_provider` from the *actual* injected `StorageProtocol` instance's
+`provider_name` — never a literal string (grepped every write site). The real cause is this ADR's
+own "Consequences" bullet a few lines up: `STORAGE_BACKEND` defaults to `"local"` whenever it is
+unset, and — per Milestone 3.4's own scope note — `storage.factory.build_storage()` had genuinely
+never been called from any live entry point until this milestone's upload endpoint. If the real
+Railway deployment's environment variables were never explicitly given `STORAGE_BACKEND=supabase`
+(plausible: nothing before this milestone would have surfaced the gap), `LocalStorage` is what
+`get_storage()` really resolves to there, and the uploaded bytes are genuinely sitting under that
+process's `LOCAL_STORAGE_ROOT` — not in the real Supabase bucket. A `storage_key` shaped like
+`users/<user_id>/videos/<video_id>/source.mov` does **not** by itself prove which backend holds the
+bytes — `build_storage_key()` is deliberately backend-agnostic and produces the identical string
+regardless — only the `storage_provider` column (or a real check against the Supabase dashboard)
+does. `api/app.py`'s existing startup diagnostic now also logs `STORAGE_BACKEND` for exactly this
+reason — visible in Railway's own logs on every deploy from now on, not discovered later by
+inspecting rows. No `videos.storage_provider` values are rewritten retroactively by this addendum —
+correcting the Railway environment variable (an operational action, not a schema/code change) is
+what makes new uploads record accurately going forward; see
+`docs/evaluations/productization/milestone-3.7-batch-upload-readiness.md`'s follow-up entry.
+
+Separately: `create_video_from_upload` leaves `canonical_media_path` `NULL` for every hosted
+upload, deliberately, and this addendum confirms that was the right call rather than an oversight
+worth revisiting. This ADR's "historical lineage" framing above (`canonical_media_path` = "what the
+file was, and last known to be, on disk") implicitly assumed every video started life via local
+ingestion and was *later* migrated to storage — a case this ADR did anticipate. A hosted browser
+upload never has a local file at all beyond a request-scoped temp file that is deleted before the
+response is even sent — there is no "history" to record, so `NULL` is the honest value, not a
+gap. `storage_provider`/`storage_key` are this row's only reference from creation, exactly the
+"both set, authoritative" case this ADR already describes — hosted uploads simply skip the
+"local-only" and "both, with a stale-but-harmless local lineage" states entirely and go straight to
+the third. Restated explicitly since it wasn't spelled out until asked: **there is exactly one
+canonical hosted-media identifier — `storage_key` (paired with `storage_provider`) — and
+duplicating that concept into `canonical_media_path` for a hosted upload would only invite the two
+to drift.**

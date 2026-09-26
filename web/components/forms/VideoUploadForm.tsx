@@ -3,9 +3,7 @@
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { ApiError } from "@/lib/api/client";
-import { uploadVideos } from "@/lib/api/videos";
-import type { VideoUploadResult } from "@/lib/api/types";
+import { useUploadManager } from "@/lib/uploads";
 
 /**
  * VideoUploadForm — select multiple finished video files and upload them
@@ -14,32 +12,26 @@ import type { VideoUploadResult } from "@/lib/api/types";
  * them locally; nothing is sent until "Upload" is clicked, so a wrong
  * pick can be cleared first.
  *
+ * The actual in-progress/result state (`uploading`/`lastResults`/`error`)
+ * comes from useUploadManager() (lib/uploads.tsx), not local state — that
+ * shared state lives above this component in app/app/layout.tsx and
+ * survives this component unmounting if the user navigates elsewhere
+ * mid-upload (Milestone 3.7 follow-up). Only the *pending selection*
+ * (`selectedFiles`, before "Upload" is clicked) stays local — losing an
+ * unsubmitted pick on navigation is fine; nothing was sent yet.
+ *
  * Props:
  *   accessToken — threaded through exactly like every other lib/api/*
  *     caller (see lib/api/platforms.ts) rather than reading useSession()
  *     itself, so this component stays testable/reusable without a real
  *     session provider.
- *   onUploaded — called with the batch's results once the request
- *     completes (success or partial failure) so the caller (Library page)
- *     can refresh its video list; never called on a request-level failure
- *     (network/auth error), which is shown inline here instead.
  */
-export function VideoUploadForm({
-  accessToken,
-  onUploaded,
-}: {
-  accessToken: string | null;
-  onUploaded: (results: VideoUploadResult[]) => void;
-}) {
+export function VideoUploadForm({ accessToken }: { accessToken: string | null }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [requestError, setRequestError] = useState<string | null>(null);
-  const [lastResults, setLastResults] = useState<VideoUploadResult[] | null>(null);
+  const { uploading, lastResults, error, upload } = useUploadManager();
 
   function handleFilesSelected(fileList: FileList | null) {
-    setLastResults(null);
-    setRequestError(null);
     setSelectedFiles(fileList ? Array.from(fileList) : []);
   }
 
@@ -50,19 +42,10 @@ export function VideoUploadForm({
 
   async function handleUpload() {
     if (selectedFiles.length === 0) return;
-    setUploading(true);
-    setRequestError(null);
-    try {
-      const { results } = await uploadVideos(accessToken, selectedFiles);
-      setLastResults(results);
-      setSelectedFiles([]);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      onUploaded(results);
-    } catch (error) {
-      setRequestError(error instanceof ApiError ? error.message : "Could not upload your videos.");
-    } finally {
-      setUploading(false);
-    }
+    const filesToUpload = selectedFiles;
+    setSelectedFiles([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    await upload(filesToUpload, accessToken);
   }
 
   return (
@@ -88,7 +71,7 @@ export function VideoUploadForm({
         ) : null}
       </div>
 
-      {requestError ? <p className="text-sm font-medium text-status-danger">{requestError}</p> : null}
+      {error ? <p className="text-sm font-medium text-status-danger">{error}</p> : null}
 
       <div className="flex items-center gap-3">
         <Button
@@ -105,7 +88,7 @@ export function VideoUploadForm({
         ) : null}
       </div>
 
-      {lastResults ? (
+      {!uploading && lastResults ? (
         <ul className="flex flex-col gap-1 text-sm">
           {lastResults.map((result, i) => (
             <li key={`${result.filename}-${i}`} className={result.success ? "text-status-success" : "text-status-danger"}>

@@ -56,6 +56,8 @@ from content_automation.persistence.content_store import (
     PlatformPostRecord,
     SlotRecord,
     SlotUnavailableError,
+    UploadAttemptRecord,
+    UploadBatchRecord,
     UserRecord,
     VideoRecord,
     _utc_now_iso,
@@ -123,6 +125,14 @@ def _row_to_oauth_state(row: dict) -> OAuthStateRecord:
 
 def _row_to_platform_connection(row: dict) -> PlatformConnectionRecord:
     return PlatformConnectionRecord(**_normalize_row(row))
+
+
+def _row_to_upload_batch(row: dict) -> UploadBatchRecord:
+    return UploadBatchRecord(**_normalize_row(row))
+
+
+def _row_to_upload_attempt(row: dict) -> UploadAttemptRecord:
+    return UploadAttemptRecord(**_normalize_row(row))
 
 
 def _connect(dsn: str, schema: str) -> psycopg.Connection:
@@ -307,6 +317,52 @@ class PostgresContentStore:
             return None
         record.consumed_at = now
         return record
+
+    # -- upload_batches / upload_attempts (Milestone 3.7 follow-up) --------
+    # See ContentStore's identical methods for the shared contract/docstrings.
+
+    def create_upload_batch(self, user_id: int, started_at: str, file_count: int) -> UploadBatchRecord:
+        row = self._conn.execute(
+            "INSERT INTO upload_batches (user_id, started_at, file_count) VALUES (%s, %s, %s) RETURNING *",
+            (user_id, started_at, file_count),
+        ).fetchone()
+        return _row_to_upload_batch(row)
+
+    def update_upload_batch(self, batch_id: int, **fields) -> None:
+        if not fields:
+            return
+        columns = ", ".join(f"{key} = %s" for key in fields)
+        values = [*fields.values(), batch_id]
+        self._conn.execute(f"UPDATE upload_batches SET {columns} WHERE id = %s", values)
+
+    def list_upload_batches_for_user(self, user_id: int) -> list[UploadBatchRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM upload_batches WHERE user_id = %s ORDER BY started_at DESC, id DESC", (user_id,)
+        ).fetchall()
+        return [_row_to_upload_batch(row) for row in rows]
+
+    def create_upload_attempt(
+        self, batch_id: int, user_id: int, original_filename: str, started_at: str,
+    ) -> UploadAttemptRecord:
+        row = self._conn.execute(
+            "INSERT INTO upload_attempts (batch_id, user_id, original_filename, started_at) "
+            "VALUES (%s, %s, %s, %s) RETURNING *",
+            (batch_id, user_id, original_filename, started_at),
+        ).fetchone()
+        return _row_to_upload_attempt(row)
+
+    def update_upload_attempt(self, attempt_id: int, **fields) -> None:
+        if not fields:
+            return
+        columns = ", ".join(f"{key} = %s" for key in fields)
+        values = [*fields.values(), attempt_id]
+        self._conn.execute(f"UPDATE upload_attempts SET {columns} WHERE id = %s", values)
+
+    def get_upload_attempts_for_batch(self, batch_id: int) -> list[UploadAttemptRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM upload_attempts WHERE batch_id = %s ORDER BY id ASC", (batch_id,)
+        ).fetchall()
+        return [_row_to_upload_attempt(row) for row in rows]
 
     # -- videos ------------------------------------------------------------
 

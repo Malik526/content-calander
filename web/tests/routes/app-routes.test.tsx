@@ -5,14 +5,16 @@ import LibraryPage from "@/app/app/library/page";
 import QueuePage from "@/app/app/queue/page";
 import SettingsPage from "@/app/app/settings/page";
 import { SessionProvider } from "@/lib/session";
+import { UploadProvider } from "@/lib/uploads";
 
 /**
  * The four /app/* product routes (Milestone 3.5). Each renders its real,
  * shipped-empty-by-default state — no mock data is force-fed in here,
  * since that empty state IS the real behavior these pages ship with
  * (see app/app/library/page.tsx and app/app/queue/page.tsx comments).
- * SettingsPage is the only one that reads useSession(), so it alone
- * needs the SessionProvider wrapper AppLayout normally supplies.
+ * SettingsPage only reads useSession(); LibraryPage reads both
+ * useSession() and useUploadManager() (Milestone 3.7 follow-up), so it
+ * alone needs both wrappers AppLayout normally supplies.
  */
 
 describe("/app product routes", () => {
@@ -33,7 +35,9 @@ describe("/app product routes", () => {
     // backend-connected states with a mocked session + mocked API.
     render(
       <SessionProvider>
-        <LibraryPage />
+        <UploadProvider>
+          <LibraryPage />
+        </UploadProvider>
       </SessionProvider>,
     );
     expect(screen.getByRole("heading", { level: 1, name: "Library" })).toBeInTheDocument();

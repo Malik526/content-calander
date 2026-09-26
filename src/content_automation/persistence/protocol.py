@@ -35,6 +35,8 @@ from content_automation.persistence.content_store import (
     PlatformCredentialRecord,
     PlatformPostRecord,
     SlotRecord,
+    UploadAttemptRecord,
+    UploadBatchRecord,
     UserRecord,
     VideoRecord,
 )
@@ -116,3 +118,21 @@ class ContentStoreProtocol(Protocol):
     ) -> OAuthStateRecord: ...
 
     def consume_oauth_state(self, state: str, now: str) -> OAuthStateRecord | None: ...
+
+    # -- Milestone 3.7 follow-up (upload performance instrumentation) —
+    # the methods api/routes/videos.py consumes through this Protocol,
+    # exactly like the Milestone 3.6/3.7 methods above.
+
+    def create_upload_batch(self, user_id: int, started_at: str, file_count: int) -> UploadBatchRecord: ...
+
+    def update_upload_batch(self, batch_id: int, **fields) -> None: ...
+
+    def list_upload_batches_for_user(self, user_id: int) -> list[UploadBatchRecord]: ...
+
+    def create_upload_attempt(
+        self, batch_id: int, user_id: int, original_filename: str, started_at: str,
+    ) -> UploadAttemptRecord: ...
+
+    def update_upload_attempt(self, attempt_id: int, **fields) -> None: ...
+
+    def get_upload_attempts_for_batch(self, batch_id: int) -> list[UploadAttemptRecord]: ...

@@ -101,6 +101,35 @@ def test_list_videos_for_user_scopes_strictly_by_user_newest_first(store):
     assert store.list_videos_for_user(999999) == []
 
 
+def test_upload_batch_and_attempt_persistence_is_isolated_per_tenant(store):
+    """Milestone 3.7 follow-up's upload-performance instrumentation,
+    against real Postgres."""
+    user_a = _user(store, "a@example.com")
+    user_b = _user(store, "b@example.com")
+
+    batch_a = store.create_upload_batch(user_a.id, started_at=NOW.isoformat(), file_count=2)
+    attempt_a = store.create_upload_attempt(batch_a.id, user_a.id, "clip.mp4", started_at=NOW.isoformat())
+    store.update_upload_attempt(attempt_a.id, completed_at=NOW.isoformat(), duration_ms=42, status="SUCCESS")
+    store.update_upload_batch(
+        batch_a.id, completed_at=NOW.isoformat(), total_bytes=100, total_duration_ms=50, status="COMPLETED",
+    )
+
+    batch_b = store.create_upload_batch(user_b.id, started_at=NOW.isoformat(), file_count=1)
+
+    assert [b.id for b in store.list_upload_batches_for_user(user_a.id)] == [batch_a.id]
+    assert [b.id for b in store.list_upload_batches_for_user(user_b.id)] == [batch_b.id]
+
+    refreshed = store.list_upload_batches_for_user(user_a.id)[0]
+    assert refreshed.status == "COMPLETED"
+    assert refreshed.total_bytes == 100
+
+    attempts = store.get_upload_attempts_for_batch(batch_a.id)
+    assert len(attempts) == 1
+    assert attempts[0].status == "SUCCESS"
+    assert attempts[0].duration_ms == 42
+    assert store.get_upload_attempts_for_batch(batch_b.id) == []
+
+
 def test_timestamps_round_trip_as_aware_utc_strings(store):
     user = _user(store)
     fetched = store.get_user(user.id)

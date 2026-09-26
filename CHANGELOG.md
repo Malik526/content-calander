@@ -2,6 +2,74 @@
 
 ## 2026-09-26
 
+### Milestone 3.7 — Data Quality + Upload Instrumentation Follow-up
+
+Triggered by the first real hosted uploads and a direct DB inspection, which found rows with
+`storage_provider="local"` even though their `storage_key` looked Supabase-shaped. Investigated
+and confirmed this is **not a code defect**: every write site stamps `storage_provider` from the
+actually-injected `StorageProtocol.provider_name`, never a literal string — proven by a new stub-
+backend test. The real cause is `config.STORAGE_BACKEND` defaulting to `"local"` when unset (a
+pre-existing, deliberate default documented in ADR-0009's own "Consequences" section), combined
+with `build_storage()` never having been called from any live entry point before this milestone's
+upload endpoint — if Railway's dashboard was never given `STORAGE_BACKEND=supabase` explicitly,
+the bytes are genuinely sitting in that process's local filesystem, not Supabase. A `storage_key`
+alone never proves which backend holds the bytes, since `build_storage_key()` is deliberately
+backend-agnostic. Fixed the *visibility* of this class of gap (an operational Railway env var, not
+a code bug) by extending `api/app.py`'s existing startup diagnostic to also log `STORAGE_BACKEND`.
+Full root-cause record in ADR-0009's 2026-09-26 addendum.
+
+Confirmed `canonical_media_path` staying `NULL` for hosted uploads is intentional (it already was,
+from the prior pass) — formalized in the same ADR-0009 addendum: `storage_key`/`storage_provider`
+is the one canonical hosted-media identifier; a hosted upload has no local "lineage" to record.
+
+Added minimal, event/attempt-level upload-performance instrumentation: `upload_batches` (one row
+per `POST /api/videos` request) and `upload_attempts` (one row per file, `video_id` nullable for a
+failed attempt) on both persistence backends, plus a new Postgres migration
+(`0004_add_upload_telemetry.sql`). Wired into `api/routes/videos.py`: every file's extension
+rejection, storage/DB success, or duplicate-content rejection now gets its own timed attempt row
+(`error_code`: `UNSUPPORTED_FILE_TYPE`/`DUPLICATE_CONTENT`/other). Every `duration_ms` is a
+server-side `time.monotonic()` delta spanning this process's own hash+storage+DB work — explicitly
+documented as *not* network latency, since this server never observes the client's actual upload
+transfer time. Throughput is deliberately not stored as its own column — derive `total_bytes /
+total_duration_ms` at query time instead. Documented (not built) exactly which media-metadata
+fields (`container`/`video_codec`/`audio_codec`/`width`/`height`/`fps`/`duration_seconds`) a future
+background job could populate via the existing `media.inspection.inspect_media`, and why that job
+belongs on an interval, never synchronously in the upload request.
+
+Implemented navigation-safe uploads: a new `web/lib/uploads.tsx` (`UploadProvider`/
+`useUploadManager()`) now owns in-progress/result state, mounted in `app/app/layout.tsx` above the
+per-route page content — exactly like `SessionProvider` — so it survives the user navigating to
+Queue/Settings and back mid-upload. The underlying `fetch()` was never actually cancelled by
+navigation (not tied to React's component tree); the real gap was that the *feedback* lived only
+in `VideoUploadForm`'s local state. `LibraryPage` now refreshes its list whenever the shared
+`uploading` flag transitions to false while it's mounted, and always does a fresh fetch on mount
+regardless — so a batch finishing while the user is elsewhere is picked up correctly on return.
+Browser-close/resumable-upload support remains explicitly out of scope.
+
+Tests: backend 783 passed (777 baseline + 6 net new — batch/attempt persistence, success/failure
+timing, tenant isolation of telemetry, the stub-backend `storage_provider` proof; a Postgres parity
+test was added but not run in this sandboxed environment, same production-DB-access restriction as
+before). Frontend 86 passed (81 baseline + 5 new), lint clean, build clean. One existing frontend
+test's assertion was deliberately updated (a failed upload now also triggers a list refresh, not
+just a successful one — a documented design simplification, not a regression); no test was
+weakened or removed.
+
+Files changed: `src/content_automation/persistence/{content_store,postgres_content_store,protocol}.py`,
+new `postgres_migrations/0004_add_upload_telemetry.sql`, `media/media_storage.py`,
+`api/routes/videos.py`, `api/app.py`, `docs/decisions/0009-object-storage-media-lifecycle.md`,
+`tests/test_api_videos.py`, `tests/test_media_storage.py`, `tests/test_postgres_content_store.py`,
+new `web/lib/uploads.tsx`, `web/components/forms/VideoUploadForm.tsx`, `web/app/app/library/page.tsx`,
+`web/app/app/layout.tsx`, new `web/tests/lib/uploads.test.tsx`, `web/tests/routes/library.test.tsx`,
+`web/tests/routes/app-routes.test.tsx`.
+
+Full detail, including the exact live-validation steps for the next real batch (Railway
+`STORAGE_BACKEND` fix + redeploy, then checking the real Supabase bucket and the new telemetry
+tables directly), in `docs/evaluations/productization/milestone-3.7-batch-upload-readiness.md`'s
+2026-09-26 addendum.
+
+Milestone 3.7 remains **IN PROGRESS** — this follow-up's own instrumentation and corrected
+metadata are not yet validated against a real hosted upload themselves.
+
 ### Milestone 3.7 — Batch Upload UX: Readiness Check + Minimum Implementation
 
 Inspection first (per the milestone brief): the storage abstraction (`StorageProtocol`/`LocalStorage`/`SupabaseStorage`, Milestone 3.4) existed and was tested but had never been called from any live entry point; `media.media_storage.upload_canonical_media()` only migrates an *existing* locally-ingested video to storage, with no path for creating a brand-new video row directly from freshly-uploaded bytes; no `/api/videos*` routes existed at all; `web/app/app/library/page.tsx` was a static "coming soon" shell with zero data fetching; `web/lib/api/client.ts` only supported JSON bodies, not multipart file uploads; and `videos.file_hash` is globally `UNIQUE` (not scoped per user) on both backends — a real pre-existing constraint a multi-tenant upload feature has to handle, not a bug to fix by loosening the schema.

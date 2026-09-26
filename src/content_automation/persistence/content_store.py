@@ -262,6 +262,49 @@ CREATE TABLE IF NOT EXISTS oauth_states (
 );
 """
 
+# Milestone 3.7 follow-up (upload performance instrumentation). Deliberately
+# event/attempt-level, not columns bolted onto `videos` — a video row
+# describes durable content; a batch/attempt describes one transient
+# upload *event*, and a single video could in principle be the target of
+# more than one attempt (a retried duplicate upload — see
+# media_storage.create_video_from_upload's idempotency). upload_attempts.
+# video_id is nullable because a failed attempt (unsupported file type,
+# storage error, duplicate content) never gets a video row at all.
+# duration_ms on both tables is server-side wall-clock only (time.monotonic()
+# deltas at the point this process measures it) — see
+# api/routes/videos.py's own docstring for exactly what span each duration
+# covers and why it is never labeled "network latency" (this server never
+# observes the client's actual upload transfer time; by the time a route
+# handler runs, Starlette has already fully received the multipart body).
+SCHEMA_UPLOAD_BATCHES = """
+CREATE TABLE IF NOT EXISTS upload_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    file_count INTEGER NOT NULL,
+    total_bytes INTEGER NOT NULL DEFAULT 0,
+    total_duration_ms INTEGER,
+    status TEXT NOT NULL DEFAULT 'IN_PROGRESS'
+);
+"""
+
+SCHEMA_UPLOAD_ATTEMPTS = """
+CREATE TABLE IF NOT EXISTS upload_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES upload_batches(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    video_id INTEGER REFERENCES videos(id),
+    original_filename TEXT NOT NULL,
+    file_size_bytes INTEGER,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    duration_ms INTEGER,
+    status TEXT NOT NULL DEFAULT 'IN_PROGRESS',
+    error_code TEXT
+);
+"""
+
 # The one local bootstrap identity every pre-3.2 row (and every CLI
 # invocation, until a real auth layer exists) is attributed to. Not a
 # secret, not exposed externally — a fixed, documented anchor, exactly the
@@ -648,6 +691,33 @@ class OAuthStateRecord:
     consumed_at: str | None
 
 
+@dataclass
+class UploadBatchRecord:
+    id: int
+    user_id: int
+    started_at: str
+    completed_at: str | None
+    file_count: int
+    total_bytes: int
+    total_duration_ms: int | None
+    status: str
+
+
+@dataclass
+class UploadAttemptRecord:
+    id: int
+    batch_id: int
+    user_id: int
+    video_id: int | None
+    original_filename: str
+    file_size_bytes: int | None
+    started_at: str
+    completed_at: str | None
+    duration_ms: int | None
+    status: str
+    error_code: str | None
+
+
 def _row_to_video(row: sqlite3.Row) -> VideoRecord:
     return VideoRecord(**dict(row))
 
@@ -678,6 +748,14 @@ def _row_to_platform_credential(row: sqlite3.Row) -> PlatformCredentialRecord:
 
 def _row_to_oauth_state(row: sqlite3.Row) -> OAuthStateRecord:
     return OAuthStateRecord(**dict(row))
+
+
+def _row_to_upload_batch(row: sqlite3.Row) -> UploadBatchRecord:
+    return UploadBatchRecord(**dict(row))
+
+
+def _row_to_upload_attempt(row: sqlite3.Row) -> UploadAttemptRecord:
+    return UploadAttemptRecord(**dict(row))
 
 
 class ContentStore:
@@ -712,6 +790,10 @@ class ContentStore:
         # REFERENCES clauses are meaningful from the first run.
         self._conn.executescript(SCHEMA_PLATFORM_CREDENTIALS)
         self._conn.executescript(SCHEMA_OAUTH_STATES)
+        # Milestone 3.7 follow-up: created after users/videos so their
+        # REFERENCES clauses are meaningful from the first run.
+        self._conn.executescript(SCHEMA_UPLOAD_BATCHES)
+        self._conn.executescript(SCHEMA_UPLOAD_ATTEMPTS)
 
     def close(self) -> None:
         self._conn.close()
@@ -1478,6 +1560,65 @@ class ContentStore:
             return None
         record.consumed_at = now
         return record
+
+    # -- upload_batches / upload_attempts (Milestone 3.7 follow-up —
+    # upload performance instrumentation; see SCHEMA_UPLOAD_BATCHES'
+    # module-level comment for why this is event/attempt-level rather than
+    # columns on videos) -----------------------------------------------
+
+    def create_upload_batch(self, user_id: int, started_at: str, file_count: int) -> UploadBatchRecord:
+        """One row per POST /api/videos request. total_bytes/
+        total_duration_ms/status are filled in by update_upload_batch once
+        every file has been attempted — this call only marks that the
+        batch started."""
+        cur = self._conn.execute(
+            "INSERT INTO upload_batches (user_id, started_at, file_count) VALUES (?, ?, ?)",
+            (user_id, started_at, file_count),
+        )
+        row = self._conn.execute("SELECT * FROM upload_batches WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return _row_to_upload_batch(row)
+
+    def update_upload_batch(self, batch_id: int, **fields) -> None:
+        if not fields:
+            return
+        columns = ", ".join(f"{key} = ?" for key in fields)
+        values = [*fields.values(), batch_id]
+        self._conn.execute(f"UPDATE upload_batches SET {columns} WHERE id = ?", values)
+
+    def list_upload_batches_for_user(self, user_id: int) -> list[UploadBatchRecord]:
+        """Scoped strictly to user_id — same tenant-isolation convention as
+        list_videos_for_user. No "list everything" variant."""
+        rows = self._conn.execute(
+            "SELECT * FROM upload_batches WHERE user_id = ? ORDER BY started_at DESC, id DESC", (user_id,)
+        ).fetchall()
+        return [_row_to_upload_batch(row) for row in rows]
+
+    def create_upload_attempt(
+        self, batch_id: int, user_id: int, original_filename: str, started_at: str,
+    ) -> UploadAttemptRecord:
+        """One row per file in a batch, created before that file's own
+        processing starts — video_id/file_size_bytes/duration_ms/status/
+        error_code are filled in by update_upload_attempt once the outcome
+        (success or a specific failure) is known."""
+        cur = self._conn.execute(
+            "INSERT INTO upload_attempts (batch_id, user_id, original_filename, started_at) VALUES (?, ?, ?, ?)",
+            (batch_id, user_id, original_filename, started_at),
+        )
+        row = self._conn.execute("SELECT * FROM upload_attempts WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return _row_to_upload_attempt(row)
+
+    def update_upload_attempt(self, attempt_id: int, **fields) -> None:
+        if not fields:
+            return
+        columns = ", ".join(f"{key} = ?" for key in fields)
+        values = [*fields.values(), attempt_id]
+        self._conn.execute(f"UPDATE upload_attempts SET {columns} WHERE id = ?", values)
+
+    def get_upload_attempts_for_batch(self, batch_id: int) -> list[UploadAttemptRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM upload_attempts WHERE batch_id = ? ORDER BY id ASC", (batch_id,)
+        ).fetchall()
+        return [_row_to_upload_attempt(row) for row in rows]
 
 
 class SlotUnavailableError(Exception):

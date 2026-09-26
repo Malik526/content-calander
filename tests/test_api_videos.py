@@ -4,7 +4,13 @@ behavior, and Library listing. Network/storage is real LocalStorage
 against a tmp_path root (no Supabase call) — the FastAPI
 routing/ownership/per-file-failure logic is exercised for real through
 TestClient against a real temp-file SQLite ContentStore, matching
-tests/test_api_platforms_tiktok.py's own established pattern."""
+tests/test_api_platforms_tiktok.py's own established pattern.
+
+The upload_batches/upload_attempts sections below (Milestone 3.7 follow-up
+— upload performance instrumentation) inspect the store directly after
+each request, the same way test_api_platforms_tiktok.py's own tenant-
+isolation test does, since this telemetry is not itself exposed through
+any API response."""
 
 from datetime import datetime, timezone
 
@@ -212,3 +218,104 @@ def test_list_videos_never_exposes_storage_key_or_local_paths(client, users):
     assert "storage_provider" not in body
     assert "canonical_media_path" not in body
     assert "original_path" not in body
+
+
+# ---------------------------------------------------------------------------
+# upload performance instrumentation (Milestone 3.7 follow-up)
+# ---------------------------------------------------------------------------
+
+def test_upload_records_a_batch_and_one_attempt_per_file_with_timing(client, users, db_path):
+    user_a, _ = users
+    _act_as(user_a)
+
+    client.post(
+        "/api/videos",
+        files=[("files", _mp4("one.mp4", b"one-bytes")), ("files", _mp4("two.mp4", b"two-longer-bytes"))],
+    )
+
+    with ContentStore(db_path=db_path) as store:
+        batches = store.list_upload_batches_for_user(user_a.id)
+        assert len(batches) == 1
+        batch = batches[0]
+        assert batch.file_count == 2
+        assert batch.status == "COMPLETED"
+        assert batch.completed_at is not None
+        assert batch.total_bytes == len(b"one-bytes") + len(b"two-longer-bytes")
+        assert batch.total_duration_ms is not None and batch.total_duration_ms >= 0
+
+        attempts = store.get_upload_attempts_for_batch(batch.id)
+        assert len(attempts) == 2
+        assert {a.original_filename for a in attempts} == {"one.mp4", "two.mp4"}
+        for attempt in attempts:
+            assert attempt.status == "SUCCESS"
+            assert attempt.error_code is None
+            assert attempt.completed_at is not None
+            assert attempt.duration_ms is not None and attempt.duration_ms >= 0
+            assert attempt.video_id is not None
+            assert attempt.user_id == user_a.id
+            assert attempt.batch_id == batch.id
+
+
+def test_upload_records_failed_attempts_distinctly_from_successful_ones(client, users, db_path):
+    user_a, _ = users
+    _act_as(user_a)
+
+    client.post(
+        "/api/videos",
+        files=[("files", ("clip.txt", b"not a video", "text/plain")), ("files", _mp4("good.mp4", b"good"))],
+    )
+
+    with ContentStore(db_path=db_path) as store:
+        batch = store.list_upload_batches_for_user(user_a.id)[0]
+        attempts = {a.original_filename: a for a in store.get_upload_attempts_for_batch(batch.id)}
+
+        assert attempts["clip.txt"].status == "FAILED"
+        assert attempts["clip.txt"].error_code == "UNSUPPORTED_FILE_TYPE"
+        assert attempts["clip.txt"].video_id is None
+
+        assert attempts["good.mp4"].status == "SUCCESS"
+        assert attempts["good.mp4"].error_code is None
+        assert attempts["good.mp4"].video_id is not None
+
+        # a batch with a mix of successful/failed attempts still completes —
+        # there is no distinct batch-level "partial failure" status; the
+        # real signal lives on each attempt (see module docstring).
+        assert batch.status == "COMPLETED"
+
+
+def test_upload_records_duplicate_content_attempts_with_their_own_error_code(client, users, db_path):
+    user_a, user_b = users
+    content = b"shared bytes across two different accounts"
+
+    _act_as(user_a)
+    client.post("/api/videos", files=[("files", _mp4("a.mp4", content))])
+    _act_as(user_b)
+    client.post("/api/videos", files=[("files", _mp4("b.mp4", content))])
+
+    with ContentStore(db_path=db_path) as store:
+        batch_b = store.list_upload_batches_for_user(user_b.id)[0]
+        attempt_b = store.get_upload_attempts_for_batch(batch_b.id)[0]
+        assert attempt_b.status == "FAILED"
+        assert attempt_b.error_code == "DUPLICATE_CONTENT"
+        assert attempt_b.video_id is None
+
+
+def test_upload_telemetry_is_isolated_per_tenant(client, users, db_path):
+    """The batch/attempt tables carry user_id on every row and
+    list_upload_batches_for_user is strictly scoped — the same tenant-
+    isolation guarantee as videos themselves, proven directly here since
+    telemetry has no API surface of its own to test through."""
+    user_a, user_b = users
+    _act_as(user_a)
+    client.post("/api/videos", files=[("files", _mp4("a.mp4", b"a"))])
+    _act_as(user_b)
+    client.post("/api/videos", files=[("files", _mp4("b.mp4", b"b"))])
+
+    with ContentStore(db_path=db_path) as store:
+        batches_a = store.list_upload_batches_for_user(user_a.id)
+        batches_b = store.list_upload_batches_for_user(user_b.id)
+
+        assert len(batches_a) == 1 and len(batches_b) == 1
+        assert batches_a[0].id != batches_b[0].id
+        assert all(a.user_id == user_a.id for a in store.get_upload_attempts_for_batch(batches_a[0].id))
+        assert all(a.user_id == user_b.id for a in store.get_upload_attempts_for_batch(batches_b[0].id))

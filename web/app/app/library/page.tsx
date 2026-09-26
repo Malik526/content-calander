@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
@@ -11,6 +11,7 @@ import { ApiError } from "@/lib/api/client";
 import { listVideos } from "@/lib/api/videos";
 import type { VideoResponse } from "@/lib/api/types";
 import { useSession } from "@/lib/session";
+import { useUploadManager } from "@/lib/uploads";
 
 /**
  * /app/library (Milestone 3.7). Real batch upload + real, backend-verified
@@ -24,9 +25,19 @@ import { useSession } from "@/lib/session";
  * there is no real backend to call at all — shown as the same empty state
  * as "no videos yet" rather than spinning forever, since that's the
  * honest outcome either way.
+ *
+ * Milestone 3.7 follow-up: refreshing after an upload is driven by
+ * useUploadManager()'s shared `uploading` flag (lib/uploads.tsx), not a
+ * callback from VideoUploadForm — that state lives above this page in the
+ * app shell layout and survives this page unmounting, so a batch that
+ * finishes while the user is on Queue/Settings is picked up by this
+ * page's own mount-time fetch when they come back; the effect below only
+ * has to handle the case where this page is still mounted when a batch
+ * completes.
  */
 export default function LibraryPage() {
   const { accessToken } = useSession();
+  const { uploading } = useUploadManager();
   const [videos, setVideos] = useState<VideoResponse[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -54,11 +65,20 @@ export default function LibraryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
+  const wasUploadingRef = useRef(uploading);
+  useEffect(() => {
+    if (wasUploadingRef.current && !uploading) {
+      void loadVideos(); // a batch just finished while this page was mounted
+    }
+    wasUploadingRef.current = uploading;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploading]);
+
   return (
     <>
       <PageHeader title="Library" description="Videos you've batched and processed." />
       <div className="flex flex-col gap-6">
-        <VideoUploadForm accessToken={accessToken} onUploaded={() => void loadVideos()} />
+        <VideoUploadForm accessToken={accessToken} />
 
         {loadError ? (
           <ErrorState message={loadError} onRetry={loadVideos} />

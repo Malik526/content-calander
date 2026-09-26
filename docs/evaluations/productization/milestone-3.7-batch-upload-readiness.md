@@ -174,3 +174,133 @@ component). Lint clean. Production build clean (all 10 routes, including `/app/l
 live validation above with real video files against the real deployed stack — matching this
 repository's own established pattern (see Milestone 3.6's own addenda) of not marking a milestone
 COMPLETE until a real user has exercised the real hosted path end to end.
+
+## Addendum (2026-09-26) — Data Quality + Upload Instrumentation Follow-up
+
+Triggered by the first real hosted uploads and a direct DB inspection, which found
+`storage_provider="local"` on rows whose `storage_key` looked Supabase-shaped.
+
+**Root cause of `storage_provider="local"`:** not a code defect. Every write site
+(`create_video_from_upload`, `upload_canonical_media`) stamps `storage_provider` from the
+*actually-injected* `StorageProtocol.provider_name` — never a literal string (re-verified by
+grep and by a new stub-backend test, `test_create_video_from_upload_records_the_actual_injected_backend_not_a_hardcoded_string`,
+proving the code would record `"supabase"` given a Supabase-shaped backend). The real cause:
+`config.STORAGE_BACKEND` defaults to `"local"` when unset (a deliberate, pre-existing default —
+see ADR-0009's own "Consequences" section, predating this milestone), and `build_storage()` had
+never been called from any live entry point until this milestone's upload endpoint — so if
+Railway's dashboard was never explicitly given `STORAGE_BACKEND=supabase`, `LocalStorage` is what
+really ran, and the uploaded bytes are sitting under that process's `LOCAL_STORAGE_ROOT`, not in
+the real Supabase bucket. A `storage_key` shaped like a Supabase path proves nothing about which
+backend actually holds the bytes — `build_storage_key()` is deliberately backend-agnostic. Full
+detail in ADR-0009's own 2026-09-26 addendum. **Action needed (operational, not code):** confirm/
+set `STORAGE_BACKEND=supabase` (plus `SUPABASE_URL`/`SERVICE_ROLE_KEY`/`SUPABASE_STORAGE_BUCKET`)
+on Railway's dashboard, then redeploy. `api/app.py`'s startup diagnostic now also logs
+`STORAGE_BACKEND` so this is visible in Railway's logs on the very next deploy.
+
+**`canonical_media_path` decision:** confirmed intentional, not a gap — `create_video_from_upload`
+already left it `NULL` for hosted uploads (see its own docstring, written when it was built) and
+this follow-up formalizes that in ADR-0009 itself: `storage_key` (paired with `storage_provider`)
+is the one canonical hosted-media identifier; a hosted upload never had a local file to record
+"lineage" for, unlike the local-ingestion-then-migrated case ADR-0009 originally described. No
+code change — documentation only.
+
+**Upload performance instrumentation:** added event/attempt-level tables, not columns on
+`videos` — `upload_batches` (one row per `POST /api/videos` request: `user_id`, `started_at`,
+`completed_at`, `file_count`, `total_bytes`, `total_duration_ms`, `status`) and `upload_attempts`
+(one row per file: `batch_id`, `user_id`, `video_id` nullable, `original_filename`,
+`file_size_bytes`, `started_at`, `completed_at`, `duration_ms`, `status`, `error_code` nullable) —
+on both backends (`persistence/content_store.py`, `persistence/postgres_content_store.py`,
+`postgres_migrations/0004_add_upload_telemetry.sql`), with `create_*`/`update_*`/
+`list_upload_batches_for_user`/`get_upload_attempts_for_batch` accessors added to
+`ContentStoreProtocol`. Wired into `api/routes/videos.py`: one batch row per request, one attempt
+row per file (including files rejected for an unsupported extension — `error_code="UNSUPPORTED_FILE_TYPE"`
+— and duplicate-content rejections — `error_code="DUPLICATE_CONTENT"`, reused from
+`DuplicateVideoContentError.reason_code`), successful attempts carry the resulting `video_id`.
+Throughput (bytes/sec) is deliberately **not** its own stored column — derive it from
+`total_bytes / total_duration_ms` at query time, per the brief's own "keep stored telemetry
+minimal" framing; a derived ratio is not durable state worth persisting redundantly.
+
+**Timing boundaries measured, and what they are not:** every `duration_ms` (both tables) is a
+server-side `time.monotonic()` delta (never wall-clock subtraction, which a clock adjustment
+mid-request could corrupt) — `upload_attempts.duration_ms` spans from just before this process
+starts streaming one file's bytes to a temp file through hashing + `storage.put` + the DB write;
+`upload_batches.total_duration_ms` spans the whole request. **Neither is labeled or should be read
+as "network latency" or "upload speed"** — by the time this route function runs at all, uvicorn/
+Starlette has already fully received the client's multipart body; this server has no way to
+observe the client's actual transfer time. This distinction is documented directly in
+`api/routes/videos.py`'s own module docstring so it can't be misread later. Client-side (true
+network + queue) timing is not captured at all in this pass — would require either browser RUM or
+a client-reported timing field, both deliberately deferred as beyond "minimal."
+
+**Media intelligence roadmap (documented, not built):** `media/media_storage.py`'s module
+docstring now spells out exactly which fields a future background job could populate via the
+existing `media.inspection.inspect_media` (container, video_codec, audio_codec, width, height,
+fps, duration_seconds) and recommends where it belongs — a plain interval-triggered job over
+"videos with storage_provider set and container IS NULL" (matching
+`hosted-product-boundary.md` §5's existing job-boundary shape), never synchronous in the upload
+request (§4 already rules that out for ffprobe). transcript/classification/caption/scheduling
+remain a separate, later concern. No code added — this pass's own scope guardrail.
+
+**Navigation-safe uploads: implemented.** A small app-level provider, `lib/uploads.tsx`
+(`UploadProvider`/`useUploadManager()`), now owns `uploading`/`lastResults`/`error` — mounted in
+`app/app/layout.tsx` *above* the per-route page content, exactly like `SessionProvider` already
+is, so it persists across every in-app `/app/*` navigation. Investigated first: the underlying
+`fetch()` call was never actually cancelled by navigating away (a browser request isn't tied to
+React's component tree) — the real gap was that the *feedback* (in-progress/result state) lived
+only in `VideoUploadForm`'s local `useState`, so navigating away and back made a real, still-
+running or already-finished upload look like it had vanished. `VideoUploadForm`/`LibraryPage` now
+read shared state via `useUploadManager()`; `LibraryPage` refreshes its list whenever `uploading`
+transitions from true to false while it happens to be mounted, and does its own fresh fetch on
+every mount regardless — so a batch that completes while the user is on Queue/Settings is picked
+up correctly when they return to Library. Browser-tab-close/resumable-upload support remains
+explicitly out of scope, per the brief.
+
+**Tests:** backend 783 passed (777 Milestone-3.7-readiness baseline + 6 net new, verified directly
+via `pytest --collect-only` before/after — `tests/test_api_videos.py` (4: batch/attempt
+persistence, success/failure timing records, tenant isolation of telemetry, duplicate-content
+error-code recording) and `tests/test_media_storage.py` (1: the stub-backend `storage_provider`
+proof); `tests/test_postgres_content_store.py` gained a parity test, not run in this sandboxed
+environment for the same production-DB-access reason as before). Frontend 86 passed (81 baseline +
+5 new — `tests/lib/uploads.test.tsx`, a navigation-survival test in `tests/routes/library.test.tsx`,
+`tests/routes/app-routes.test.tsx` updated for the new `UploadProvider` wrapper requirement), lint
+clean, build clean. Zero existing tests weakened;
+`tests/routes/library.test.tsx`'s one changed assertion (a failed upload now also triggers a
+list refresh, not just a successful one) reflects a deliberate, documented design simplification,
+not a regression.
+
+**Files changed:** `src/content_automation/persistence/{content_store,postgres_content_store,protocol}.py`,
+`src/content_automation/persistence/postgres_migrations/0004_add_upload_telemetry.sql`,
+`src/content_automation/media/media_storage.py`, `src/content_automation/api/routes/videos.py`,
+`src/content_automation/api/app.py`, `docs/decisions/0009-object-storage-media-lifecycle.md`,
+`tests/test_api_videos.py`, `tests/test_media_storage.py`, `tests/test_content_store.py`,
+`tests/test_postgres_content_store.py`, `web/lib/uploads.tsx` (new), `web/components/forms/VideoUploadForm.tsx`,
+`web/app/app/library/page.tsx`, `web/app/app/layout.tsx`, `web/tests/lib/uploads.test.tsx` (new),
+`web/tests/routes/library.test.tsx`, `web/tests/routes/app-routes.test.tsx`.
+
+**Remains intentionally deferred:** ffprobe/media-metadata enrichment (documented, not built —
+see above), client-side upload timing, throughput as a stored column, transcription/scheduling/
+captioning/publishing/worker architecture (this pass's own explicit exclusion), browser-close/
+resumable upload support, and any UI to browse `upload_batches`/`upload_attempts` (this pass built
+persistence only — no API/UI surface for telemetry, since nothing asked for one yet).
+
+**Exact live validation steps for the next real batch:**
+1. Confirm/set `STORAGE_BACKEND=supabase` (and `SUPABASE_URL`/`SERVICE_ROLE_KEY`/
+   `SUPABASE_STORAGE_BUCKET`) on Railway's dashboard, then trigger a redeploy so both this and the
+   earlier `python-multipart` fix are live.
+2. Upload a small batch of real videos through the deployed frontend, same as before.
+3. Check Railway's logs for the startup line — confirm `STORAGE_BACKEND: 'supabase'`.
+4. Check the Supabase Storage dashboard directly for the real bucket — confirm the uploaded
+   objects are actually there (not just that the app returned success).
+5. Query `videos` for those rows — confirm `storage_provider='supabase'` this time, and
+   `canonical_media_path IS NULL`.
+6. Query `upload_batches`/`upload_attempts` for the same batch — confirm one batch row, one
+   attempt row per file, `status`/`duration_ms`/`file_size_bytes`/`video_id` all populated
+   sensibly, and that a deliberately-included unsupported file (if you include one) shows
+   `error_code='UNSUPPORTED_FILE_TYPE'` with `video_id` still `NULL`.
+7. Confirm Library still shows the uploaded videos correctly (no behavior change expected here).
+8. Start an upload, then click to Queue or Settings mid-upload, then back to Library — confirm
+   the result still shows up correctly rather than looking like it vanished.
+
+Milestone 3.7 remains **IN PROGRESS** — this follow-up's own instrumentation and corrected
+metadata are not yet validated against a real hosted upload themselves; that is exactly what the
+steps above are for.

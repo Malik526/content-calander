@@ -199,6 +199,49 @@ def test_create_video_from_upload_rejects_duplicate_content_from_a_different_use
         )
 
 
+class _FakeHostedStorage:
+    """A stub StorageProtocol reporting provider_name="supabase" while
+    delegating actual bytes to a real LocalStorage underneath — proves
+    create_video_from_upload stamps storage_provider from whatever backend
+    is *actually injected*, never a hardcoded string, without a real
+    Supabase account (matches this module's own "backend-agnostic, real
+    Supabase covered separately in test_storage_supabase.py" framing).
+    Milestone 3.7 follow-up's storage_provider="local" investigation."""
+
+    provider_name = "supabase"
+
+    def __init__(self, delegate):
+        self._delegate = delegate
+
+    def put(self, key, local_path):
+        self._delegate.put(key, local_path)
+
+    def exists(self, key):
+        return self._delegate.exists(key)
+
+    def delete(self, key):
+        self._delegate.delete(key)
+
+    def materialize(self, key):
+        return self._delegate.materialize(key)
+
+
+def test_create_video_from_upload_records_the_actual_injected_backend_not_a_hardcoded_string(store, tmp_path):
+    from content_automation.media.inspection import file_hash
+    from content_automation.storage.local import LocalStorage
+
+    hosted_storage = _FakeHostedStorage(LocalStorage(root=tmp_path / "objects"))
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    upload_path = _upload_tmp_file(tmp_path)
+
+    video = media_storage.create_video_from_upload(
+        store, hosted_storage, user.id, local_path=upload_path, original_filename="clip.mp4",
+        file_hash=file_hash(upload_path), file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+
+    assert video.storage_provider == "supabase"  # not "local", even though bytes are stored locally under the hood
+
+
 def test_create_video_from_upload_never_touches_the_original_upload_path(store, storage, tmp_path):
     """The caller (api/routes/videos.py) owns cleanup of its own temp
     file — this function must never delete or move the source it was
