@@ -125,3 +125,93 @@ def test_materialize_canonical_media_rejects_wrong_user(store, storage, tmp_path
     with pytest.raises(media_storage.MediaOwnershipError):
         with media_storage.materialize_canonical_media(store, storage, video.id, user_b.id):
             pass
+
+
+# ---------------------------------------------------------------------------
+# create_video_from_upload (Milestone 3.7 — hosted batch upload)
+# ---------------------------------------------------------------------------
+
+def _upload_tmp_file(tmp_path, *, name="upload", content=b"upload bytes") -> "Path":
+    from pathlib import Path
+
+    path = Path(tmp_path) / f"{name}.mp4"
+    path.write_bytes(content)
+    return path
+
+
+def test_create_video_from_upload_creates_an_owned_row_and_stores_bytes(store, storage, tmp_path):
+    from content_automation.media.inspection import file_hash
+
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    upload_path = _upload_tmp_file(tmp_path)
+
+    video = media_storage.create_video_from_upload(
+        store, storage, user.id, local_path=upload_path, original_filename="clip.mp4",
+        file_hash=file_hash(upload_path), file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+
+    assert video.user_id == user.id
+    assert video.original_filename == "clip.mp4"
+    assert video.status == "DISCOVERED"
+    assert video.canonical_media_path is None  # never the temp path — see function docstring
+    assert video.storage_provider == "local"
+    assert video.storage_key == f"users/{user.id}/videos/{video.id}/source.mp4"
+    assert video.file_size_bytes == upload_path.stat().st_size
+    assert storage.exists(video.storage_key)
+
+
+def test_create_video_from_upload_is_idempotent_for_the_same_user_and_content(store, storage, tmp_path):
+    from content_automation.media.inspection import file_hash
+
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    upload_path = _upload_tmp_file(tmp_path)
+    h = file_hash(upload_path)
+
+    first = media_storage.create_video_from_upload(
+        store, storage, user.id, local_path=upload_path, original_filename="clip.mp4",
+        file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+    second = media_storage.create_video_from_upload(
+        store, storage, user.id, local_path=upload_path, original_filename="clip.mp4",
+        file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+
+    assert second.id == first.id  # no duplicate row created
+
+
+def test_create_video_from_upload_rejects_duplicate_content_from_a_different_user(store, storage, tmp_path):
+    from content_automation.media.inspection import file_hash
+
+    user_a = store.create_user("a@example.com", "A", NOW.isoformat())
+    user_b = store.create_user("b@example.com", "B", NOW.isoformat())
+    upload_path = _upload_tmp_file(tmp_path)
+    h = file_hash(upload_path)
+
+    media_storage.create_video_from_upload(
+        store, storage, user_a.id, local_path=upload_path, original_filename="clip.mp4",
+        file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+
+    with pytest.raises(media_storage.DuplicateVideoContentError):
+        media_storage.create_video_from_upload(
+            store, storage, user_b.id, local_path=upload_path, original_filename="clip.mp4",
+            file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+        )
+
+
+def test_create_video_from_upload_never_touches_the_original_upload_path(store, storage, tmp_path):
+    """The caller (api/routes/videos.py) owns cleanup of its own temp
+    file — this function must never delete or move the source it was
+    handed, only copy from it (matches StorageProtocol.put's own
+    contract)."""
+    from content_automation.media.inspection import file_hash
+
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    upload_path = _upload_tmp_file(tmp_path)
+
+    media_storage.create_video_from_upload(
+        store, storage, user.id, local_path=upload_path, original_filename="clip.mp4",
+        file_hash=file_hash(upload_path), file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+
+    assert upload_path.exists()

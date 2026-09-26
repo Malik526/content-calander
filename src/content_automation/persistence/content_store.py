@@ -787,6 +787,18 @@ class ContentStore:
         values = [*fields.values(), video_id]
         self._conn.execute(f"UPDATE videos SET {columns} WHERE id = ?", values)
 
+    def list_videos_for_user(self, user_id: int) -> list[VideoRecord]:
+        """Every video owned by user_id, newest first — the Library API's
+        one query (Milestone 3.7). Scoped strictly to user_id; there is no
+        "list everything" variant, matching this codebase's existing
+        tenant-isolation convention (media_storage.py's ownership check
+        before any read) — a caller must always know which user it's
+        asking for."""
+        rows = self._conn.execute(
+            "SELECT * FROM videos WHERE user_id = ? ORDER BY created_at DESC, id DESC", (user_id,)
+        ).fetchall()
+        return [_row_to_video(row) for row in rows]
+
     # -- content_slots ----------------------------------------------------
 
     def insert_slot_if_missing(

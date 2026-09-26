@@ -1,0 +1,176 @@
+# Milestone 3.7 — Batch Upload UX: Readiness Check + Minimum Implementation
+
+## Objective
+
+Prepare Pickle Batch for the real-user Batch Upload UX validation: an authenticated user selects
+multiple finished short-form videos, uploads them through the real hosted backend, each one is
+stored in the existing canonical Supabase Storage structure and gets an owned Postgres `videos`
+row, and the real uploaded videos show up in `/app/library`. Deliberately excludes transcription,
+scheduling, caption generation, publishing, and worker logic — this milestone's own scope
+guardrail, matching AGENTS.md's Milestone 3 scope boundaries.
+
+This record covers a readiness/implementation pass, not the live validation itself — the real
+end-to-end test (the user's own real video files, through the real deployed Railway+Netlify
+stack) is still outstanding; see "Manual Validation Steps" below.
+
+## Phase 1 — Inspection
+
+Read first: `AGENTS.md`, `docs/architecture/hosted-product-boundary.md` (§4 API sync/async
+boundary, §5 background-job boundaries, the "Upload flow"/local-filesystem-assumptions
+sections), `docs/decisions/0009-object-storage-media-lifecycle.md`.
+
+Found:
+
+- **Storage abstraction**: `storage.protocol.StorageProtocol` (put/exists/delete/materialize),
+  `storage.local.LocalStorage`, `storage.supabase_storage.SupabaseStorage`,
+  `storage.factory.build_storage()` — all real, tested (Milestone 3.4), but **not yet called from
+  any live entry point** (CLI or API) before this milestone.
+- **Video/DB model**: `videos` has `user_id`/`storage_provider`/`storage_key` on both SQLite and
+  Postgres. `media.media_storage.upload_canonical_media()` bridges an *existing* video row (one
+  already created by local CLI ingestion, with a real local `canonical_media_path`) to object
+  storage — it has no path for creating a brand-new video row directly from freshly-received
+  bytes with no prior local-ingestion step. Nothing in the codebase did that.
+- **API surface**: only `GET /api/me` and `/api/platforms/tiktok/{status,connect,callback,disconnect}`
+  existed. No `/api/videos*` routes at all.
+- **Library UI**: `web/app/app/library/page.tsx` was a static shell — no data fetching, an inert
+  "Upload coming soon" button. Not wired to anything real.
+- **Frontend API client**: `web/lib/api/client.ts`'s `apiRequest()` always JSON-serialized the
+  body and always set `Content-Type: application/json` — no multipart/file-upload support.
+- **Ownership/tenant isolation**: enforced at the API layer via `get_current_user`
+  (`api/dependencies/auth.py`) and, for media specifically, `media_storage`'s
+  `MediaOwnershipError` check-before-act pattern. Real and consistent; the new upload path needed
+  to follow the same convention, not invent a new one.
+- **A real pre-existing constraint the new feature had to handle, not fix**: `videos.file_hash`
+  is `NOT NULL UNIQUE` **globally**, not scoped per user, on both SQLite and Postgres (predates
+  Milestone 3.2 ownership). Two different users uploading byte-identical content collide at the
+  schema level. Rescoping this to `UNIQUE(user_id, file_hash)` would be a real schema change —
+  explicitly out of this milestone's scope (AGENTS.md's "Coding/Refactor Rules" +
+  "Scope Guardrails": no database schema redesign unless a task explicitly asks). Handled at the
+  application layer instead — see `DuplicateVideoContentError` below.
+- `python-multipart` (required by FastAPI/Starlette to parse `multipart/form-data` — i.e. any
+  `UploadFile`) was **not installed** and not in `requirements.txt`. Any file-upload endpoint
+  would have failed at runtime without it.
+
+## Phase 2 — Implementation
+
+Backend:
+
+- `persistence/protocol.py` — added `insert_video`/`list_videos_for_user` to
+  `ContentStoreProtocol` (documentation-as-code, matching the existing convention).
+- `persistence/content_store.py` / `persistence/postgres_content_store.py` — added
+  `list_videos_for_user(user_id)`, scoped strictly by `user_id`, newest first.
+- `media/media_storage.py` — added `create_video_from_upload()`: the hosted-upload counterpart
+  to `upload_canonical_media()`. Given already-received bytes at a temp local path, it creates a
+  new owned `videos` row (`canonical_media_path` deliberately left `NULL` — the temp file does not
+  survive the request, unlike local ingestion's permanently-retained copy — `storage_provider`/
+  `storage_key` are the row's only reference, exactly the shape `materialize_canonical_media`
+  already knows how to resolve), uploads it via the injected `StorageProtocol`, and is idempotent
+  per (user, exact content). Raises the new `DuplicateVideoContentError` when the content already
+  belongs to a *different* user — the caller never learns which other account/video it collided
+  with.
+- `api/dependencies/storage.py` (new) — `get_storage()`, mirroring `get_store()` exactly.
+- `api/schemas/videos.py` (new) — `VideoResponse`/`VideoListResponse`/`VideoUploadResult`/
+  `VideoUploadBatchResponse`. Deliberately excludes `storage_key`/`storage_provider`/
+  `canonical_media_path`/`original_path` — same "don't surface an opaque internal identifier with
+  no user value" lesson as the Milestone 3.6 security review's TikTok `open_id` finding.
+- `api/routes/videos.py` (new) — `POST /api/videos` (batch upload, one multipart request, one
+  `VideoUploadResult` per file — a bad file never aborts the rest of the batch) and
+  `GET /api/videos` (the caller's own videos, newest first). Deliberately a plain `def` route, not
+  `async def`, matching every other route in this API: this endpoint does real blocking I/O
+  (`SupabaseStorage.put`'s network call; SQLite's connection is only safe to use from a single
+  thread at a time), and mixing that with `UploadFile`'s async `.read()` API risked handing the
+  same SQLite connection to two different worker threads across two independently-dispatched
+  `run_in_threadpool` calls — caught and fixed during implementation, not shipped. Reads each
+  upload via `UploadFile.file` (its underlying sync file object) instead.
+- `requirements.txt` — added `python-multipart>=0.0.9` (installed locally; **must reach Railway
+  on the next deploy** — see "Remaining Blockers").
+- `api/app.py` — wired the new router in; updated its own stale module docstring (previously
+  claimed "no batch-upload... endpoints" as this milestone's boundary).
+
+Frontend:
+
+- `web/lib/api/client.ts` — `apiRequest()` now passes a `FormData` body straight through
+  (never `JSON.stringify`'d) and omits a manual `Content-Type` for it, letting the browser set its
+  own multipart boundary. Every existing JSON caller is unaffected.
+- `web/lib/api/types.ts` — added `VideoResponse`/`VideoListResponse`/`VideoUploadResult`/
+  `VideoUploadBatchResponse` (mirrors the backend's actual JSON, same convention as
+  `CurrentUser`/`TikTokConnectionStatus`). The pre-existing mock-only `VideoSummary` type and
+  `lib/api/mockData.ts` are untouched — unrelated to this milestone (Queue's own future scope).
+- `web/lib/api/videos.ts` (new) — `listVideos`/`uploadVideos` typed calls.
+- `web/components/forms/VideoUploadForm.tsx` (new) — select multiple files (a distinct step from
+  upload — a wrong pick can be cleared first), upload as one batch request, show a per-file
+  success/failure result list.
+- `web/app/app/library/page.tsx` — rewritten from the static shell to a real client component:
+  loads the current user's videos on mount, renders the upload form above the list, refreshes the
+  list after a batch completes. No `accessToken` (the dev-mock-session fallback) means there is no
+  real backend to call at all — treated as the same "no videos yet" empty state a genuinely empty
+  account would show, not a perpetual spinner, since that is the honest outcome either way.
+
+## Tests
+
+Backend (`env -u DATABASE_URL .venv/bin/python3 -m pytest -q`): **777 passed** (759 baseline + 18
+new — `tests/test_api_videos.py` (12: auth required, single/batch upload success, unsupported
+file type doesn't abort the batch, idempotent re-upload by the same user, duplicate content from
+a different user fails cleanly without naming the other account, Library listing requires auth,
+empty/populated/tenant-isolated listing, no internal identifiers leaked to the client),
+`tests/test_media_storage.py` (+4: `create_video_from_upload`'s row/storage creation, idempotency,
+cross-user duplicate rejection, never touches the caller's own temp file), `tests/test_content_store.py`
+(+3: `list_videos_for_user` scoping/ordering/empty-result/never-leaks-legacy-unowned-rows)). Zero
+existing tests modified or weakened.
+
+Also added `tests/test_postgres_content_store.py::test_list_videos_for_user_scopes_strictly_by_user_newest_first`
+for schema parity on the real Postgres backend — **not run in this environment** (this sandbox's
+own production-access safeguard blocks any pytest invocation with `DATABASE_URL` set at all, even
+though this specific test only ever touches the disposable `POSTGRES_TEST_SCHEMA`, never `public`
+— consistent with how every other Postgres-integration test in this suite already behaves). It
+will run wherever `DATABASE_URL` is configured normally (CI, or a future session with that
+permission).
+
+Frontend (`npm run test -- --run`, `npm run lint`, `npm run build`, all from `web/`): **81 passed**
+(67 baseline + 14 new — `tests/lib/videos.test.ts` (4), `tests/routes/library.test.tsx` (5), 2 new
+`FormData`-handling cases in `tests/lib/client.test.ts`, `tests/routes/app-routes.test.tsx`'s
+Library case updated (not removed) to wrap in `SessionProvider` now that the page is a real client
+component). Lint clean. Production build clean (all 10 routes, including `/app/library`).
+
+## Manual Validation Steps (with your own real videos)
+
+1. Make sure the next Railway deploy has picked up `requirements.txt`'s new `python-multipart`
+   dependency (redeploy if the currently-running instance predates this change — see "Remaining
+   Blockers").
+2. Open the deployed frontend, sign in with Google, go to **Library**.
+3. Under "Upload videos," click the file input and select 2–3 real finished video files
+   (`.mp4`/`.mov`).
+4. Click **Upload N videos**. Confirm each file shows a ✓ result line.
+5. Confirm the videos now appear in the list below, with their real filenames and file sizes.
+6. Reload the page — confirm the same videos are still there (proves they persisted, not just
+   client-side state).
+7. Try uploading one unsupported file type (e.g. a `.txt` or `.jpg`) alongside a real video in the
+   same batch — confirm the video still succeeds and the bad file shows a clear ✗ error, not a
+   failed whole request.
+8. Try uploading the exact same video file a second time — confirm it does not create a
+   duplicate row in the list (idempotent re-upload).
+9. If you have a second real account to test with, confirm that account's Library never shows the
+   first account's videos.
+
+## Remaining Blockers Before Live 3.7 Validation
+
+- **`python-multipart` must reach the real Railway deployment.** It's in `requirements.txt` now,
+  but Railway's build (`pip install -r requirements.txt && pip install .`) only picks it up on the
+  *next* deploy — if the currently-running instance was built before this change, step 3 above
+  will fail with a 500 until it's redeployed.
+- **Not yet exercised against real Supabase Storage or real production Postgres from this
+  environment** — every test above runs against `LocalStorage`/a temp-file SQLite DB or the
+  disposable Postgres test schema, per this repository's own testing conventions (no live
+  TikTok/Calendar/DB calls from automated tests). The real `SupabaseStorage.put()` HTTP call path
+  is unchanged code (Milestone 3.4, already tested against real Supabase separately) but has never
+  been driven by this new upload endpoint specifically until a real user does step 3.
+- Everything else (ffprobe/duration/dimensions display, transcription, scheduling, captions,
+  publishing) is deliberately **not** built — out of this milestone's scope by design, not an
+  oversight.
+
+## Overall
+
+**Milestone 3.7 readiness work is COMPLETE; the milestone itself remains IN PROGRESS** pending the
+live validation above with real video files against the real deployed stack — matching this
+repository's own established pattern (see Milestone 3.6's own addenda) of not marking a milestone
+COMPLETE until a real user has exercised the real hosted path end to end.

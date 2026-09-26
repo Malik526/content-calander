@@ -55,6 +55,16 @@ class ContentStoreProtocol(Protocol):
 
     def update_video(self, video_id: int, **fields) -> None: ...
 
+    # -- Milestone 3.7 (batch upload) — the methods media/media_storage.py's
+    # hosted-upload path and api/routes/videos.py consume through this
+    # Protocol, exactly like the Milestone 3.6 methods below.
+
+    def insert_video(
+        self, file_hash: str, original_filename: str, original_path: str, created_at: str, user_id: int,
+    ) -> VideoRecord: ...
+
+    def list_videos_for_user(self, user_id: int) -> list[VideoRecord]: ...
+
     def get_slot(self, slot_id: int) -> SlotRecord | None: ...
 
     def assign_slot(self, video_id: int, slot_id: int) -> None: ...

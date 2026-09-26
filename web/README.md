@@ -19,7 +19,7 @@ This directory is intentionally separate from the Python backend/CLI tooling at 
 | `/login` | Sign in with Google (Supabase Auth). Public. |
 | `/auth/callback` | Where Google/Supabase redirects back to after sign-in; navigates into `/app` once a session exists. Public. |
 | `/app` | Product home/dashboard — quick links into Library, Queue, Settings. Requires a real session. |
-| `/app/library` | Videos you've batched/processed (real empty state by default — batch upload is Milestone 3.7's scope). |
+| `/app/library` | Real batch video upload (Milestone 3.7) + your own videos, backend-verified (`GET/POST /api/videos`) — live validation with real video files against the deployed stack is still outstanding, see `docs/evaluations/productization/milestone-3.7-batch-upload-readiness.md`. |
 | `/app/queue` | What's scheduled/published (real empty state by default — real queue data is a future milestone's scope). |
 | `/app/settings` | Account (real session) + real, backend-verified TikTok connection status/connect/disconnect. |
 

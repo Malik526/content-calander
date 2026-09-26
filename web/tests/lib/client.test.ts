@@ -80,6 +80,30 @@ describe("apiRequest", () => {
     expect(error.message).toBe("Request failed (HTTP 500).");
   });
 
+  it("passes a FormData body straight through, unstringified, with no manual Content-Type", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const formData = new FormData();
+    formData.append("files", new File(["x"], "x.mp4"));
+
+    await apiRequest("/api/videos", { method: "POST", body: formData });
+
+    const [, init = {}] = fetchMock.mock.calls[0];
+    expect(init.body).toBe(formData); // not JSON.stringify'd
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+  });
+
+  it("still JSON-stringifies a plain object body and sets Content-Type: application/json", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await apiRequest("/api/me", { method: "POST", body: { a: 1 } });
+
+    const [, init = {}] = fetchMock.mock.calls[0];
+    expect(init.body).toBe(JSON.stringify({ a: 1 }));
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+  });
+
   it("normalizes a malformed successful response into MALFORMED_RESPONSE", async () => {
     vi.stubGlobal(
       "fetch",

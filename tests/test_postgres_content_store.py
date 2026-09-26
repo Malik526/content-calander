@@ -83,6 +83,24 @@ def test_create_user_and_video_roundtrip(store):
     assert store.get_video_by_hash(video.file_hash) == video
 
 
+def test_list_videos_for_user_scopes_strictly_by_user_newest_first(store):
+    """Milestone 3.7's Library query, against real Postgres — Postgres's
+    videos.user_id is NOT NULL (unlike SQLite's legacy-compat-nullable
+    column), so there is no "unowned row" case to worry about here at
+    all; this only has to prove per-user scoping and ordering."""
+    user_a = _user(store, "a@example.com")
+    user_b = _user(store, "b@example.com")
+    older = _video(store, user_a, name="older", file_hash="hash-older")
+    newer = _video(store, user_a, name="newer", file_hash="hash-newer")
+    _video(store, user_b, name="other", file_hash="hash-other")
+
+    videos = store.list_videos_for_user(user_a.id)
+
+    assert [v.id for v in videos] == [newer.id, older.id]
+    assert all(v.user_id == user_a.id for v in videos)
+    assert store.list_videos_for_user(999999) == []
+
+
 def test_timestamps_round_trip_as_aware_utc_strings(store):
     user = _user(store)
     fetched = store.get_user(user.id)

@@ -56,6 +56,37 @@ def test_update_video_persists_fields(store):
     assert updated.video_codec == "hevc"
 
 
+def test_list_videos_for_user_returns_only_that_users_videos_newest_first(store):
+    """Milestone 3.7's Library query — tenant isolation is the whole
+    point, not an afterthought."""
+    user_a = store.create_user("a@example.com", "A", "2026-09-01T00:00:00")
+    user_b = store.create_user("b@example.com", "B", "2026-09-01T00:00:00")
+    older = store.insert_video("hash-1", "one.mp4", "hosted-upload/hash-1", "2026-09-01T00:00:00", user_id=user_a.id)
+    newer = store.insert_video("hash-2", "two.mp4", "hosted-upload/hash-2", "2026-09-02T00:00:00", user_id=user_a.id)
+    store.insert_video("hash-3", "three.mp4", "hosted-upload/hash-3", "2026-09-01T00:00:00", user_id=user_b.id)
+
+    videos = store.list_videos_for_user(user_a.id)
+
+    assert [v.id for v in videos] == [newer.id, older.id]
+    assert all(v.user_id == user_a.id for v in videos)
+
+
+def test_list_videos_for_user_returns_empty_list_for_a_user_with_no_videos(store):
+    user = store.create_user("a@example.com", "A", "2026-09-01T00:00:00")
+    assert store.list_videos_for_user(user.id) == []
+
+
+def test_list_videos_for_user_never_returns_legacy_unowned_videos(store):
+    """A pre-3.2 video (user_id NULL) must never leak into any real user's
+    Library — matches the existing "user_id optional at the SQL level,
+    enforced at the application layer" convention (see SCHEMA_USERS'
+    docstring), not a relaxation of it."""
+    user = store.create_user("a@example.com", "A", "2026-09-01T00:00:00")
+    store.insert_video("hash-legacy", "legacy.mp4", "/incoming/legacy.mp4", "2026-09-01T00:00:00")  # user_id=None
+
+    assert store.list_videos_for_user(user.id) == []
+
+
 def test_opening_a_database_with_the_old_unique_constraint_migrates_it(tmp_path):
     """Milestone 1.1 changed content_slots' uniqueness from
     (scheduled_at, pillar_key) to scheduled_at alone. A database created

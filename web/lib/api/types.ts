@@ -70,3 +70,32 @@ export interface TikTokConnectionStatus {
   status: string;
   account_label: string | null;
 }
+
+/**
+ * The real GET/POST /api/videos response shapes (Milestone 3.7) — see
+ * api/schemas/videos.py. Same snake_case-mirrors-the-wire convention as
+ * CurrentUser/TikTokConnectionStatus above; VideoSummary (top of this
+ * file) stays the separate, still-mock-only shape Queue's UI uses.
+ */
+export interface VideoResponse {
+  id: number;
+  original_filename: string;
+  status: string;
+  file_size_bytes: number | null;
+  created_at: string;
+}
+
+export interface VideoListResponse {
+  videos: VideoResponse[];
+}
+
+export interface VideoUploadResult {
+  filename: string;
+  success: boolean;
+  video: VideoResponse | null;
+  error: string | null;
+}
+
+export interface VideoUploadBatchResponse {
+  results: VideoUploadResult[];
+}

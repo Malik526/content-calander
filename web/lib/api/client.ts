@@ -16,6 +16,13 @@
  * compatibility assumption" — a future native client can reuse this
  * exact module with its own token source).
  *
+ * `body: FormData` (Milestone 3.7, for lib/api/videos.ts's batch upload)
+ * is passed straight to `fetch` untouched — never JSON.stringify'd, and
+ * `Content-Type` is deliberately left for the browser to set itself
+ * (a multipart boundary the browser generates; setting it here would
+ * strip that boundary and break the request). Every other caller keeps
+ * passing a plain JSON-serializable body exactly as before.
+ *
  * Deliberately assumes `browser -> API -> Postgres/storage`, never
  * `browser -> Supabase directly` — see
  * docs/decisions/0010-frontend-app-shell.md "Backend API Boundary
@@ -63,16 +70,18 @@ export interface ApiRequestOptions extends Omit<RequestInit, "body"> {
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const { body, headers, accessToken, ...rest } = options;
 
+  const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
+
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...rest,
       headers: {
-        "Content-Type": "application/json",
+        ...(isFormData ? {} : { "Content-Type": "application/json" }),
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...headers,
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
     });
   } catch {
     throw new ApiError("Could not reach the server. Check your connection and try again.", {

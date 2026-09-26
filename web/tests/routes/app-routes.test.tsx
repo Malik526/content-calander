@@ -25,7 +25,17 @@ describe("/app product routes", () => {
   });
 
   it("renders /app/library in its real empty state", () => {
-    render(<LibraryPage />);
+    // The dev-mock session (no Supabase configured in this test env) has
+    // no real accessToken, so this never calls the real backend — it
+    // shows the same "no videos yet" state a genuinely empty account
+    // would, which is the honest outcome either way (see the page's own
+    // comment). settings-tiktok.test.tsx/library.test.tsx cover the real,
+    // backend-connected states with a mocked session + mocked API.
+    render(
+      <SessionProvider>
+        <LibraryPage />
+      </SessionProvider>,
+    );
     expect(screen.getByRole("heading", { level: 1, name: "Library" })).toBeInTheDocument();
     expect(screen.getByText(/no videos yet/i)).toBeInTheDocument();
   });

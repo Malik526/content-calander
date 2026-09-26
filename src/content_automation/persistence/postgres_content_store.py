@@ -340,6 +340,13 @@ class PostgresContentStore:
         values = [*fields.values(), video_id]
         self._conn.execute(f"UPDATE videos SET {columns} WHERE id = %s", values)
 
+    def list_videos_for_user(self, user_id: int) -> list[VideoRecord]:
+        """See ContentStore.list_videos_for_user — identical contract."""
+        rows = self._conn.execute(
+            "SELECT * FROM videos WHERE user_id = %s ORDER BY created_at DESC, id DESC", (user_id,)
+        ).fetchall()
+        return [_row_to_video(row) for row in rows]
+
     # -- content_slots -------------------------------------------------------
 
     def insert_slot_if_missing(

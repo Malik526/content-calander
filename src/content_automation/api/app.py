@@ -1,11 +1,12 @@
 """
-app.py — the FastAPI application (Milestone 3.6).
+app.py — the FastAPI application (Milestone 3.6, extended Milestone 3.7).
 
 What it does:
-  Wires together only what this milestone actually needs: /api/me and the
-  TikTok connection flow (/api/platforms/tiktok/*). No generic CRUD, no
-  batch-upload/scheduling/queue endpoints — those are explicitly future
-  milestones' scope (see AGENTS.md "Scope Guardrails").
+  Wires together only what's been built so far: /api/me, the TikTok
+  connection flow (/api/platforms/tiktok/*), and batch video upload +
+  Library listing (/api/videos — Milestone 3.7). No scheduling/publishing/
+  queue endpoints yet — still future milestones' scope (see AGENTS.md
+  "Scope Guardrails").
 
   CORS is an explicit allowlist (config.API_CORS_ALLOWED_ORIGINS), never
   "*" — this API verifies identity on every protected route, and a
@@ -21,7 +22,7 @@ import re
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from content_automation.api.routes import me, platforms_tiktok
+from content_automation.api.routes import me, platforms_tiktok, videos
 from content_automation.config import API_CORS_ALLOWED_ORIGINS, SUPABASE_AUTH_JWKS_URL, SUPABASE_AUTH_JWT_MODE, SUPABASE_URL
 
 # Milestone 3.6 security review: uvicorn's own access logger ("uvicorn.access",
@@ -93,6 +94,7 @@ app.add_middleware(
 
 app.include_router(me.router, prefix="/api")
 app.include_router(platforms_tiktok.router, prefix="/api")
+app.include_router(videos.router, prefix="/api")
 
 
 @app.get("/api/health")
