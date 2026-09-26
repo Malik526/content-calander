@@ -3,7 +3,8 @@ media_storage.py — the domain-level bridge between a video's DB row and the
 object-storage backend that may hold its canonical media (Milestone 3.4).
 
 What it does:
-  Two operations:
+  Three operations (a fourth, delete_video, added Milestone 3.7
+  follow-up — see its own docstring below):
 
     upload_canonical_media(store, storage, video_id, user_id)
       Uploads the video's current canonical_media_path (a real local file
@@ -100,6 +101,20 @@ class MediaNotUploadedError(Exception):
     migrated and has no legacy local file either."""
 
 
+class VideoHasScheduleReferencesError(Exception):
+    """Raised by delete_video when video_id is still assigned to a
+    content_slot (assigned_slot_id) or has at least one platform_posts row
+    (any platform, any status — pending, published, or failed). Milestone
+    3.7 follow-up's own instruction: fail safely rather than cascading the
+    delete into scheduling/publishing state, and tell the caller to
+    remove/cancel those entries first. Never reveals which slot/post
+    specifically — the caller already owns this video, so no cross-tenant
+    information is at stake here, but the message stays generic anyway to
+    match this module's existing error-message convention."""
+
+    reason_code = "HAS_SCHEDULE_REFERENCES"
+
+
 class DuplicateVideoContentError(Exception):
     """Raised by create_video_from_upload when file_hash already belongs to
     a *different* user (or a legacy/unowned row) — videos.file_hash is
@@ -125,7 +140,7 @@ def build_storage_key(user_id: int, video_id: int, suffix: str) -> str:
     return f"users/{user_id}/videos/{video_id}/source{suffix}"
 
 
-def _get_owned_video(store: ContentStore, video_id: int, user_id: int) -> VideoRecord:
+def _get_owned_video(store: ContentStore | ContentStoreProtocol, video_id: int, user_id: int) -> VideoRecord:
     video = store.get_video(video_id)
     if video is None:
         raise MediaOwnershipError(f"No video with id={video_id}.")
@@ -213,6 +228,52 @@ def create_video_from_upload(
     storage.put(key, local_path)
     store.update_video(video.id, storage_provider=storage.provider_name, storage_key=key, file_size_bytes=file_size_bytes)
     return store.get_video(video.id)
+
+
+def delete_video(store: ContentStoreProtocol, storage: StorageProtocol, video_id: int, user_id: int) -> None:
+    """Delete an owned video (Milestone 3.7 follow-up — Delete Video, the
+    Library's authenticated delete action). Raises MediaOwnershipError if
+    video_id does not belong to user_id (also raised, deliberately, if
+    video_id does not exist at all — see _get_owned_video; the caller-
+    facing distinction between "not yours" and "doesn't exist" is not
+    worth making, matching this module's existing cross-tenant-silence
+    convention). Raises VideoHasScheduleReferencesError, without touching
+    anything, if the video is still assigned to a content_slot or has any
+    platform_posts row — see that error's own docstring; this is a fail-
+    safe refusal, never a cascading delete into scheduling/publishing
+    state.
+
+    When safe to delete:
+      - the stored object is removed via `storage` (StorageProtocol.delete
+        is idempotent, so a video that was never actually uploaded to that
+        backend — storage_key is NULL, e.g. a legacy local-only video from
+        before Milestone 3.4 — has nothing to delete and this step is
+        skipped entirely; canonical_media_path itself is never touched,
+        matching ADR-0009's "Retention" decision to keep the local
+        ingestion pipeline's files indefinitely and out of scope here).
+      - the owned videos row is removed (store.delete_video), which also
+        nulls out (never deletes) any upload_attempts row that pointed at
+        it — see ContentStore.delete_video's own docstring for why that
+        preserves historical upload-performance telemetry rather than
+        erasing it.
+
+    Deleting a video frees its file_hash: create_video_from_upload's
+    duplicate-content check only ever sees rows that still exist, so the
+    exact same file can be uploaded again afterward and is treated as
+    brand new, not a duplicate."""
+    video = _get_owned_video(store, video_id, user_id)
+    if video.assigned_slot_id is not None:
+        raise VideoHasScheduleReferencesError(
+            f"video {video_id} is still assigned to a scheduled slot; unassign or cancel it first."
+        )
+    if store.list_platform_posts_for_video(video_id):
+        raise VideoHasScheduleReferencesError(
+            f"video {video_id} has a platform post; remove or cancel it first."
+        )
+
+    if video.storage_key:
+        storage.delete(video.storage_key)
+    store.delete_video(video_id)
 
 
 @contextmanager

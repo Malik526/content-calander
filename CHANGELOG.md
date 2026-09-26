@@ -2,6 +2,42 @@
 
 ## 2026-09-26
 
+### Milestone 3.7 — Delete Video
+
+Added the Library's first destructive action: `DELETE /api/videos/{id}`, backed by a new
+`media.media_storage.delete_video(store, storage, video_id, user_id)` domain function (both
+persistence backends implement the two new `ContentStoreProtocol` methods it needs —
+`list_platform_posts_for_video`/`delete_video`). Ownership is checked first (404 either way for
+"not yours" and "doesn't exist" — same cross-tenant silence convention as every other route).
+Before touching anything, refuses (409, safe message) if the video is still assigned to a
+content_slot or has any `platform_posts` row (any platform, any status) — "fail safely, tell the
+caller to cancel/remove those entries first" rather than cascading the delete into
+scheduling/publishing state; no queue/calendar editing was added to make that possible in this
+pass. When safe: deletes the stored object via the same `StorageProtocol` the upload path uses
+(skipped entirely for a legacy local-only video with no `storage_key` — its local file, per
+ADR-0009's "Retention", stays untouched and out of scope), then deletes the `videos` row.
+`upload_attempts.video_id` is nulled out (not deleted) for any attempt that pointed at the deleted
+video, preserving that row's success/failure/timing telemetry for analytics while dropping the now-
+dangling reference; `upload_batches` is untouched (never about a single video). Deleting a video
+frees its `file_hash`, so the exact same file can be re-uploaded afterward and is treated as brand
+new — verified directly in a new test (`test_delete_video_frees_the_file_hash_for_re_upload` /
+`test_deleting_a_video_lets_the_exact_same_file_be_uploaded_again`).
+
+`web/app/app/library/page.tsx` gained a per-row Delete action with an inline two-click confirm
+(no modal primitive exists yet, and this was scoped as a small delete action, not a new UI
+primitive) — `lib/api/videos.ts`'s new `deleteVideo()`, and `lib/api/client.ts`'s `apiRequest` now
+resolves to `undefined` for a `204 No Content` response instead of trying (and failing) to parse
+an empty body as JSON. A 409 refusal from the backend surfaces as plain text on the page, exactly
+as the backend phrased it, and the video stays in the list since nothing was actually deleted.
+
+No queue/calendar editing UI was added — that remains explicitly out of scope for this pass; a
+video with a schedule/queue reference can currently only be un-blocked from the backend/CLI side.
+
+Verification: backend 803 passed (`.venv/bin/python3 -m pytest`, `DATABASE_URL` unset locally to
+skip the two Postgres-only additions from running against a real database in that mode — they also
+ran and passed for real against `POSTGRES_TEST_SCHEMA` in this environment), frontend 92 passed
+(`npm run test`), `npm run lint` and `npm run build` both clean.
+
 ### Milestone 3.7 — Data Quality + Upload Instrumentation Follow-up
 
 Triggered by the first real hosted uploads and a direct DB inspection, which found rows with

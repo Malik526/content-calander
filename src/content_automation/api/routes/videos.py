@@ -41,6 +41,13 @@ What it does:
   Never accepts a user_id from the caller — exactly like every other
   protected route (see api/dependencies/auth.py).
 
+  DELETE /api/videos/{video_id} — the Library's delete action (Milestone
+  3.7 follow-up). All of the actual safety logic (ownership,
+  queue/schedule-reference refusal, storage-object cleanup, DB row
+  removal) lives in media.media_storage.delete_video; this route only
+  maps its two failure modes to HTTP status codes. Deleting a video frees
+  its file_hash, so the exact same file can be uploaded again afterward.
+
   Deliberately does NOT run media.inspection.inspect_media (ffprobe) or
   any transcription/classification/scheduling here — this milestone's own
   scope guardrail ("upload success must remain independent of
@@ -98,7 +105,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import Response
 
 from content_automation.api.dependencies.auth import get_current_user, get_store
 from content_automation.api.dependencies.storage import get_storage
@@ -261,3 +269,34 @@ def list_videos(
 ) -> VideoListResponse:
     videos = store.list_videos_for_user(user.id)
     return VideoListResponse(videos=[_to_video_response(v) for v in videos])
+
+
+@router.delete("/videos/{video_id}", status_code=204)
+def delete_video(
+    video_id: int,
+    user: UserRecord = Depends(get_current_user),
+    store: ContentStoreProtocol = Depends(get_store),
+    storage: StorageProtocol = Depends(get_storage),
+) -> Response:
+    """The Library's authenticated delete action (Milestone 3.7
+    follow-up). Ownership and queue/schedule-reference safety live in
+    media.media_storage.delete_video — this route only translates its
+    outcomes to HTTP:
+
+      - MediaOwnershipError -> 404. Deliberately the same status for "no
+        such video" and "not yours" — never reveals which case applies,
+        matching every other ownership check in this codebase.
+      - VideoHasScheduleReferencesError -> 409 Conflict, with a message
+        safe to show the user directly: it names no other account, video,
+        slot, or post, only "this video" (which the caller already owns
+        and already knows the id of).
+      - success -> 204 No Content, matching delete_platform_credential's
+        own precedent of "nothing to return once the thing is gone."
+    """
+    try:
+        media_storage.delete_video(store, storage, video_id, user.id)
+    except media_storage.MediaOwnershipError:
+        raise HTTPException(status_code=404, detail="No video with that id.")
+    except media_storage.VideoHasScheduleReferencesError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return Response(status_code=204)

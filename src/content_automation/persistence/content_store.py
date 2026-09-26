@@ -1061,6 +1061,19 @@ class ContentStore:
         ).fetchone()
         return _row_to_platform_post(row) if row else None
 
+    def list_platform_posts_for_video(self, video_id: int) -> list[PlatformPostRecord]:
+        """Every platform_posts row for video_id, regardless of platform or
+        status (Milestone 3.7 follow-up — delete_video's queue/schedule-
+        reference check). A non-empty result means this video has a
+        publishing record — pending, in flight, published, or failed — so
+        media.media_storage.delete_video refuses to delete it; deleting a
+        video out from under a real or historical publish attempt would
+        silently orphan that record's video_id."""
+        rows = self._conn.execute(
+            "SELECT * FROM platform_posts WHERE video_id = ? ORDER BY id ASC", (video_id,)
+        ).fetchall()
+        return [_row_to_platform_post(row) for row in rows]
+
     def insert_platform_post(
         self, video_id: int, platform: str, created_at: str, scheduled_at: str | None = None,
         user_id: int | None = None,
@@ -1619,6 +1632,30 @@ class ContentStore:
             "SELECT * FROM upload_attempts WHERE batch_id = ? ORDER BY id ASC", (batch_id,)
         ).fetchall()
         return [_row_to_upload_attempt(row) for row in rows]
+
+    def delete_video(self, video_id: int) -> None:
+        """Delete a videos row (Milestone 3.7 follow-up — Delete Video).
+        Callers (media.media_storage.delete_video) are responsible for the
+        actual safety checks (ownership, no assigned_slot_id, no
+        platform_posts row) and for deleting the backing storage object
+        first — this method only does the DB half, and does it
+        unconditionally.
+
+        upload_attempts.video_id is nullable specifically for this case
+        (see SCHEMA_UPLOAD_ATTEMPTS's own comment): each attempt row that
+        created/touched this video has its video_id cleared rather than
+        being deleted, so the batch's per-file timing/success/failure
+        telemetry survives for analytics — "preserve unrelated historical
+        telemetry" per the brief this shipped under — while never leaving
+        a dangling FK to a video that no longer exists. upload_batches is
+        untouched: a batch is never about a single video.
+
+        content_slots/platform_posts are not touched here — the caller
+        must already have verified neither references this video before
+        calling this method at all, so there is nothing to null out."""
+        with self.transaction() as conn:
+            conn.execute("UPDATE upload_attempts SET video_id = NULL WHERE video_id = ?", (video_id,))
+            conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
 
 
 class SlotUnavailableError(Exception):

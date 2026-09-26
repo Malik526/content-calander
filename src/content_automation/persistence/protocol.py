@@ -73,7 +73,15 @@ class ContentStoreProtocol(Protocol):
 
     def get_platform_post(self, video_id: int, platform: str) -> PlatformPostRecord | None: ...
 
+    def list_platform_posts_for_video(self, video_id: int) -> list[PlatformPostRecord]: ...
+
     def update_platform_post(self, post_id: int, updated_at: str, **fields) -> None: ...
+
+    # -- Milestone 3.7 follow-up (Delete Video) — media/media_storage.py's
+    # delete_video consumes this through the Protocol like every other
+    # method below Milestone 3.6's.
+
+    def delete_video(self, video_id: int) -> None: ...
 
     # -- Milestone 3.6 (real authentication + hosted TikTok connection) —
     # the methods api/ and cli/link_bootstrap_user.py consume through this

@@ -104,6 +104,20 @@ describe("apiRequest", () => {
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
   });
 
+  it("resolves to undefined for a 204 No Content response without trying to parse a body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 204,
+        json: async () => {
+          throw new SyntaxError("Unexpected end of JSON input"); // a real fetch Response would throw here too
+        },
+      })) as unknown as typeof fetch,
+    );
+    await expect(apiRequest("/api/videos/1", { method: "DELETE" })).resolves.toBeUndefined();
+  });
+
   it("normalizes a malformed successful response into MALFORMED_RESPONSE", async () => {
     vi.stubGlobal(
       "fetch",

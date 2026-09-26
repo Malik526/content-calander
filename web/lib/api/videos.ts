@@ -28,3 +28,15 @@ export function uploadVideos(accessToken: string | null, files: FileList | File[
     accessToken,
   });
 }
+
+/**
+ * Deletes one of the caller's own videos (Milestone 3.7 follow-up — the
+ * Library's delete action). Resolves to nothing on success (the backend
+ * returns 204 No Content — see lib/api/client.ts's own handling of that
+ * status). Rejects with an ApiError the caller should show directly:
+ * 404 if the video does not exist or isn't the caller's own, 409 if it's
+ * still assigned to a schedule/queue entry (see api/routes/videos.py).
+ */
+export function deleteVideo(accessToken: string | null, videoId: number): Promise<void> {
+  return apiRequest<void>(`/api/videos/${videoId}`, { method: "DELETE", accessToken });
+}

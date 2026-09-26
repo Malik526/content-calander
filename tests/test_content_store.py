@@ -1036,3 +1036,44 @@ def test_videos_fk_repair_preserves_platform_posts_fk(tmp_path):
         record = store.get_platform_post(1, "tiktok")
         assert record is not None
         assert record.status == "PENDING"
+
+
+# ---------------------------------------------------------------------------
+# list_platform_posts_for_video / delete_video (Milestone 3.7 follow-up —
+# Delete Video)
+# ---------------------------------------------------------------------------
+
+def test_list_platform_posts_for_video_returns_empty_list_when_none_exist(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    assert store.list_platform_posts_for_video(video.id) == []
+
+
+def test_list_platform_posts_for_video_returns_every_platform(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+    store.insert_platform_post(video.id, "tiktok", created_at="2026-02-01T00:00:00")
+    store.insert_platform_post(video.id, "instagram", created_at="2026-02-01T00:00:00")
+
+    posts = store.list_platform_posts_for_video(video.id)
+    assert {p.platform for p in posts} == {"tiktok", "instagram"}
+
+
+def test_delete_video_removes_the_row(store):
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
+
+    store.delete_video(video.id)
+
+    assert store.get_video(video.id) is None
+
+
+def test_delete_video_nulls_out_but_keeps_upload_attempts(store):
+    user = store.create_user("a@example.com", "A", "2026-01-01T00:00:00")
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00", user_id=user.id)
+    batch = store.create_upload_batch(user.id, started_at="2026-01-01T00:00:00", file_count=1)
+    attempt = store.create_upload_attempt(batch.id, user.id, "v.mp4", started_at="2026-01-01T00:00:00")
+    store.update_upload_attempt(attempt.id, status="SUCCESS", video_id=video.id)
+
+    store.delete_video(video.id)
+
+    [remaining] = store.get_upload_attempts_for_batch(batch.id)
+    assert remaining.id == attempt.id
+    assert remaining.video_id is None

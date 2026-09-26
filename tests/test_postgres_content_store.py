@@ -130,6 +130,39 @@ def test_upload_batch_and_attempt_persistence_is_isolated_per_tenant(store):
     assert store.get_upload_attempts_for_batch(batch_b.id) == []
 
 
+def test_list_platform_posts_for_video_against_real_postgres(store):
+    """Milestone 3.7 follow-up — Delete Video's queue/schedule-reference
+    check, against real Postgres."""
+    user = _user(store)
+    video = _video(store, user)
+    assert store.list_platform_posts_for_video(video.id) == []
+
+    store.insert_platform_post(video.id, "tiktok", NOW.isoformat(), user_id=user.id)
+
+    posts = store.list_platform_posts_for_video(video.id)
+    assert len(posts) == 1
+    assert posts[0].platform == "tiktok"
+
+
+def test_delete_video_removes_the_row_and_nulls_out_upload_attempts(store):
+    """Milestone 3.7 follow-up — Delete Video, against real Postgres:
+    the DB half (media.media_storage.delete_video's safety checks are
+    exercised in tests/test_media_storage.py's backend-agnostic suite,
+    not re-proven here)."""
+    user = _user(store)
+    video = _video(store, user)
+    batch = store.create_upload_batch(user.id, started_at=NOW.isoformat(), file_count=1)
+    attempt = store.create_upload_attempt(batch.id, user.id, "v.mp4", started_at=NOW.isoformat())
+    store.update_upload_attempt(attempt.id, status="SUCCESS", video_id=video.id)
+
+    store.delete_video(video.id)
+
+    assert store.get_video(video.id) is None
+    [remaining] = store.get_upload_attempts_for_batch(batch.id)
+    assert remaining.id == attempt.id
+    assert remaining.video_id is None
+
+
 def test_timestamps_round_trip_as_aware_utc_strings(store):
     user = _user(store)
     fetched = store.get_user(user.id)

@@ -498,6 +498,13 @@ class PostgresContentStore:
         ).fetchone()
         return _row_to_platform_post(row) if row else None
 
+    def list_platform_posts_for_video(self, video_id: int) -> list[PlatformPostRecord]:
+        """See ContentStore.list_platform_posts_for_video — identical contract."""
+        rows = self._conn.execute(
+            "SELECT * FROM platform_posts WHERE video_id = %s ORDER BY id ASC", (video_id,)
+        ).fetchall()
+        return [_row_to_platform_post(row) for row in rows]
+
     def insert_platform_post(
         self, video_id: int, platform: str, created_at: str, user_id: int, scheduled_at: str | None = None,
     ) -> PlatformPostRecord:
@@ -576,3 +583,12 @@ class PostgresContentStore:
             f"UPDATE platform_posts SET {columns} WHERE id = %s AND updated_at = %s AND user_id = %s", values
         )
         return cur.rowcount > 0
+
+    # -- videos (delete) -----------------------------------------------------
+
+    def delete_video(self, video_id: int) -> None:
+        """See ContentStore.delete_video — identical contract (null out
+        upload_attempts.video_id, then delete the videos row)."""
+        with self._conn.transaction():
+            self._conn.execute("UPDATE upload_attempts SET video_id = NULL WHERE video_id = %s", (video_id,))
+            self._conn.execute("DELETE FROM videos WHERE id = %s", (video_id,))

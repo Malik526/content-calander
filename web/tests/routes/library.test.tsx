@@ -29,6 +29,7 @@ vi.mock("@/lib/session", () => ({ useSession: () => mockSession }));
 const videosApi = vi.hoisted(() => ({
   listVideos: vi.fn(),
   uploadVideos: vi.fn(),
+  deleteVideo: vi.fn(),
 }));
 vi.mock("@/lib/api/videos", () => videosApi);
 
@@ -189,5 +190,63 @@ describe("LibraryPage", () => {
     // proven here by the freshly-remounted page's own listVideos() call
     // reflecting it.
     await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
+  });
+
+  describe("Delete Video (Milestone 3.7 follow-up)", () => {
+    function withOneVideo() {
+      videosApi.listVideos.mockResolvedValue({
+        videos: [{ id: 7, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 10, created_at: "2026-09-01T00:00:00Z" }],
+      });
+    }
+
+    it("asks for confirmation before deleting, and does nothing on Cancel", async () => {
+      withOneVideo();
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+      expect(screen.getByRole("button", { name: "Confirm delete" })).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("button", { name: "Confirm delete" })).not.toBeInTheDocument();
+      expect(videosApi.deleteVideo).not.toHaveBeenCalled();
+      expect(screen.getByText("clip.mp4")).toBeInTheDocument(); // untouched
+    });
+
+    it("deletes the video on confirm and refreshes the list", async () => {
+      withOneVideo();
+      videosApi.deleteVideo.mockResolvedValue(undefined);
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
+
+      videosApi.listVideos.mockResolvedValue({ videos: [] }); // reflects the deletion once re-fetched
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+      await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+      expect(videosApi.deleteVideo).toHaveBeenCalledWith("real-token", 7);
+      await waitFor(() => expect(screen.getByText(/no videos yet/i)).toBeInTheDocument());
+    });
+
+    it("shows the backend's refusal message and keeps the video when it has a schedule reference", async () => {
+      const { ApiError } = await import("@/lib/api/client");
+      withOneVideo();
+      videosApi.deleteVideo.mockRejectedValue(
+        new ApiError("video 7 has a platform post; remove or cancel it first.", { status: 409 }),
+      );
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+      await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+      await waitFor(() =>
+        expect(screen.getByText("video 7 has a platform post; remove or cancel it first.")).toBeInTheDocument(),
+      );
+      expect(screen.getByText("clip.mp4")).toBeInTheDocument(); // not removed — the delete never happened
+    });
   });
 });

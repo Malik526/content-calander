@@ -1,8 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listVideos, uploadVideos } from "@/lib/api/videos";
+import { deleteVideo, listVideos, uploadVideos } from "@/lib/api/videos";
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response;
+}
+
+function noContentResponse() {
+  return {
+    ok: true,
+    status: 204,
+    json: async () => {
+      throw new SyntaxError("no body");
+    },
+  } as unknown as Response;
 }
 
 function fetchMockReturning(body: unknown) {
@@ -60,5 +70,22 @@ describe("lib/api/videos.ts", () => {
 
     const [, init = {}] = fetchMock.mock.calls[0];
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer real-token");
+  });
+
+  it("deleteVideo DELETEs /api/videos/{id} with the access token attached", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => noContentResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await deleteVideo("token", 42);
+
+    const [url, init = {}] = fetchMock.mock.calls[0];
+    expect(url).toContain("/api/videos/42");
+    expect(init.method).toBe("DELETE");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer token");
+  });
+
+  it("deleteVideo resolves cleanly on the backend's 204 response", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => noContentResponse()));
+    await expect(deleteVideo("token", 42)).resolves.toBeUndefined();
   });
 });

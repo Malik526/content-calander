@@ -319,3 +319,81 @@ def test_upload_telemetry_is_isolated_per_tenant(client, users, db_path):
         assert batches_a[0].id != batches_b[0].id
         assert all(a.user_id == user_a.id for a in store.get_upload_attempts_for_batch(batches_a[0].id))
         assert all(a.user_id == user_b.id for a in store.get_upload_attempts_for_batch(batches_b[0].id))
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/videos/{video_id} (Milestone 3.7 follow-up — Delete Video)
+# ---------------------------------------------------------------------------
+
+def test_delete_requires_authentication(client, users):
+    user_a, _ = users
+    _act_as(user_a)
+    video_id = client.post("/api/videos", files=[("files", _mp4("clip.mp4"))]).json()["results"][0]["video"]["id"]
+
+    app_module.app.dependency_overrides.pop(auth_deps.get_current_user, None)
+    response = client.delete(f"/api/videos/{video_id}")
+    assert response.status_code == 401
+
+
+def test_delete_removes_the_video_and_its_stored_object(client, users, tmp_path):
+    user_a, _ = users
+    _act_as(user_a)
+    upload = client.post("/api/videos", files=[("files", _mp4("clip.mp4", b"delete me"))])
+    video_id = upload.json()["results"][0]["video"]["id"]
+    stored_files = list((tmp_path / "objects" / "users" / str(user_a.id)).rglob("source*"))
+    assert len(stored_files) == 1
+
+    response = client.delete(f"/api/videos/{video_id}")
+
+    assert response.status_code == 204
+    assert client.get("/api/videos").json()["videos"] == []
+    assert list((tmp_path / "objects" / "users" / str(user_a.id)).rglob("source*")) == []
+
+
+def test_delete_rejects_a_nonexistent_video(client, users):
+    user_a, _ = users
+    _act_as(user_a)
+    response = client.delete("/api/videos/999999")
+    assert response.status_code == 404
+
+
+def test_delete_rejects_another_users_video_without_leaking_its_existence(client, users):
+    user_a, user_b = users
+    _act_as(user_a)
+    video_id = client.post("/api/videos", files=[("files", _mp4("clip.mp4"))]).json()["results"][0]["video"]["id"]
+
+    _act_as(user_b)
+    response = client.delete(f"/api/videos/{video_id}")
+    assert response.status_code == 404  # same status as "no such video" — see route docstring
+
+    _act_as(user_a)
+    assert len(client.get("/api/videos").json()["videos"]) == 1  # untouched
+
+
+def test_delete_refuses_a_video_with_a_platform_post_and_leaves_it_intact(client, users, db_path):
+    user_a, _ = users
+    _act_as(user_a)
+    video_id = client.post("/api/videos", files=[("files", _mp4("clip.mp4"))]).json()["results"][0]["video"]["id"]
+    with ContentStore(db_path=db_path) as store:
+        store.insert_platform_post(video_id, "tiktok", datetime.now(timezone.utc).isoformat(), user_id=user_a.id)
+
+    response = client.delete(f"/api/videos/{video_id}")
+
+    assert response.status_code == 409
+    assert len(client.get("/api/videos").json()["videos"]) == 1  # not deleted
+
+
+def test_deleting_a_video_lets_the_exact_same_file_be_uploaded_again(client, users):
+    user_a, _ = users
+    _act_as(user_a)
+    content = b"identical bytes for re-upload"
+    first = client.post("/api/videos", files=[("files", _mp4("clip.mp4", content))])
+    video_id = first.json()["results"][0]["video"]["id"]
+
+    assert client.delete(f"/api/videos/{video_id}").status_code == 204
+
+    second = client.post("/api/videos", files=[("files", _mp4("clip-again.mp4", content))])
+    result = second.json()["results"][0]
+    assert result["success"] is True  # not rejected as a duplicate — the original row is gone
+    assert result["video"]["id"] != video_id
+    assert len(client.get("/api/videos").json()["videos"]) == 1

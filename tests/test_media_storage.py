@@ -258,3 +258,142 @@ def test_create_video_from_upload_never_touches_the_original_upload_path(store, 
     )
 
     assert upload_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# delete_video (Milestone 3.7 follow-up — Delete Video)
+# ---------------------------------------------------------------------------
+
+def _hosted_video(store, storage, tmp_path, user_id, *, name="clip", content=b"upload bytes"):
+    from content_automation.media.inspection import file_hash
+
+    upload_path = _upload_tmp_file(tmp_path, name=name, content=content)
+    return media_storage.create_video_from_upload(
+        store, storage, user_id, local_path=upload_path, original_filename=f"{name}.mp4",
+        file_hash=file_hash(upload_path), file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+
+
+def test_delete_video_removes_the_row_and_the_stored_object(store, storage, tmp_path):
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    video = _hosted_video(store, storage, tmp_path, user.id)
+    assert storage.exists(video.storage_key)
+
+    media_storage.delete_video(store, storage, video.id, user.id)
+
+    assert store.get_video(video.id) is None
+    assert not storage.exists(video.storage_key)
+
+
+def test_delete_video_rejects_wrong_user(store, storage, tmp_path):
+    user_a = store.create_user("a@example.com", "A", NOW.isoformat())
+    user_b = store.create_user("b@example.com", "B", NOW.isoformat())
+    video = _hosted_video(store, storage, tmp_path, user_a.id)
+
+    with pytest.raises(media_storage.MediaOwnershipError):
+        media_storage.delete_video(store, storage, video.id, user_b.id)
+
+    assert store.get_video(video.id) is not None  # untouched
+
+
+def test_delete_video_rejects_a_nonexistent_video(store, storage):
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+
+    with pytest.raises(media_storage.MediaOwnershipError):
+        media_storage.delete_video(store, storage, 999999, user.id)
+
+
+def test_delete_video_refuses_when_assigned_to_a_slot(store, storage, tmp_path):
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    video = _hosted_video(store, storage, tmp_path, user.id)
+    store.insert_slot_if_missing("2026-09-30T12:00:00", "pillar", "prompt", NOW.isoformat(), user_id=user.id)
+    slot = store.find_earliest_open_slot_fifo(NOW.isoformat(), user_id=user.id)
+    store.assign_slot(video.id, slot.id)
+
+    with pytest.raises(media_storage.VideoHasScheduleReferencesError):
+        media_storage.delete_video(store, storage, video.id, user.id)
+
+    assert store.get_video(video.id) is not None  # untouched, and still stored
+    assert storage.exists(video.storage_key)
+
+
+def test_delete_video_refuses_when_a_platform_post_exists(store, storage, tmp_path):
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    video = _hosted_video(store, storage, tmp_path, user.id)
+    store.insert_platform_post(video.id, "tiktok", NOW.isoformat(), user_id=user.id)
+
+    with pytest.raises(media_storage.VideoHasScheduleReferencesError):
+        media_storage.delete_video(store, storage, video.id, user.id)
+
+    assert store.get_video(video.id) is not None
+
+
+def test_delete_video_never_touches_a_legacy_local_video_with_no_storage_key(store, tmp_path):
+    """A video that only ever went through the local CLI pipeline
+    (canonical_media_path set, storage_provider/storage_key NULL) has
+    nothing StorageProtocol knows how to delete — deleting it must not
+    call storage.delete at all, let alone touch the local file (see
+    ADR-0009 "Retention"). Uses a storage stub that raises if ever
+    called, to prove that path is genuinely skipped, not just
+    coincidentally successful."""
+
+    class _ExplodingStorage:
+        provider_name = "local"
+
+        def delete(self, key):
+            raise AssertionError(f"storage.delete should never be called for a legacy video (key={key!r})")
+
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    video, video_path = _video_with_local_media(store, tmp_path, user.id)
+
+    media_storage.delete_video(store, _ExplodingStorage(), video.id, user.id)
+
+    assert store.get_video(video.id) is None
+    assert video_path.exists()  # local file itself is out of scope — never deleted
+
+
+def test_delete_video_nulls_out_upload_attempt_video_id_but_keeps_the_attempt_row(store, storage, tmp_path):
+    """upload_attempts is per-file telemetry, not per-video state — see
+    ContentStore.delete_video's docstring. Deleting the video must not
+    erase the historical record that this attempt happened, succeeded,
+    and took however long it took; it only clears the now-dangling
+    video_id reference."""
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    video = _hosted_video(store, storage, tmp_path, user.id)
+    batch = store.create_upload_batch(user.id, started_at=NOW.isoformat(), file_count=1)
+    attempt = store.create_upload_attempt(batch.id, user.id, "clip.mp4", started_at=NOW.isoformat())
+    store.update_upload_attempt(attempt.id, status="SUCCESS", video_id=video.id, completed_at=NOW.isoformat())
+
+    media_storage.delete_video(store, storage, video.id, user.id)
+
+    [remaining] = store.get_upload_attempts_for_batch(batch.id)
+    assert remaining.id == attempt.id
+    assert remaining.status == "SUCCESS"  # historical outcome preserved
+    assert remaining.video_id is None  # no longer dangling
+
+
+def test_delete_video_frees_the_file_hash_for_re_upload(store, storage, tmp_path):
+    """The exact scenario the brief asks to validate directly: delete a
+    video, then upload the exact same bytes again — it must succeed as a
+    brand-new video, not be rejected as a duplicate of a row that no
+    longer exists."""
+    from content_automation.media.inspection import file_hash
+
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    upload_path = _upload_tmp_file(tmp_path, content=b"identical bytes")
+    h = file_hash(upload_path)
+
+    first = media_storage.create_video_from_upload(
+        store, storage, user.id, local_path=upload_path, original_filename="clip.mp4",
+        file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+    media_storage.delete_video(store, storage, first.id, user.id)
+
+    second = media_storage.create_video_from_upload(
+        store, storage, user.id, local_path=upload_path, original_filename="clip.mp4",
+        file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+
+    assert second.id != first.id  # a genuinely new row, not the (deleted) original
+    assert store.get_video(second.id) is not None
+    assert storage.exists(second.storage_key)

@@ -304,3 +304,87 @@ persistence only — no API/UI surface for telemetry, since nothing asked for on
 Milestone 3.7 remains **IN PROGRESS** — this follow-up's own instrumentation and corrected
 metadata are not yet validated against a real hosted upload themselves; that is exactly what the
 steps above are for.
+
+## Addendum (2026-09-26) — Delete Video
+
+Added the Library's first destructive action.
+
+**Queue/schedule-reference check:** `media.media_storage.delete_video(store, storage, video_id,
+user_id)` refuses (raises `VideoHasScheduleReferencesError`) without touching anything if the
+video is still assigned to a `content_slot` (`videos.assigned_slot_id IS NOT NULL`) or has any
+`platform_posts` row for any platform, in any status — pending, published, or failed. This is a
+deliberate over-inclusion: even a *published* `platform_posts` row blocks deletion, on the
+reasoning that erasing the video record behind a real publish history is exactly the kind of
+silent-cascade the brief said to avoid, and no milestone-3.7-scoped UI exists yet to let a user
+resolve that state (unassign a slot, remove a post) — that remains a backend/CLI-side-only fix
+for now, explicitly deferred rather than built here.
+
+**When safe to delete:** the stored object is removed via the same `StorageProtocol` instance the
+upload path itself uses (`storage.delete(video.storage_key)`), then the `videos` row is deleted.
+A legacy local-only video (pre-3.4, `storage_provider`/`storage_key` both `NULL`) has nothing for
+`StorageProtocol` to delete — that step is skipped entirely, and `canonical_media_path`/the local
+file on disk are never touched, matching ADR-0009's "Retention" decision. Proven directly with a
+storage stub that raises if `delete()` is ever called for such a video
+(`test_delete_video_never_touches_a_legacy_local_video_with_no_storage_key`).
+
+**`canonical_media_path` / two-columns concern:** not applicable here — no new column was added;
+this reuses the existing `storage_key`/`storage_provider`/`canonical_media_path` shape exactly as
+the prior addendum settled it.
+
+**Upload telemetry cleanup:** `upload_attempts.video_id` (nullable specifically for this) is set
+to `NULL` for every attempt that pointed at the deleted video — the row itself (filename, size,
+duration, status, error_code) is kept, not deleted, so historical upload-performance telemetry
+survives for analytics exactly as the original instrumentation brief asked. `upload_batches` is
+untouched — a batch is never about a single video. No `content_slots`/`platform_posts` cleanup is
+needed here since the check above already guarantees neither references the video before deletion
+proceeds.
+
+**Re-upload validated directly:** `test_delete_video_frees_the_file_hash_for_re_upload` (unit) and
+`test_deleting_a_video_lets_the_exact_same_file_be_uploaded_again` (through the real API) both
+delete a video, then re-upload the exact same bytes, and assert success with a brand-new video id
+— `create_video_from_upload`'s duplicate-content check only ever sees rows that still exist.
+
+**API:** `DELETE /api/videos/{video_id}` — 204 on success, 404 for "no such video" *or* "not
+yours" (never distinguished, matching every other ownership check in this codebase), 409 with a
+message safe to show directly (names no other account/video/slot/post) when the schedule/queue
+check above refuses.
+
+**Frontend:** `web/app/app/library/page.tsx` — a Delete button per row, an inline two-click
+confirm ("Delete" → "Confirm delete" / "Cancel", no modal primitive), calling the new
+`lib/api/videos.ts#deleteVideo()`. On success, re-fetches the list from the backend (same
+"always reflect real server state" reasoning as the upload-finished refresh added in the prior
+addendum) rather than optimistically removing the row locally. A 409 refusal renders as plain text
+above the list and the video stays put. `lib/api/client.ts#apiRequest` now resolves to `undefined`
+for a `204 No Content` response — previously every response was assumed to have a JSON body, and
+calling `.json()` on an empty 204 body throws.
+
+**Tests:** backend 803 passed (783 baseline + 20 net new — 8 in `test_media_storage.py`, 6 in
+`test_api_videos.py`, 4 in `test_content_store.py`, 2 in `test_postgres_content_store.py`). The two
+Postgres additions were not merely collected-and-skipped in this environment: `DATABASE_URL` is
+loaded from this repo's own `.env` regardless of the shell's `env -u DATABASE_URL`
+(`python-dotenv` reads the file directly), so they ran for real against `POSTGRES_TEST_SCHEMA` (a
+disposable schema, truncated per test — never `POSTGRES_SCHEMA`/"public") and passed, incidentally
+validating the Postgres-backend `delete_video`/`list_platform_posts_for_video` implementations
+against a real database in the same run. Frontend 92 passed (92 baseline + 6 new — 1 in
+`tests/lib/client.test.ts`, 2 in `tests/lib/videos.test.ts`, 3 in `tests/routes/library.test.tsx`),
+lint clean, build clean. Zero existing tests weakened.
+
+**Files changed:** `src/content_automation/persistence/{content_store,postgres_content_store,protocol}.py`,
+`src/content_automation/media/media_storage.py`, `src/content_automation/api/routes/videos.py`,
+`tests/test_media_storage.py`, `tests/test_api_videos.py`, `tests/test_content_store.py`,
+`tests/test_postgres_content_store.py`, `web/lib/api/client.ts`, `web/lib/api/videos.ts`,
+`web/app/app/library/page.tsx`, `web/tests/lib/client.test.ts`, `web/tests/lib/videos.test.ts`,
+`web/tests/routes/library.test.tsx`.
+
+**Remains intentionally deferred:** full queue/calendar editing (so a 409-blocked video can be
+un-blocked from the UI), any bulk-delete action, any "are you sure" beyond the inline two-click
+confirm, and an actual retention/auto-expiry policy (this is a manual, one-at-a-time user action
+only).
+
+**Live validation for the next real batch:** upload a real video, delete it from the Library UI,
+confirm (a) the row disappears and a second listing call still shows it gone, (b) the object is
+actually gone from the real Supabase bucket (not just that the app returned 204), and (c) the
+exact same file can be selected and uploaded again successfully afterward. Separately, exercise
+the refusal path once real scheduling/publishing exists for a video (assign it to a slot or create
+a `platform_posts` row for it via the existing CLI/publish path) and confirm the Library shows the
+409 message and the video is not removed.

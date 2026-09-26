@@ -108,6 +108,14 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
     throw new ApiError(message, { status: response.status, reasonCode: "HTTP_ERROR" });
   }
 
+  // 204 No Content (e.g. DELETE /api/videos/{id} — Milestone 3.7 follow-up)
+  // has no body to parse at all; calling .json() on it throws even though
+  // the request genuinely succeeded. There is nothing meaningful to type
+  // as T here — every 204 caller in this codebase ignores the return value.
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   try {
     return (await response.json()) as T;
   } catch {
