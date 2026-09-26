@@ -303,6 +303,9 @@ def _token_response_to_stored(payload: dict) -> dict:
     }
 
 
+_TOKEN_FIELDS = ("access_token", "refresh_token")
+
+
 def _post_token_request(data: dict) -> dict:
     """POST to TikTok's token endpoint and return the parsed JSON payload,
     or raise a structured TikTokAuthError (Milestone 2.1.8: reason_code/
@@ -346,8 +349,17 @@ def _post_token_request(data: dict) -> dict:
         ) from exc
 
     if response.status_code >= 400 or "error" in payload:
+        # Milestone 3.6 security review: redact any token-shaped field
+        # before it enters this exception's message. In every real case
+        # this branch's payload is TikTok's {"error": ..., "error_description":
+        # ...} rejection shape with no token fields at all — but this
+        # message is a plain string that could end up in a future log
+        # statement or traceback, and "never log access_token/refresh_token"
+        # (~/.agents/SECURITY.md) has to hold even for a payload TikTok
+        # itself controls the shape of, not just for our own code paths.
+        safe_payload = {k: ("[redacted]" if k in _TOKEN_FIELDS else v) for k, v in payload.items()}
         raise TikTokAuthError(
-            f"TikTok token endpoint error (HTTP {response.status_code}): {payload!r}",
+            f"TikTok token endpoint error (HTTP {response.status_code}): {safe_payload!r}",
             reason_code="AUTH_HTTP_ERROR", http_status=response.status_code,
         )
 

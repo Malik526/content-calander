@@ -11,6 +11,10 @@ class TikTokConnectionStatus(BaseModel):
     platform: str = "tiktok"
     connected: bool
     status: str
+    # A human-readable account name/handle, when one is available — never
+    # TikTok's open_id (an opaque per-app identifier, not a real label; see
+    # api/routes/platforms_tiktok.py's Milestone 3.6 security-review note).
+    # Currently always None: no connected scope exposes a display name yet.
     account_label: str | None = None
 
 

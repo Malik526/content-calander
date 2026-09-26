@@ -144,7 +144,12 @@ def test_full_connect_and_callback_flow_activates_the_connection(client, users, 
     body = status_response.json()
     assert body["connected"] is True
     assert body["status"] == "ACTIVE"
-    assert body["account_label"] == "tiktok_open_id_1"
+    # Milestone 3.6 security review: account_label is never the raw TikTok
+    # open_id (an opaque internal identifier, not a real label) — it stays
+    # None until a real display name is available. See test below for
+    # proof that per-user open_id association still happens correctly at
+    # the persistence layer, just isn't surfaced through this field.
+    assert body["account_label"] is None
 
 
 def test_callback_never_returns_the_access_or_refresh_token(client, users, monkeypatch):
@@ -383,7 +388,7 @@ def test_callback_binds_to_the_user_who_initiated_connect_regardless_of_who_hits
 # tenant isolation (Phase 21)
 # ---------------------------------------------------------------------------
 
-def test_two_users_have_completely_independent_connections(client, users, monkeypatch):
+def test_two_users_have_completely_independent_connections(client, users, db_path, monkeypatch):
     user_a, user_b = users
     monkeypatch.setattr(tiktok_auth, "TIKTOK_CLIENT_KEY", "fake_key")
     monkeypatch.setattr(tiktok_auth, "TIKTOK_CLIENT_SECRET", "fake_secret")
@@ -405,8 +410,19 @@ def test_two_users_have_completely_independent_connections(client, users, monkey
     _act_as(user_b)
     b_status = client.get("/api/platforms/tiktok/status").json()
 
-    assert a_status["account_label"] == "open_id_a"
-    assert b_status["account_label"] == "open_id_b"
+    assert a_status["connected"] is True
+    assert b_status["connected"] is True
+
+    # account_label is deliberately never the raw open_id (see the security
+    # review above this test file's other account_label assertions), so
+    # isolation of *which TikTok account* each user is bound to is proven
+    # directly at the persistence layer instead — each user's own
+    # external_account_id must be theirs, not the other user's.
+    with ContentStore(db_path=db_path) as store:
+        connection_a = store.get_platform_connection(user_a.id, "tiktok")
+        connection_b = store.get_platform_connection(user_b.id, "tiktok")
+    assert connection_a.external_account_id == "open_id_a"
+    assert connection_b.external_account_id == "open_id_b"
 
 
 def test_disconnecting_one_user_never_affects_the_other(client, users, monkeypatch):

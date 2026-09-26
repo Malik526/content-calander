@@ -87,9 +87,15 @@ def get_tiktok_status(
         # hosted credential was ever saved for it — not connected from the
         # hosted product's point of view, even though the row says ACTIVE.
         return TikTokConnectionStatus(connected=False, status="DISCONNECTED")
-    return TikTokConnectionStatus(
-        connected=True, status=connection.status, account_label=connection.external_account_id,
-    )
+    # account_label is deliberately not connection.external_account_id:
+    # that field holds TikTok's open_id, an opaque per-app platform
+    # identifier with no user-recognizable meaning (not a handle/username,
+    # not something the current OAuth scope even exposes) — see Milestone
+    # 3.6 security review. It stays in persistence (needed for account
+    # association) but is never a real "label," so it's not surfaced here.
+    # account_label remains None until a real display name/username is
+    # available through an approved additional TikTok scope.
+    return TikTokConnectionStatus(connected=True, status=connection.status)
 
 
 @router.post("/platforms/tiktok/connect", response_model=TikTokConnectStartResponse)
@@ -157,4 +163,4 @@ def disconnect_tiktok(
     now = datetime.now(timezone.utc).isoformat()
     store.delete_platform_credential(connection.id)
     store.update_platform_connection_status(connection.id, "DISCONNECTED", now)
-    return TikTokConnectionStatus(connected=False, status="DISCONNECTED", account_label=connection.external_account_id)
+    return TikTokConnectionStatus(connected=False, status="DISCONNECTED")

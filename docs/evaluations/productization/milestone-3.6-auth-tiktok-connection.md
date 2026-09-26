@@ -391,7 +391,10 @@ made, no real deployment updated with real secrets.
 **Settings UI**
 - Disconnected: real empty/inert state, "Connect" action enabled.
 - Connecting: client-side transient state while the connect request is in flight.
-- Connected: real account label shown, "Disconnect" action enabled.
+- Connected: real account label shown, "Disconnect" action enabled. **2026-09-25 forward note:** at the
+  time this was written, the "account label" shown was TikTok's raw `open_id` — a security review found
+  that value opaque/not user-meaningful and stopped populating `account_label` with it (see `CHANGELOG.md`
+  2026-09-25); `account_label` is now `None` until a real display name is available via an approved scope.
 - Error: both load-failure (retryable `ErrorState`) and action-failure (inline message) implemented; no
   distinct "reauthorization required" state yet (see Deferred).
 - Disconnect: real, calls the backend, updates state on success.
@@ -399,7 +402,8 @@ made, no real deployment updated with real secrets.
 **Tenant isolation**
 - Status reads: proven independent per user.
 - Credential writes: proven independent per user (two users, two real connect→callback cycles, distinct
-  `account_label`s).
+  `account_label`s — see the 2026-09-25 forward note above: this same isolation is now proven against
+  `external_account_id` at the persistence layer instead, since `account_label` no longer carries it).
 - Callback binding: proven attribution follows the state's own bound user, not whichever session is
   "current" when the callback fires.
 - Disconnect: proven scoped to the caller's own connection only.
