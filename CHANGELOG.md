@@ -1,5 +1,19 @@
 # Content Automation — Changelog
 
+## 2026-09-26
+
+### Milestone 3.6 — Real Authentication + TikTok Account Connection — COMPLETE
+
+Closed the one gap the 2026-09-21 addendum and the 2026-09-25 security review both left open: a real TikTok OAuth connect→callback cycle completing end to end against the live deployed stack (Railway backend, Netlify frontend). The interactive Google sign-in and TikTok authorization steps require a real browser session with real account credentials — outside what this agent can perform itself — so the user ran the live walkthrough directly and confirmed: authenticated `GET /api/platforms/tiktok/status` → `200`; `POST /api/platforms/tiktok/disconnect` → `200`; reconnect (`POST /api/platforms/tiktok/connect`) started successfully; the real TikTok redirect to `GET /api/platforms/tiktok/callback` → `302`; Railway's captured logs for that callback show `code`/`state` redacted (confirming the 2026-09-25 `api/app.py` log filter is active in the real deployed process, not just under test); and the post-callback status check → `200` again. This also exercises `oauth_states`/`platform_credentials` against real Postgres for the first time, closing that item from the milestone's own Deferred list.
+
+Before this confirmation, this session independently verified the deployed stack's non-interactive surface directly from this environment (no credentials involved): `GET /api/health` → `200`; a CORS preflight from the real frontend origin (`https://picklebatch.netlify.app`) returns a matching `access-control-allow-origin`; `/api/me` and `/api/platforms/tiktok/status` both reject an unauthenticated request with a clean `401` and no leaked detail; a callback hit with no `code`/`state` redirects safely (`302` → `/app/settings?tiktok=invalid_state`) rather than erroring. A direct read-only query against the live production Postgres tables, attempted to independently corroborate credential persistence/encryption without ever printing a value, was blocked by this environment's own production-access safeguard and not pursued further — the credential-persistence/disconnect/reconnect result rests on the user's own direct confirmation of the live walkthrough, not this agent's independent inspection of production data.
+
+Regression suite re-run clean immediately before this close-out, with no route/application code changed since the 2026-09-25 security review: backend 759 passed (run with `DATABASE_URL` unset so the ~20 Postgres-integration tests skip rather than touching production); frontend 70 passed, lint clean, build clean.
+
+Updated `AGENTS.md` (Milestone 3.6 and 3.6.1 status lines, "Next up" now points to Milestone 3.7) and `docs/evaluations/productization/milestone-3.6-auth-tiktok-connection.md` (2026-09-26 addendum recording the live result and final COMPLETE verdict) accordingly. No application code changed in this pass — documentation/status close-out only.
+
+Milestone 3.6: **COMPLETE**. Milestone 3.6.1 (production deployment): confirmed live and validated as part of the same result.
+
 ## 2026-09-25
 
 ### Security — Milestone 3.6 Final Security Review: TikTok OAuth Data Exposure
