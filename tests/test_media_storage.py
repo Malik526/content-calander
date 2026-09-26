@@ -160,7 +160,14 @@ def test_create_video_from_upload_creates_an_owned_row_and_stores_bytes(store, s
     assert storage.exists(video.storage_key)
 
 
-def test_create_video_from_upload_is_idempotent_for_the_same_user_and_content(store, storage, tmp_path):
+def test_create_video_from_upload_creates_a_distinct_record_for_the_same_user_re_uploading_identical_content(
+    store, storage, tmp_path,
+):
+    """Milestone 3.7 re-upload-architecture follow-up: a creator
+    intentionally re-uploading the exact same bytes later (new caption,
+    new schedule, new campaign) is a distinct record, not a duplicate to
+    collapse — videos.id is the real identity; file_hash is a reusable
+    fingerprint, no longer a uniqueness constraint."""
     from content_automation.media.inspection import file_hash
 
     user = store.create_user("a@example.com", "A", NOW.isoformat())
@@ -172,14 +179,30 @@ def test_create_video_from_upload_is_idempotent_for_the_same_user_and_content(st
         file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
     )
     second = media_storage.create_video_from_upload(
-        store, storage, user.id, local_path=upload_path, original_filename="clip.mp4",
+        store, storage, user.id, local_path=upload_path, original_filename="clip-retry.mp4",
         file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
     )
 
-    assert second.id == first.id  # no duplicate row created
+    assert second.id != first.id  # two distinct records, not a dedup
+    assert second.file_hash == first.file_hash  # same reusable content fingerprint
+    assert storage.exists(first.storage_key)
+    assert storage.exists(second.storage_key)
+    assert first.storage_key != second.storage_key  # each has its own tenant-scoped key
+
+    # metadata/scheduling fields diverge independently — updating one never
+    # touches the other, even though they share a file_hash.
+    store.update_video(first.id, status="ASSIGNED", caption_text="Iteration 1 caption")
+    store.update_video(second.id, status="DISCOVERED")
+    refreshed_first = store.get_video(first.id)
+    refreshed_second = store.get_video(second.id)
+    assert refreshed_first.status == "ASSIGNED" and refreshed_first.caption_text == "Iteration 1 caption"
+    assert refreshed_second.status == "DISCOVERED" and refreshed_second.caption_text is None
 
 
-def test_create_video_from_upload_rejects_duplicate_content_from_a_different_user(store, storage, tmp_path):
+def test_create_video_from_upload_creates_a_distinct_record_for_a_different_users_identical_content(store, storage, tmp_path):
+    """The cross-tenant mirror of the same-user case above — two different
+    users uploading byte-identical content each get their own record; this
+    is no longer rejected (there is no more DuplicateVideoContentError)."""
     from content_automation.media.inspection import file_hash
 
     user_a = store.create_user("a@example.com", "A", NOW.isoformat())
@@ -187,16 +210,18 @@ def test_create_video_from_upload_rejects_duplicate_content_from_a_different_use
     upload_path = _upload_tmp_file(tmp_path)
     h = file_hash(upload_path)
 
-    media_storage.create_video_from_upload(
+    video_a = media_storage.create_video_from_upload(
         store, storage, user_a.id, local_path=upload_path, original_filename="clip.mp4",
         file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
     )
+    video_b = media_storage.create_video_from_upload(
+        store, storage, user_b.id, local_path=upload_path, original_filename="clip.mp4",
+        file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
 
-    with pytest.raises(media_storage.DuplicateVideoContentError):
-        media_storage.create_video_from_upload(
-            store, storage, user_b.id, local_path=upload_path, original_filename="clip.mp4",
-            file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
-        )
+    assert video_a.id != video_b.id
+    assert video_a.user_id == user_a.id and video_b.user_id == user_b.id  # tenant isolation preserved
+    assert video_a.file_hash == video_b.file_hash == h
 
 
 class _FakeHostedStorage:
@@ -372,11 +397,14 @@ def test_delete_video_nulls_out_upload_attempt_video_id_but_keeps_the_attempt_ro
     assert remaining.video_id is None  # no longer dangling
 
 
-def test_delete_video_frees_the_file_hash_for_re_upload(store, storage, tmp_path):
-    """The exact scenario the brief asks to validate directly: delete a
-    video, then upload the exact same bytes again — it must succeed as a
-    brand-new video, not be rejected as a duplicate of a row that no
-    longer exists."""
+def test_delete_video_then_re_upload_the_same_bytes_produces_a_clean_new_record(store, storage, tmp_path):
+    """Delete-then-reupload works cleanly: the deleted video's own storage
+    object is actually gone, and the fresh upload gets its own storage
+    object under its own (new) video id — re-uploading identical bytes was
+    already unconditionally allowed even without deleting anything first
+    (see the re-upload-architecture tests above); this test's own value is
+    proving delete doesn't leave anything behind that a subsequent upload
+    could collide with or resurrect."""
     from content_automation.media.inspection import file_hash
 
     user = store.create_user("a@example.com", "A", NOW.isoformat())
@@ -387,7 +415,9 @@ def test_delete_video_frees_the_file_hash_for_re_upload(store, storage, tmp_path
         store, storage, user.id, local_path=upload_path, original_filename="clip.mp4",
         file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
     )
+    first_storage_key = first.storage_key
     media_storage.delete_video(store, storage, first.id, user.id)
+    assert not storage.exists(first_storage_key)
 
     second = media_storage.create_video_from_upload(
         store, storage, user.id, local_path=upload_path, original_filename="clip.mp4",

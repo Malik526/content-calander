@@ -1,5 +1,16 @@
 # Milestone 3.7 — Batch Upload UX: Readiness Check + Minimum Implementation
 
+> **Forward-pointing note (2026-09-26):** this doc's body and its first addendum describe
+> `create_video_from_upload` as idempotent per (user, exact content) and raising
+> `DuplicateVideoContentError` for cross-tenant duplicate content — accurate when written,
+> **no longer current**. A later same-day re-upload-architecture change removed both:
+> `file_hash` is no longer a uniqueness constraint, every upload always creates a new
+> `videos` row, and `DuplicateVideoContentError` no longer exists. See ADR-0009's newest
+> addendum, `CHANGELOG.md`'s "Re-upload Architecture" entry, and
+> `docs/evaluations/productization/milestone-3.7-upload-benchmark-snapshot.md` for the
+> full record. Left unedited below per this repo's own "don't rewrite historical
+> evaluation records" convention.
+
 ## Objective
 
 Prepare Pickle Batch for the real-user Batch Upload UX validation: an authenticated user selects

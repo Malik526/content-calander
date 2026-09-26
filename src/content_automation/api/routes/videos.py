@@ -91,10 +91,18 @@ What it does:
   own column — see the module docstring's own "keep stored telemetry
   minimal" framing; a derived ratio is not durable state.
 
+  Re-upload architecture (Milestone 3.7 follow-up): create_video_from_upload
+  no longer treats file_hash as a uniqueness/identity signal at all — every
+  upload creates a brand-new owned videos row, including one whose bytes
+  are byte-identical to an existing row (same user or a different one).
+  videos.id is the real record identity; file_hash stays only as an
+  indexed content fingerprint. There is no more "this exact video has
+  already been uploaded" rejection case for this route to handle.
+
 Dependencies:
-  content_automation.media.media_storage (create_video_from_upload,
-  DuplicateVideoContentError), content_automation.media.inspection
-  (file_hash), content_automation.api.dependencies.auth/storage,
+  content_automation.media.media_storage (create_video_from_upload),
+  content_automation.media.inspection (file_hash),
+  content_automation.api.dependencies.auth/storage,
   content_automation.config (SUPPORTED_VIDEO_EXTENSIONS).
 """
 
@@ -178,15 +186,6 @@ def _process_one_upload(
         return _UploadOutcome(
             result=VideoUploadResult(filename=original_filename, success=True, video=_to_video_response(video)),
             file_size_bytes=file_size_bytes, error_code=None, video_id=video.id,
-        )
-    except media_storage.DuplicateVideoContentError as exc:
-        # Deliberately does not say who owns it or which video it matches —
-        # see DuplicateVideoContentError's own docstring.
-        return _UploadOutcome(
-            result=VideoUploadResult(
-                filename=original_filename, success=False, error="This exact video has already been uploaded.",
-            ),
-            file_size_bytes=tmp_path.stat().st_size, error_code=exc.reason_code, video_id=None,
         )
     except Exception as exc:  # noqa: BLE001 — see module docstring: one file's failure must never
         # abort the batch, so every exception this file's processing could

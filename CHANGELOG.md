@@ -2,6 +2,55 @@
 
 ## 2026-09-26
 
+### Milestone 3.7 — Re-upload Architecture + Controlled Evaluation Snapshot
+
+**`videos.file_hash` is no longer globally unique.** `videos.id` is a record's real
+identity; `file_hash` is a reusable content fingerprint, not a uniqueness constraint — a
+creator intentionally re-uploading the exact same bytes later (new caption, new
+schedule, new campaign, fresh performance history) now gets a distinct video record
+every time, same user or a different one, instead of being silently handed back the
+original row or rejected outright. Dropped the old `UNIQUE(file_hash)` constraint on
+both backends, replacing it with a plain index so hash-based lookups/future duplicate-
+detection queries stay fast: SQLite via a new structural migration
+(`persistence/content_store.py`'s `_migrate_videos_drop_file_hash_uniqueness`, the same
+rebuild shape as this codebase's other in-place-unalterable-constraint migrations, run
+automatically the first time an existing database is opened), Postgres via
+`postgres_migrations/0005_drop_videos_file_hash_uniqueness.sql`. Removed
+`DuplicateVideoContentError` entirely — `create_video_from_upload` no longer looks
+`file_hash` up before inserting; every upload always creates a new row. Also fixed a
+related correctness issue this change exposed: SQLite's `insert_video` re-resolved its
+own just-inserted row by `file_hash` rather than by `id` — with duplicate hashes now
+possible, that could return a *different* pre-existing row instead of the one just
+created; it now looks itself up by `id`. Local CLI ingestion
+(`media/processing.py`) is unaffected — it only ever looks a hash up to resume
+processing a physically-rediscovered file, which stays correct by construction
+regardless of the schema-level constraint. Full record, including one narrower pre-
+existing edge case this slightly widens (local/hosted cross-tenant hash collisions) and
+explicitly does not fix, in ADR-0009's new 2026-09-26 addendum.
+
+Added a small, temporary evaluation workflow — `docs/evaluations/productization/milestone-3.7-upload-benchmark-snapshot.md`
+— to capture and compare real hosted-upload performance/behavior before and after this
+change, for the three real videos already uploaded through the deployed product. A
+documented, copy-pasteable read-only SQL workflow, not a script or a new evaluation
+skill/agent (this repository's own "don't over-automate a one-off" judgment — see that
+doc's own "Why no script/skill" section). The actual Iteration 1 baseline capture is
+**not yet done**: this agent session cannot read the real hosted Postgres database
+directly (the sandbox's own auto-mode classifier denies direct production reads,
+confirmed again in this session) — real values still need to be captured by running the
+documented queries against the real database and recorded in that doc before the
+existing three test videos are deleted.
+
+Tests: backend 808 passed (803 baseline + 5 net new — `test_content_store.py` gained 4
+covering duplicate-hash insertion, independent divergence of duplicate-hash rows, the
+SQLite migration itself, and a fresh-database no-op guard; `test_postgres_content_store.py`
+gained 1 proving the same against real Postgres — the Postgres migration genuinely
+applied and was exercised for real in this environment, not merely collected-and-skipped,
+per the same `DATABASE_URL`-via-`.env` behavior noted in the prior follow-up entry below).
+`tests/test_media_storage.py` and `tests/test_api_videos.py` had their now-superseded
+idempotent-reupload/duplicate-rejection tests replaced with tests proving the new
+distinct-record behavior instead (net test count in those two files unchanged — see the
+evaluation doc for the exact list). No frontend changes in this pass.
+
 ### Milestone 3.7 — Delete Video
 
 Added the Library's first destructive action: `DELETE /api/videos/{id}`, backed by a new

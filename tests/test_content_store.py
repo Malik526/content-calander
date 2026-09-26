@@ -56,6 +56,102 @@ def test_update_video_persists_fields(store):
     assert updated.video_codec == "hevc"
 
 
+# ---------------------------------------------------------------------------
+# file_hash is a content fingerprint, not a uniqueness constraint
+# (Milestone 3.7 re-upload-architecture follow-up)
+# ---------------------------------------------------------------------------
+
+def test_insert_video_allows_the_same_file_hash_twice(store):
+    """videos.id is the real record identity; file_hash is a reusable
+    content fingerprint a creator may legitimately re-upload under —
+    inserting a second row with the same hash must succeed, not raise
+    sqlite3.IntegrityError."""
+    first = store.insert_video("dup-hash", "a.mp4", "/incoming/a.mp4", "2026-01-01T00:00:00")
+    second = store.insert_video("dup-hash", "b.mp4", "/incoming/b.mp4", "2026-01-02T00:00:00")
+
+    assert first.id != second.id
+    assert first.file_hash == second.file_hash == "dup-hash"
+
+
+def test_duplicate_file_hash_rows_diverge_independently(store):
+    """Two rows sharing a file_hash are otherwise completely independent —
+    updating one's metadata/scheduling fields never touches the other's."""
+    first = store.insert_video("dup-hash", "a.mp4", "/incoming/a.mp4", "2026-01-01T00:00:00")
+    second = store.insert_video("dup-hash", "b.mp4", "/incoming/b.mp4", "2026-01-02T00:00:00")
+
+    store.update_video(first.id, status="ASSIGNED", caption_text="first caption")
+    store.update_video(second.id, status="FAILED", failure_reason="TRANSCRIPTION_FAILED")
+
+    refreshed_first = store.get_video(first.id)
+    refreshed_second = store.get_video(second.id)
+    assert refreshed_first.status == "ASSIGNED" and refreshed_first.caption_text == "first caption"
+    assert refreshed_second.status == "FAILED" and refreshed_second.failure_reason == "TRANSCRIPTION_FAILED"
+    assert refreshed_second.caption_text is None
+
+
+def test_opening_a_database_with_the_old_unique_file_hash_constraint_drops_it(tmp_path):
+    """A database created before this migration has file_hash UNIQUE at
+    the schema level (every database created before Milestone 3.7's
+    re-upload-architecture follow-up). Opening ContentStore must rebuild
+    videos without that constraint — preserving the existing row — and the
+    constraint must actually be gone afterward, not merely unchecked in
+    this one process."""
+    db_path = tmp_path / "legacy_unique_hash.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_hash TEXT NOT NULL UNIQUE,
+            original_filename TEXT NOT NULL,
+            original_path TEXT NOT NULL,
+            canonical_media_path TEXT,
+            container TEXT,
+            video_codec TEXT,
+            audio_codec TEXT,
+            width INTEGER,
+            height INTEGER,
+            fps REAL,
+            duration_seconds REAL,
+            file_size_bytes INTEGER,
+            transcript TEXT,
+            transcript_language TEXT,
+            transcription_status TEXT,
+            classified_pillar TEXT,
+            classification_confidence REAL,
+            classification_reason TEXT,
+            status TEXT NOT NULL DEFAULT 'DISCOVERED',
+            failure_reason TEXT,
+            assigned_slot_id INTEGER,
+            created_at TEXT NOT NULL,
+            processed_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO videos (file_hash, original_filename, original_path, status, created_at) "
+        "VALUES ('h1', 'v1.mp4', '/incoming/v1.mp4', 'DISCOVERED', '2026-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    with ContentStore(db_path=db_path) as store:
+        preserved = store.get_video_by_hash("h1")
+        assert preserved is not None
+        assert preserved.original_filename == "v1.mp4"
+
+        # the constraint is genuinely gone: a second insert with the same
+        # hash must succeed, not raise sqlite3.IntegrityError.
+        second = store.insert_video("h1", "v2.mp4", "/incoming/v2.mp4", "2026-01-02T00:00:00")
+        assert second.id != preserved.id
+
+
+def test_fresh_database_never_triggers_the_file_hash_migration(tmp_path, capsys):
+    with ContentStore(db_path=tmp_path / "fresh.db"):
+        captured = capsys.readouterr()
+        assert "dropped file_hash" not in captured.err
+
+
 def test_list_videos_for_user_returns_only_that_users_videos_newest_first(store):
     """Milestone 3.7's Library query — tenant isolation is the whole
     point, not an afterthought."""

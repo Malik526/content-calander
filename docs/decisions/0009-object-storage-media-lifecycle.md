@@ -261,3 +261,55 @@ the third. Restated explicitly since it wasn't spelled out until asked: **there 
 canonical hosted-media identifier — `storage_key` (paired with `storage_provider`) — and
 duplicating that concept into `canonical_media_path` for a hosted upload would only invite the two
 to drift.**
+
+## Addendum (2026-09-26, Milestone 3.7 re-upload-architecture follow-up) — `videos.file_hash` is no longer globally unique
+
+`videos.file_hash` was globally `UNIQUE` from this table's very first schema (predates this ADR).
+That constraint conflated two different things: `videos.id` is a record's real identity;
+`file_hash` is a content fingerprint. For local CLI ingestion (`media/processing.py`) that
+distinction never mattered in practice — the pipeline only ever looks a hash up to *resume*
+processing a physically-rediscovered file (crash recovery / restart-safety), so at-most-one-row-
+per-hash was always true there by construction, uniqueness or not. For the hosted upload path
+(`media.media_storage.create_video_from_upload`, Milestone 3.7) it did matter: the constraint meant
+a creator intentionally re-uploading the exact same finished video later — a new caption, a new
+schedule, a new campaign, a fresh performance history — either got silently handed back their
+*original* row (same-user case) or was rejected outright with `DuplicateVideoContentError`
+(different-user case), neither of which is correct: both are legitimate new records, not
+duplicates to collapse or reject.
+
+Dropped the constraint (`persistence/content_store.py`'s `_migrate_videos_drop_file_hash_uniqueness`
+for SQLite — a structural rebuild, the same shape as this codebase's other "SQLite can't ALTER a
+constraint in place" migrations; `postgres_migrations/0005_drop_videos_file_hash_uniqueness.sql`
+for Postgres), replacing it with a plain index (hash-based lookups/future duplicate-detection
+queries stay fast; nothing about `get_video_by_hash` needing to be fast changes). Removed
+`DuplicateVideoContentError` entirely along with it — `create_video_from_upload` no longer looks
+`file_hash` up before inserting at all; every upload call always creates a new row. This is a
+genuine, deliberate behavior change from Milestone 3.7's original "idempotent per (user, exact
+content)" design (see this same function's now-superseded prior docstring in git history) — not a
+bug fix to that design, a reversal of it, made on this milestone's own explicit instruction.
+
+**What did not change:** `videos.id` was always the primary key and the value every foreign key
+(`content_slots.assigned_video_id`, `platform_posts.video_id`, `upload_attempts.video_id`) already
+pointed at — nothing about ownership, tenant isolation, or any other table's referential integrity
+depends on `file_hash` being unique, so removing that constraint has no bearing on any of them.
+`get_video_by_hash` itself is unchanged (still `SELECT ... WHERE file_hash = ?`, returns *some*
+match) — every caller that still assumes at-most-one-row-per-hash (`media/processing.py`'s local
+pipeline) continues to satisfy that assumption itself, by construction, exactly as before; nothing
+about this change makes that assumption newly unsafe for that caller. `insert_video` (SQLite) was
+corrected alongside this to look its own just-inserted row up by `id`, never by `file_hash` — with
+duplicate hashes now possible, re-resolving by hash after an insert could return a *different*
+pre-existing row sharing that hash instead of the one just created.
+
+**A narrower, pre-existing edge case this does not newly create, but does slightly widen:** local
+CLI ingestion and hosted upload share the same `videos` table and the same hash function. If two
+different users' hosted uploads now share a hash (newly possible — previously blocked at the
+schema level), and a local CLI run later processes a physically-identical file, `get_video_by_hash`
+will return *some* matching row, not necessarily the CLI-invoking user's own — `media/processing.py`
+already does not check row ownership before mutating it (a documented, accepted limitation of the
+single-operator local pipeline, unrelated to this change). This was already a latent risk under
+per-user duplicate hosted uploads before this change (which the old constraint also didn't prevent
+across the local/hosted boundary in the same way); it is unchanged in kind, only in that cross-
+tenant hash collisions can now persist rather than being rejected at insert time. No fix is made
+here — the local CLI pipeline remains an explicitly single-operator tool, and wiring hosted uploads
+into that pipeline at all is still out of scope (see `AGENTS.md`'s "Scope Guardrails" and this ADR's
+own "Media Processing" section above).

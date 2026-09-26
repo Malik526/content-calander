@@ -135,7 +135,10 @@ def test_upload_rejects_unsupported_file_type_without_touching_the_rest_of_the_b
     assert listing[0]["original_filename"] == "good.mp4"
 
 
-def test_uploading_the_same_bytes_twice_as_the_same_user_is_idempotent_not_an_error(client, users):
+def test_uploading_the_same_bytes_twice_as_the_same_user_creates_two_distinct_videos(client, users):
+    """Milestone 3.7 re-upload-architecture follow-up: a re-upload of
+    byte-identical content is intentional (new caption/schedule/campaign),
+    not a duplicate to collapse — it must succeed as its own new record."""
     user_a, _ = users
     _act_as(user_a)
     content = b"identical bytes"
@@ -145,11 +148,14 @@ def test_uploading_the_same_bytes_twice_as_the_same_user_is_idempotent_not_an_er
 
     assert first.json()["results"][0]["success"] is True
     assert second.json()["results"][0]["success"] is True
-    assert second.json()["results"][0]["video"]["id"] == first.json()["results"][0]["video"]["id"]
-    assert len(client.get("/api/videos").json()["videos"]) == 1  # not duplicated
+    assert second.json()["results"][0]["video"]["id"] != first.json()["results"][0]["video"]["id"]
+    assert len(client.get("/api/videos").json()["videos"]) == 2  # two real, distinct records
 
 
-def test_uploading_another_users_exact_content_fails_cleanly_without_leaking_ownership(client, users):
+def test_uploading_another_users_exact_content_also_succeeds_and_stays_tenant_isolated(client, users):
+    """The cross-tenant mirror of the same-user case above — two different
+    users uploading byte-identical content each get their own record and
+    their own private Library; this is no longer rejected."""
     user_a, user_b = users
     content = b"shared bytes across two different accounts"
 
@@ -160,11 +166,12 @@ def test_uploading_another_users_exact_content_fails_cleanly_without_leaking_own
     response = client.post("/api/videos", files=[("files", _mp4("b.mp4", content))])
 
     result = response.json()["results"][0]
-    assert result["success"] is False
-    assert result["video"] is None
-    assert result["error"] == "This exact video has already been uploaded."  # never names the other account/video
+    assert result["success"] is True
+    assert result["video"] is not None
 
-    assert client.get("/api/videos").json()["videos"] == []  # user_b's own library stays empty
+    assert len(client.get("/api/videos").json()["videos"]) == 1  # user_b's own library, own record
+    _act_as(user_a)
+    assert len(client.get("/api/videos").json()["videos"]) == 1  # user_a's own is untouched
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +290,10 @@ def test_upload_records_failed_attempts_distinctly_from_successful_ones(client, 
         assert batch.status == "COMPLETED"
 
 
-def test_upload_records_duplicate_content_attempts_with_their_own_error_code(client, users, db_path):
+def test_upload_records_a_successful_attempt_for_re_uploaded_content_not_a_duplicate_error(client, users, db_path):
+    """Re-upload architecture follow-up: there is no more DUPLICATE_CONTENT
+    error_code — a re-upload of identical bytes is a normal successful
+    attempt, telemetry included."""
     user_a, user_b = users
     content = b"shared bytes across two different accounts"
 
@@ -295,9 +305,9 @@ def test_upload_records_duplicate_content_attempts_with_their_own_error_code(cli
     with ContentStore(db_path=db_path) as store:
         batch_b = store.list_upload_batches_for_user(user_b.id)[0]
         attempt_b = store.get_upload_attempts_for_batch(batch_b.id)[0]
-        assert attempt_b.status == "FAILED"
-        assert attempt_b.error_code == "DUPLICATE_CONTENT"
-        assert attempt_b.video_id is None
+        assert attempt_b.status == "SUCCESS"
+        assert attempt_b.error_code is None
+        assert attempt_b.video_id is not None
 
 
 def test_upload_telemetry_is_isolated_per_tenant(client, users, db_path):

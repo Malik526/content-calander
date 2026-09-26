@@ -5,7 +5,7 @@ platform_posts.
 What it does:
   Owns the three tables that make the content-processing/publishing
   pipeline restart-safe and idempotent: `videos` (one row per ingested
-  file, keyed by content hash), `content_slots` (one row per calendar
+  file or hosted upload), `content_slots` (one row per calendar
   posting slot, written by generate_calendar.py and consumed by
   process_content.py / slot_matcher.py), and `platform_posts` (one row per
   video-platform publishing attempt, written/read by publish_tiktok.py —
@@ -14,6 +14,20 @@ What it does:
   content_slots is scheduling assignment, platform_posts is external
   publishing state/result — never cram one concern's state into another
   table's columns.
+
+  videos.id (not file_hash) is the real record identity — see Milestone
+  3.7's re-upload-architecture follow-up. file_hash is a content
+  fingerprint (indexed, not unique): local ingestion (media/processing.py)
+  still uses get_video_by_hash to resume/dedup a physically-rediscovered
+  file, which stays correct because that code path only ever inserts at
+  most one row per hash itself; the hosted upload path
+  (media.media_storage.create_video_from_upload) now always inserts a new
+  row per upload, on the reasoning that a creator legitimately re-uploading
+  the exact same bytes later (new caption/schedule/campaign) is a distinct
+  record, not a duplicate to collapse. _videos_file_hash_needs_migration()/
+  _migrate_videos_drop_file_hash_uniqueness() below drop the old global
+  UNIQUE constraint (present in every database created before this
+  change) the first time such a database is opened.
 
   Google Calendar remains the source of truth for what gets posted when;
   content_slots is an internal mirror that lets process_content.py query and
@@ -61,7 +75,7 @@ def _utc_now_iso() -> str:
 SCHEMA_VIDEOS = """
 CREATE TABLE IF NOT EXISTS videos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_hash TEXT NOT NULL UNIQUE,
+    file_hash TEXT NOT NULL,
     original_filename TEXT NOT NULL,
     original_path TEXT NOT NULL,
     canonical_media_path TEXT,
@@ -507,27 +521,32 @@ def _videos_fk_needs_repair(conn: sqlite3.Connection) -> bool:
     return False
 
 
-def _repair_videos_assigned_slot_fk(conn: sqlite3.Connection) -> None:
-    """Repair a videos table whose assigned_slot_id foreign key was left
-    pointing at a stale/nonexistent table name (see
-    _videos_fk_needs_repair). SQLite has no ALTER TABLE ... ALTER COLUMN /
-    DROP CONSTRAINT to fix a REFERENCES clause in place, so this rebuilds
-    videos the same way _migrate_content_slots_unique_constraint rebuilds
-    content_slots: rename, recreate under the current (correct) schema,
-    copy every row across unchanged, drop the renamed original.
-
-    legacy_alter_table=ON is required here for the same reason as that
-    other migration, just mirrored: without it, `ALTER TABLE videos RENAME
-    TO videos_old` would itself rewrite content_slots.assigned_video_id's
-    REFERENCES clause to "videos_old", trading this bug for the same bug on
-    the other table. Verified empirically that legacy_alter_table=ON
-    prevents that rewrite.
-
-    Column list is derived from the freshly (re)created table via PRAGMA
-    table_info rather than hardcoded, so it stays correct as videos gains
-    columns over time (_ensure_videos_columns) without this function
-    needing to track them separately. Runs inside one transaction; verifies
+def _rebuild_videos_table(conn: sqlite3.Connection) -> None:
+    """Shared rebuild body for every "videos needs a structural change
+    SQLite cannot make in place" migration (a stale FK target, or the old
+    global UNIQUE(file_hash) — see the two callers below). Renames videos
+    aside, recreates it fresh under the *current* SCHEMA_VIDEOS (plus
+    _ensure_videos_columns), copies every column of every row across
+    unchanged, drops the renamed original, and verifies
     PRAGMA foreign_key_check is clean afterward as a hard safety check.
+
+    legacy_alter_table=ON is required: without it, `ALTER TABLE videos
+    RENAME TO videos_old` would itself rewrite
+    content_slots.assigned_video_id's REFERENCES clause to "videos_old" —
+    verified empirically that legacy_alter_table=ON prevents that rewrite
+    (see _migrate_content_slots_unique_constraint's own note on the mirror-
+    image version of this same SQLite behavior).
+
+    Column list to copy is the *intersection* of videos_old's actual
+    columns and the freshly (re)created table's columns — not simply every
+    new column — so this tolerates rebuilding a table that predates some
+    newer nullable columns too (e.g. a pre-Milestone-1.2 fixture missing
+    classifier/caption/storage/user_id columns entirely, which would
+    otherwise never trigger this rebuild's FK-repair trigger but can now
+    also trigger the file_hash-uniqueness one below). Any current column
+    absent from videos_old is simply never in the copied column list,
+    leaving it at its default (NULL — every such column is nullable) for
+    every copied row, exactly as if that row had always lacked it.
     """
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("PRAGMA legacy_alter_table = ON")
@@ -535,6 +554,7 @@ def _repair_videos_assigned_slot_fk(conn: sqlite3.Connection) -> None:
         conn.execute("BEGIN IMMEDIATE")
         try:
             conn.execute("ALTER TABLE videos RENAME TO videos_old")
+            old_columns = {row["name"] for row in conn.execute("PRAGMA table_info(videos_old)").fetchall()}
             # NOT executescript() — see the matching note in
             # _migrate_content_slots_unique_constraint: it implicitly
             # COMMITs a pending transaction, which would silently end this
@@ -542,8 +562,8 @@ def _repair_videos_assigned_slot_fk(conn: sqlite3.Connection) -> None:
             conn.execute(SCHEMA_VIDEOS)
             _ensure_videos_columns(conn)
 
-            columns = [row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()]
-            column_list = ", ".join(columns)
+            new_columns = [row["name"] for row in conn.execute("PRAGMA table_info(videos)").fetchall()]
+            column_list = ", ".join(c for c in new_columns if c in old_columns)
             conn.execute(f"INSERT INTO videos ({column_list}) SELECT {column_list} FROM videos_old")
 
             conn.execute("DROP TABLE videos_old")
@@ -558,14 +578,49 @@ def _repair_videos_assigned_slot_fk(conn: sqlite3.Connection) -> None:
     violations = conn.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
         raise RuntimeError(
-            f"content_store: videos.assigned_slot_id repair left "
-            f"{len(violations)} foreign_key_check violation(s): {[dict(v) for v in violations]!r}"
+            f"content_store: videos table rebuild left {len(violations)} "
+            f"foreign_key_check violation(s): {[dict(v) for v in violations]!r}"
         )
 
+
+def _repair_videos_assigned_slot_fk(conn: sqlite3.Connection) -> None:
+    """Repair a videos table whose assigned_slot_id foreign key was left
+    pointing at a stale/nonexistent table name (see _videos_fk_needs_repair)
+    by rebuilding it under the current schema — see _rebuild_videos_table."""
+    _rebuild_videos_table(conn)
     print(
         "[content_store] repaired videos.assigned_slot_id: it referenced a stale table name "
         "left behind by an earlier content_slots rename migration; it now correctly "
         "references content_slots.",
+        file=sys.stderr,
+    )
+
+
+def _videos_file_hash_needs_migration(conn: sqlite3.Connection) -> bool:
+    """True if videos was created under the old schema where file_hash was
+    globally UNIQUE (every database created before Milestone 3.7's
+    re-upload-architecture follow-up). Checked structurally against the
+    stored CREATE TABLE SQL, the same detection style
+    _content_slots_needs_migration already uses."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'videos'"
+    ).fetchone()
+    sql = (row["sql"] or "") if row is not None else ""
+    return "file_hash TEXT NOT NULL UNIQUE" in sql
+
+
+def _migrate_videos_drop_file_hash_uniqueness(conn: sqlite3.Connection) -> None:
+    """Rebuild videos without file_hash's global UNIQUE constraint (see
+    _rebuild_videos_table and this module's own docstring). Every row is
+    copied across completely unchanged — unlike
+    _migrate_content_slots_unique_constraint, the old constraint could only
+    ever produce zero or one row per file_hash, so there is no possible
+    duplicate-row conflict to resolve on the way in."""
+    _rebuild_videos_table(conn)
+    print(
+        "[content_store] migrated videos: dropped file_hash's global UNIQUE constraint "
+        "(re-upload architecture, Milestone 3.7 follow-up) — file_hash is now a plain "
+        "indexed content fingerprint, not a record-identity constraint.",
         file=sys.stderr,
     )
 
@@ -771,6 +826,16 @@ class ContentStore:
         _ensure_videos_columns(self._conn)
         if _videos_fk_needs_repair(self._conn):
             _repair_videos_assigned_slot_fk(self._conn)
+        if _videos_file_hash_needs_migration(self._conn):
+            _migrate_videos_drop_file_hash_uniqueness(self._conn)
+        # Replaces the implicit index SQLite maintained for the old
+        # UNIQUE(file_hash) constraint — file_hash is still looked up
+        # directly (get_video_by_hash) even though it's no longer unique,
+        # so a plain index keeps that lookup (and any future duplicate-
+        # detection/analytics query) fast. Idempotent; also needed by a
+        # brand-new database, which never had the old constraint to
+        # migrate away from in the first place.
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_file_hash ON videos(file_hash)")
         if _content_slots_needs_migration(self._conn):
             _migrate_content_slots_unique_constraint(self._conn)
         self._conn.executescript(SCHEMA_CONTENT_SLOTS)
@@ -818,6 +883,15 @@ class ContentStore:
     # -- videos ---------------------------------------------------------
 
     def get_video_by_hash(self, file_hash: str) -> VideoRecord | None:
+        """Returns *some* row with this file_hash, or None — file_hash is
+        no longer unique (Milestone 3.7 re-upload follow-up), so this is
+        only meaningful where a caller's own insertion discipline
+        guarantees at most one match. That currently holds for local
+        ingestion (media.processing.process_one only ever inserts a row
+        for a given hash once, then reuses it for restart-safety) but not
+        for the hosted upload path (media.media_storage.create_video_from_upload
+        never looks this up at all anymore, and always inserts a new row —
+        see that function's own docstring)."""
         row = self._conn.execute(
             "SELECT * FROM videos WHERE file_hash = ?", (file_hash,)
         ).fetchone()
@@ -860,7 +934,11 @@ class ContentStore:
             """,
             (file_hash, original_filename, original_path, created_at, user_id),
         )
-        return self.get_video_by_hash(file_hash) or _raise_missing(cur.lastrowid)
+        # Milestone 3.7 re-upload follow-up: looked up by the row's own id,
+        # never by file_hash — file_hash is no longer unique, so
+        # get_video_by_hash could return a *different* pre-existing row
+        # sharing the same hash instead of the one just inserted here.
+        return self.get_video(cur.lastrowid) or _raise_missing(cur.lastrowid)
 
     def update_video(self, video_id: int, **fields) -> None:
         if not fields:

@@ -83,6 +83,18 @@ def test_create_user_and_video_roundtrip(store):
     assert store.get_video_by_hash(video.file_hash) == video
 
 
+def test_insert_video_allows_the_same_file_hash_twice_against_real_postgres(store):
+    """Milestone 3.7 re-upload-architecture follow-up, against real
+    Postgres: videos_file_hash_key (the UNIQUE constraint 0001 created)
+    must actually be gone — 0005_drop_videos_file_hash_uniqueness.sql."""
+    user = _user(store)
+    first = _video(store, user, name="a", file_hash="dup-hash")
+    second = _video(store, user, name="b", file_hash="dup-hash")
+
+    assert first.id != second.id
+    assert first.file_hash == second.file_hash == "dup-hash"
+
+
 def test_list_videos_for_user_scopes_strictly_by_user_newest_first(store):
     """Milestone 3.7's Library query, against real Postgres — Postgres's
     videos.user_id is NOT NULL (unlike SQLite's legacy-compat-nullable

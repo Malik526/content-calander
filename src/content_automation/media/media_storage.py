@@ -115,24 +115,6 @@ class VideoHasScheduleReferencesError(Exception):
     reason_code = "HAS_SCHEDULE_REFERENCES"
 
 
-class DuplicateVideoContentError(Exception):
-    """Raised by create_video_from_upload when file_hash already belongs to
-    a *different* user (or a legacy/unowned row) — videos.file_hash is
-    globally UNIQUE (predates Milestone 3.2 ownership; never rescoped to
-    per-user, see docs/decisions/0009-object-storage-media-lifecycle.md's
-    own note on schema changes being out of scope), so this is a real,
-    expected outcome a multi-tenant upload has to handle, not a bug to fix
-    by loosening the constraint. Never reveals which other user/video holds
-    the content — see api/routes/videos.py for the caller-facing message.
-
-    reason_code (Milestone 3.7 follow-up — upload_attempts.error_code)
-    mirrors the same structured-failure-signal shape as
-    publishing/tiktok/auth.py's TikTokAuthError and
-    storage/supabase_storage.py's StorageError."""
-
-    reason_code = "DUPLICATE_CONTENT"
-
-
 def build_storage_key(user_id: int, video_id: int, suffix: str) -> str:
     """users/<user_id>/videos/<video_id>/source<ext> — tenant-scoped,
     deterministic, unique per video, no user-provided filename or secret
@@ -198,27 +180,31 @@ def create_video_from_upload(
     stored and there is an owned DB row for them" (see this milestone's own
     scope guardrail).
 
-    Idempotent per (user, exact content): if file_hash already belongs to
-    this same user, returns the existing row unchanged rather than creating
-    a duplicate — re-uploading the same file (e.g. a retried batch) is not
-    an error. Raises DuplicateVideoContentError if file_hash belongs to a
-    *different* user, or to a legacy/unowned row — videos.file_hash is
-    globally UNIQUE at the schema level (never rescoped to per-user; see
-    that error's own docstring), so this is the one collision a multi-
-    tenant caller must always be ready to handle."""
-    existing = store.get_video_by_hash(file_hash)
-    if existing is not None:
-        if existing.user_id == user_id:
-            return existing
-        raise DuplicateVideoContentError(f"file_hash={file_hash!r} is already associated with a different account.")
-
+    Always creates a new row (Milestone 3.7 re-upload-architecture
+    follow-up) — never looks file_hash up first. videos.id is this
+    record's real identity; file_hash is a reusable content fingerprint,
+    not a uniqueness constraint (the schema-level UNIQUE(file_hash) that
+    used to make this idempotent-by-content, and that a different user's
+    identical upload would collide against, has been dropped — see
+    persistence/content_store.py's _migrate_videos_drop_file_hash_uniqueness
+    and docs/decisions/0009-object-storage-media-lifecycle.md's follow-up
+    addendum). A creator intentionally re-uploading the exact same bytes
+    later — a new caption, a new schedule, a new campaign — gets a distinct
+    video record every time, same as two different users uploading
+    identical content each getting their own. A caller that wants "was
+    this exact content uploaded before" for its own purposes (e.g. warning
+    a user before they re-upload) should query store.get_video_by_hash
+    itself — this function no longer makes that decision on the caller's
+    behalf."""
     # Milestone 3.7 has no local-discovery-directory concept at all for a
-    # hosted upload — original_path only has to be unique-in-practice and
-    # obviously not a real filesystem path (get_video_by_path, used solely
-    # by the local CLI's discover_videos FIFO ordering, must never
-    # accidentally match one of these). No user-provided filename or
-    # secret information embedded, matching build_storage_key's own
-    # convention above.
+    # hosted upload — original_path only has to be obviously not a real
+    # filesystem path (get_video_by_path, used solely by the local CLI's
+    # discover_videos FIFO ordering, must never accidentally match one of
+    # these — repeated re-uploads of the same content sharing this exact
+    # string across multiple rows is harmless, since nothing ever looks
+    # this shape of path up). No user-provided filename or secret
+    # information embedded, matching build_storage_key's own convention
+    # above.
     original_path = f"hosted-upload/{file_hash}"
     video = store.insert_video(
         file_hash=file_hash, original_filename=original_filename, original_path=original_path,
@@ -257,10 +243,11 @@ def delete_video(store: ContentStoreProtocol, storage: StorageProtocol, video_id
         preserves historical upload-performance telemetry rather than
         erasing it.
 
-    Deleting a video frees its file_hash: create_video_from_upload's
-    duplicate-content check only ever sees rows that still exist, so the
-    exact same file can be uploaded again afterward and is treated as
-    brand new, not a duplicate."""
+    Re-uploading the exact same file afterward always works and always
+    creates another brand-new row — create_video_from_upload never checked
+    file_hash for this row's existence in the first place (Milestone 3.7
+    re-upload-architecture follow-up), so deleting it changes nothing about
+    that."""
     video = _get_owned_video(store, video_id, user_id)
     if video.assigned_slot_id is not None:
         raise VideoHasScheduleReferencesError(
