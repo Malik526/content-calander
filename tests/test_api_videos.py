@@ -310,6 +310,36 @@ def test_upload_records_a_successful_attempt_for_re_uploaded_content_not_a_dupli
         assert attempt_b.video_id is not None
 
 
+def test_upload_telemetry_links_each_duplicate_hash_upload_to_its_own_distinct_video(client, users, db_path):
+    """File-hash-architecture requirement: uploading the same bytes twice
+    in one batch must not conflate the two attempts' video_id — each
+    upload_attempts row must point at its own distinct videos row, not
+    both at the same one (or either one at the wrong one)."""
+    user_a, _ = users
+    _act_as(user_a)
+    content = b"duplicate bytes uploaded twice in one batch"
+
+    response = client.post(
+        "/api/videos",
+        files=[("files", _mp4("first.mp4", content)), ("files", _mp4("second.mp4", content))],
+    )
+    results = {r["filename"]: r for r in response.json()["results"]}
+    assert results["first.mp4"]["success"] is True
+    assert results["second.mp4"]["success"] is True
+    first_video_id = results["first.mp4"]["video"]["id"]
+    second_video_id = results["second.mp4"]["video"]["id"]
+    assert first_video_id != second_video_id
+
+    with ContentStore(db_path=db_path) as store:
+        batch = store.list_upload_batches_for_user(user_a.id)[0]
+        attempts = {a.original_filename: a for a in store.get_upload_attempts_for_batch(batch.id)}
+        assert attempts["first.mp4"].video_id == first_video_id
+        assert attempts["second.mp4"].video_id == second_video_id
+        # each attempt's video row genuinely holds this exact content
+        assert store.get_video(attempts["first.mp4"].video_id).file_hash == \
+            store.get_video(attempts["second.mp4"].video_id).file_hash
+
+
 def test_upload_telemetry_is_isolated_per_tenant(client, users, db_path):
     """The batch/attempt tables carry user_id on every row and
     list_upload_batches_for_user is strictly scoped — the same tenant-

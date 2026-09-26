@@ -310,6 +310,35 @@ def test_delete_video_removes_the_row_and_the_stored_object(store, storage, tmp_
     assert not storage.exists(video.storage_key)
 
 
+def test_deleting_one_duplicate_hash_video_leaves_the_other_completely_untouched(store, storage, tmp_path):
+    """File-hash-architecture requirement: two rows sharing a file_hash are
+    independent records — deleting one must never affect the other's DB
+    row or its own stored object."""
+    from content_automation.media.inspection import file_hash
+
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    upload_path = _upload_tmp_file(tmp_path, content=b"shared duplicate bytes")
+    h = file_hash(upload_path)
+
+    first = media_storage.create_video_from_upload(
+        store, storage, user.id, local_path=upload_path, original_filename="first.mp4",
+        file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+    second = media_storage.create_video_from_upload(
+        store, storage, user.id, local_path=upload_path, original_filename="second.mp4",
+        file_hash=h, file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+    )
+
+    media_storage.delete_video(store, storage, first.id, user.id)
+
+    assert store.get_video(first.id) is None
+    assert not storage.exists(first.storage_key)
+    still_there = store.get_video(second.id)
+    assert still_there is not None
+    assert still_there.file_hash == h
+    assert storage.exists(second.storage_key)
+
+
 def test_delete_video_rejects_wrong_user(store, storage, tmp_path):
     user_a = store.create_user("a@example.com", "A", NOW.isoformat())
     user_b = store.create_user("b@example.com", "B", NOW.isoformat())

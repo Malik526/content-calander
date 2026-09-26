@@ -40,12 +40,16 @@ confirmed again in this session) — real values still need to be captured by ru
 documented queries against the real database and recorded in that doc before the
 existing three test videos are deleted.
 
-Tests: backend 808 passed (803 baseline + 5 net new — `test_content_store.py` gained 4
+Tests: backend 810 passed (803 baseline + 7 net new — `test_content_store.py` gained 4
 covering duplicate-hash insertion, independent divergence of duplicate-hash rows, the
 SQLite migration itself, and a fresh-database no-op guard; `test_postgres_content_store.py`
 gained 1 proving the same against real Postgres — the Postgres migration genuinely
 applied and was exercised for real in this environment, not merely collected-and-skipped,
-per the same `DATABASE_URL`-via-`.env` behavior noted in the prior follow-up entry below).
+per the same `DATABASE_URL`-via-`.env` behavior noted in the prior follow-up entry below;
+`test_media_storage.py` gained 1 proving deleting one duplicate-hash video leaves the
+other's row and storage object completely untouched; `test_api_videos.py` gained 1
+proving upload telemetry links each of two duplicate-hash uploads in the same batch to
+its own distinct `video_id`, never conflating the two).
 `tests/test_media_storage.py` and `tests/test_api_videos.py` had their now-superseded
 idempotent-reupload/duplicate-rejection tests replaced with tests proving the new
 distinct-record behavior instead (net test count in those two files unchanged — see the
