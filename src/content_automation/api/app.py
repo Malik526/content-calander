@@ -1,12 +1,14 @@
 """
-app.py — the FastAPI application (Milestone 3.6, extended Milestone 3.7).
+app.py — the FastAPI application (Milestone 3.6, extended Milestone 3.7,
+3.8).
 
 What it does:
   Wires together only what's been built so far: /api/me, the TikTok
-  connection flow (/api/platforms/tiktok/*), and batch video upload +
-  Library listing (/api/videos — Milestone 3.7). No scheduling/publishing/
-  queue endpoints yet — still future milestones' scope (see AGENTS.md
-  "Scope Guardrails").
+  connection flow (/api/platforms/tiktok/*), batch video upload + Library
+  listing (/api/videos — Milestone 3.7), and hosted posting-cadence
+  configuration + future slot generation (/api/cadence — Milestone 3.8).
+  No queue/calendar editing, publishing, or assignment endpoints yet —
+  still future milestones' scope (see AGENTS.md "Scope Guardrails").
 
   CORS is an explicit allowlist (config.API_CORS_ALLOWED_ORIGINS), never
   "*" — this API verifies identity on every protected route, and a
@@ -22,7 +24,7 @@ import re
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from content_automation.api.routes import me, platforms_tiktok, videos
+from content_automation.api.routes import cadence, me, platforms_tiktok, videos
 from content_automation.config import (
     API_CORS_ALLOWED_ORIGINS,
     STORAGE_BACKEND,
@@ -101,13 +103,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=API_CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(me.router, prefix="/api")
 app.include_router(platforms_tiktok.router, prefix="/api")
 app.include_router(videos.router, prefix="/api")
+app.include_router(cadence.router, prefix="/api")
 
 
 @app.get("/api/health")

@@ -15,19 +15,51 @@ def store(tmp_path):
 
 
 def test_insert_slot_if_missing_is_idempotent(store):
-    """Re-running generate_calendar.py for the same month must not duplicate slots."""
+    """Re-running generate_calendar.py for the same month must not duplicate
+    slots. Scoped to a real user_id (matching real generate_calendar.py,
+    which always resolves the bootstrap user first) rather than the
+    unscoped/legacy default — Milestone 3.8 widened content_slots'
+    uniqueness to (user_id, scheduled_at), and SQL NULL is never equal to
+    itself, so two unscoped (user_id=None) calls are no longer a
+    meaningful idempotency test of this codepath; see
+    test_unscoped_insert_slot_if_missing_is_no_longer_idempotent below for
+    that now-deliberately-different behavior documented on its own."""
+    user = store.create_user("a@example.com", "A", "2026-01-01T00:00:00")
     created_first = store.insert_slot_if_missing(
-        "2026-09-14T10:00:00", "building", "prompt A", "2026-09-01T00:00:00"
+        "2026-09-14T10:00:00", "building", "prompt A", "2026-09-01T00:00:00", user_id=user.id,
     )
     created_second = store.insert_slot_if_missing(
-        "2026-09-14T10:00:00", "building", "prompt A (regenerated)", "2026-09-02T00:00:00"
+        "2026-09-14T10:00:00", "building", "prompt A (regenerated)", "2026-09-02T00:00:00", user_id=user.id,
     )
 
     assert created_first is True
     assert created_second is False
 
-    slot = store.find_earliest_open_slot("building", "2000-01-01T00:00:00")
+    slot = store.find_earliest_open_slot("building", "2000-01-01T00:00:00", user_id=user.id)
     assert slot.prompt == "prompt A"  # first insert wins; rerun did not overwrite it
+
+
+def test_unscoped_insert_slot_if_missing_is_no_longer_idempotent(store):
+    """Milestone 3.8 (hosted scheduling cadence configuration) widened
+    content_slots' uniqueness from UNIQUE(scheduled_at) to
+    UNIQUE(user_id, scheduled_at) to support real multi-tenant slot
+    generation. A documented, accepted consequence (see
+    persistence.content_store._migrate_content_slots_to_per_user_uniqueness's
+    own docstring): SQL NULL is never equal to itself for uniqueness
+    purposes, so two unscoped (user_id=None) inserts at the same
+    scheduled_at are no longer deduplicated. Real production data has zero
+    NULL-user_id rows (fully backfilled), so this only affects an
+    intentionally-unscoped caller — documented here as current, correct
+    behavior, not a regression to fix."""
+    created_first = store.insert_slot_if_missing(
+        "2026-09-14T10:00:00", "building", "prompt A", "2026-09-01T00:00:00",
+    )
+    created_second = store.insert_slot_if_missing(
+        "2026-09-14T10:00:00", "building", "prompt A (regenerated)", "2026-09-02T00:00:00",
+    )
+
+    assert created_first is True
+    assert created_second is True  # NULL user_id -- no longer deduplicated, by design
 
 
 def test_get_video_by_hash_returns_none_when_absent(store):
@@ -231,11 +263,20 @@ def test_opening_a_database_with_the_old_unique_constraint_migrates_it(tmp_path)
         assert rows[0]["status"] == "ASSIGNED"
         assert rows[1]["pillar_key"] == "mindset"
 
-        # New constraint is now enforced going forward.
+        # New constraint is now enforced going forward, for a real
+        # scoped user — see test_unscoped_insert_slot_if_missing_is_no_
+        # longer_idempotent for why an unscoped (user_id=None) repeat
+        # insert is no longer deduplicated (Milestone 3.8's widened
+        # UNIQUE(user_id, scheduled_at); SQL NULL != NULL).
+        user = store.create_user("a@example.com", "A", "2026-01-01T00:00:00")
         created = store.insert_slot_if_missing(
-            "2026-09-21T09:00:00", "building", "new prompt", "2026-02-01T00:00:00"
+            "2026-09-21T09:00:00", "building", "new prompt", "2026-02-01T00:00:00", user_id=user.id,
         )
-        assert created is False
+        assert created is True  # first insert *for this user* at this timestamp
+        created_again = store.insert_slot_if_missing(
+            "2026-09-21T09:00:00", "building", "new prompt again", "2026-02-01T00:00:00", user_id=user.id,
+        )
+        assert created_again is False  # repeat for the same user is still deduplicated
 
 
 def test_opening_a_database_with_old_upload_batches_total_bytes_migrates_it(tmp_path):

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SchedulingSettings } from "@/components/app/SchedulingSettings";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -167,6 +168,13 @@ export default function SettingsPage() {
               </div>
             </Card>
           )}
+        </section>
+
+        <section aria-labelledby="scheduling-heading">
+          <h2 id="scheduling-heading" className="mb-3 text-sm font-semibold text-ink">
+            Scheduling
+          </h2>
+          <SchedulingSettings accessToken={accessToken} />
         </section>
       </div>
     </>

@@ -49,6 +49,8 @@ from content_automation.config import DATABASE_URL, POSTGRES_SCHEMA
 from content_automation.persistence import postgres_migrate
 from content_automation.persistence.content_store import (
     AuthIdentityRecord,
+    CadenceRecord,
+    CadenceTimeRecord,
     OAuthStateRecord,
     OwnershipMismatchError,
     PlatformConnectionRecord,
@@ -133,6 +135,10 @@ def _row_to_upload_batch(row: dict) -> UploadBatchRecord:
 
 def _row_to_upload_attempt(row: dict) -> UploadAttemptRecord:
     return UploadAttemptRecord(**_normalize_row(row))
+
+
+def _row_to_cadence_time(row: dict) -> CadenceTimeRecord:
+    return CadenceTimeRecord(**_normalize_row(row))
 
 
 def _connect(dsn: str, schema: str) -> psycopg.Connection:
@@ -413,12 +419,18 @@ class PostgresContentStore:
         created_at: str,
         user_id: int,
         google_calendar_event_id: str | None = None,
+        timezone: str | None = None,
+        cadence_id: int | None = None,
     ) -> bool:
-        """user_id is required — see module docstring."""
+        """user_id is required — see module docstring. ON CONFLICT target
+        widened to (user_id, scheduled_at) — Milestone 3.8, see
+        content_store.py's _migrate_content_slots_to_per_user_uniqueness
+        for why the old (scheduled_at) alone constraint had to change."""
         cur = self._conn.execute(
-            "INSERT INTO content_slots (scheduled_at, pillar_key, prompt, status, google_calendar_event_id, created_at, user_id) "
-            "VALUES (%s, %s, %s, 'OPEN', %s, %s, %s) ON CONFLICT (scheduled_at) DO NOTHING",
-            (scheduled_at, pillar_key, prompt, google_calendar_event_id, created_at, user_id),
+            "INSERT INTO content_slots "
+            "(scheduled_at, pillar_key, prompt, status, google_calendar_event_id, created_at, user_id, timezone, cadence_id) "
+            "VALUES (%s, %s, %s, 'OPEN', %s, %s, %s, %s, %s) ON CONFLICT (user_id, scheduled_at) DO NOTHING",
+            (scheduled_at, pillar_key, prompt, google_calendar_event_id, created_at, user_id, timezone, cadence_id),
         )
         return cur.rowcount > 0
 
@@ -489,6 +501,90 @@ class PostgresContentStore:
                 (video_id, slot_id),
             )
             self._conn.execute("UPDATE videos SET assigned_slot_id = %s WHERE id = %s", (slot_id, video_id))
+
+    def list_content_slots_for_user(self, user_id: int, from_iso: str, to_iso: str) -> list[SlotRecord]:
+        """See ContentStore.list_content_slots_for_user — identical
+        contract. No unowned-fallback case exists under Postgres."""
+        rows = self._conn.execute(
+            "SELECT * FROM content_slots WHERE user_id = %s AND scheduled_at >= %s AND scheduled_at < %s "
+            "ORDER BY scheduled_at ASC",
+            (user_id, from_iso, to_iso),
+        ).fetchall()
+        return [_row_to_slot(row) for row in rows]
+
+    # -- posting_cadences (Milestone 3.8) -------------------------------------
+
+    def get_cadence_for_user(self, user_id: int) -> CadenceRecord | None:
+        row = self._conn.execute("SELECT * FROM posting_cadences WHERE user_id = %s", (user_id,)).fetchone()
+        if row is None:
+            return None
+        time_rows = self._conn.execute(
+            "SELECT * FROM posting_cadence_times WHERE cadence_id = %s ORDER BY weekday, posting_time",
+            (row["id"],),
+        ).fetchall()
+        normalized = _normalize_row(row)
+        return CadenceRecord(
+            id=normalized["id"], user_id=normalized["user_id"], timezone=normalized["timezone"],
+            is_active=normalized["is_active"], created_at=normalized["created_at"], updated_at=normalized["updated_at"],
+            posting_times=[_row_to_cadence_time(t) for t in time_rows],
+        )
+
+    def save_cadence_and_regenerate_slots(
+        self,
+        user_id: int,
+        timezone: str,
+        is_active: bool,
+        posting_times: list[tuple[str, str]],
+        generated_slots: list[tuple[str, str]],
+        now_utc_iso: str,
+        now_local_iso: str,
+    ) -> CadenceRecord:
+        """See ContentStore.save_cadence_and_regenerate_slots — identical
+        contract and identical reasoning for the two distinct "now" values
+        (now_utc_iso for created_at/updated_at, now_local_iso as the
+        naive-local reconciliation boundary against scheduled_at). user_id
+        is required, no unowned/legacy carve-out, matching every other
+        write method in this class."""
+        with self._conn.transaction():
+            existing = self._conn.execute(
+                "SELECT id FROM posting_cadences WHERE user_id = %s", (user_id,)
+            ).fetchone()
+            if existing is None:
+                cadence_id = self._conn.execute(
+                    "INSERT INTO posting_cadences (user_id, timezone, is_active, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                    (user_id, timezone, is_active, now_utc_iso, now_utc_iso),
+                ).fetchone()["id"]
+            else:
+                cadence_id = existing["id"]
+                self._conn.execute(
+                    "UPDATE posting_cadences SET timezone = %s, is_active = %s, updated_at = %s WHERE id = %s",
+                    (timezone, is_active, now_utc_iso, cadence_id),
+                )
+
+            self._conn.execute("DELETE FROM posting_cadence_times WHERE cadence_id = %s", (cadence_id,))
+            for weekday, posting_time in posting_times:
+                self._conn.execute(
+                    "INSERT INTO posting_cadence_times (cadence_id, weekday, posting_time) VALUES (%s, %s, %s)",
+                    (cadence_id, weekday, posting_time),
+                )
+
+            self._conn.execute(
+                "DELETE FROM content_slots "
+                "WHERE user_id = %s AND cadence_id = %s AND status = 'OPEN' AND scheduled_at > %s",
+                (user_id, cadence_id, now_local_iso),
+            )
+
+            for scheduled_at, slot_timezone in generated_slots:
+                self._conn.execute(
+                    "INSERT INTO content_slots "
+                    "(scheduled_at, pillar_key, prompt, status, created_at, user_id, timezone, cadence_id) "
+                    "VALUES (%s, NULL, NULL, 'OPEN', %s, %s, %s, %s) "
+                    "ON CONFLICT (user_id, scheduled_at) DO NOTHING",
+                    (scheduled_at, now_utc_iso, user_id, slot_timezone, cadence_id),
+                )
+
+        return self.get_cadence_for_user(user_id)
 
     # -- platform_posts ------------------------------------------------------
 

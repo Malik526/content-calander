@@ -51,20 +51,26 @@ def test_build_event_body_uses_scheduled_at_directly():
 
 
 def test_generate_calendar_persists_content_slots_idempotently(tmp_path):
-    """Re-running generation for the same month must not duplicate content_slots."""
+    """Re-running generation for the same month must not duplicate
+    content_slots. Scoped to a real user_id, matching real
+    generate_calendar.py (always resolves the bootstrap user first) —
+    Milestone 3.8 widened uniqueness to (user_id, scheduled_at), and an
+    unscoped (user_id=None) call is a separate, deliberately different
+    case (see test_content_store.py's own coverage of that)."""
     schedule = build_schedule(2026, 6, start_at=PAST_BOUNDARY)
 
     with ContentStore(db_path=tmp_path / "test.db") as store:
+        user = store.create_user("a@example.com", "A", "2026-01-01T00:00:00")
         created_first_run = sum(
             1 for post in schedule
             if store.insert_slot_if_missing(
-                post.scheduled_at.isoformat(), post.content_type, post.prompt, "2026-06-01T00:00:00",
+                post.scheduled_at.isoformat(), post.content_type, post.prompt, "2026-06-01T00:00:00", user_id=user.id,
             )
         )
         created_second_run = sum(
             1 for post in schedule
             if store.insert_slot_if_missing(
-                post.scheduled_at.isoformat(), post.content_type, post.prompt, "2026-06-02T00:00:00",
+                post.scheduled_at.isoformat(), post.content_type, post.prompt, "2026-06-02T00:00:00", user_id=user.id,
             )
         )
 
@@ -74,18 +80,22 @@ def test_generate_calendar_persists_content_slots_idempotently(tmp_path):
 
 def test_content_slots_unique_on_scheduled_at_even_across_different_pillars(tmp_path):
     """A changed strategy must never create two slots for the same posting
-    datetime, even if it would now assign a different pillar to it."""
+    datetime (for the same user), even if it would now assign a different
+    pillar to it. Scoped to a real user_id — see
+    test_generate_calendar_persists_content_slots_idempotently's own note
+    on why an unscoped call is no longer a meaningful test of this."""
     with ContentStore(db_path=tmp_path / "test.db") as store:
+        user = store.create_user("a@example.com", "A", "2026-01-01T00:00:00")
         created_first = store.insert_slot_if_missing(
-            "2026-09-14T09:00:00", "building", "prompt A", "2026-01-01T00:00:00",
+            "2026-09-14T09:00:00", "building", "prompt A", "2026-01-01T00:00:00", user_id=user.id,
         )
         created_second = store.insert_slot_if_missing(
-            "2026-09-14T09:00:00", "acquisition", "prompt B (different pillar)", "2026-01-02T00:00:00",
+            "2026-09-14T09:00:00", "acquisition", "prompt B (different pillar)", "2026-01-02T00:00:00", user_id=user.id,
         )
 
         assert created_first is True
         assert created_second is False  # existing slot's pillar is never silently overwritten
 
-        slot = store.find_earliest_open_slot("building", "2000-01-01T00:00:00")
+        slot = store.find_earliest_open_slot("building", "2000-01-01T00:00:00", user_id=user.id)
         assert slot is not None
         assert slot.pillar_key == "building"  # original assignment preserved

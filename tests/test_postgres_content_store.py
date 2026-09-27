@@ -521,6 +521,49 @@ def test_end_to_end_crash_recovery_against_real_postgres(store):
     assert store.get_platform_post(video.id, "tiktok").status == "PENDING"
 
 
+def test_save_cadence_and_regenerate_slots_against_real_postgres(store):
+    """Milestone 3.8, exercised for real: the widened
+    UNIQUE(user_id, scheduled_at) constraint (migration 0007) actually
+    allows two different users' identical scheduled_at, cadence upsert is
+    stable across edits, and reconciliation removes stale future OPEN
+    cadence-owned slots while preserving an ASSIGNED one — the same
+    behavior tests/test_api_cadence.py already proves against SQLite,
+    confirmed here against the real Postgres backend and a real applied
+    migration, not just SQLite's rebuild logic."""
+    user_a = _user(store, "a@example.com")
+    user_b = _user(store, "b@example.com")
+
+    cadence_a = store.save_cadence_and_regenerate_slots(
+        user_a.id, "America/New_York", True, [("monday", "09:00")],
+        [("2026-10-05T09:00:00", "America/New_York")],
+        now_utc_iso=NOW_UTC.isoformat(), now_local_iso="2026-10-01T00:00:00",
+    )
+    store.save_cadence_and_regenerate_slots(
+        user_b.id, "America/Los_Angeles", True, [("monday", "09:00")],
+        [("2026-10-05T09:00:00", "America/Los_Angeles")],
+        now_utc_iso=NOW_UTC.isoformat(), now_local_iso="2026-10-01T00:00:00",
+    )
+
+    a_slots = store.list_content_slots_for_user(user_a.id, "2020-01-01T00:00:00", "2100-01-01T00:00:00")
+    b_slots = store.list_content_slots_for_user(user_b.id, "2020-01-01T00:00:00", "2100-01-01T00:00:00")
+    assert len(a_slots) == 1 and len(b_slots) == 1  # no cross-user collision under the widened constraint
+
+    video = store.insert_video("h1", "f.mp4", "hosted-upload/h1", NOW.isoformat(), user_id=user_a.id)
+    store.assign_slot(video.id, a_slots[0].id)
+
+    cadence_a_again = store.save_cadence_and_regenerate_slots(
+        user_a.id, "America/New_York", True, [("friday", "18:00")],
+        [("2026-10-09T18:00:00", "America/New_York")],
+        now_utc_iso=NOW_UTC.isoformat(), now_local_iso="2026-10-01T00:00:00",
+    )
+    assert cadence_a_again.id == cadence_a.id  # stable id across edits
+
+    final_slots = store.list_content_slots_for_user(user_a.id, "2020-01-01T00:00:00", "2100-01-01T00:00:00")
+    statuses = {s.scheduled_at: s.status for s in final_slots}
+    assert statuses.get("2026-10-05T09:00:00") == "ASSIGNED"  # preserved, not reconciled away
+    assert statuses.get("2026-10-09T18:00:00") == "OPEN"  # the new config's slot
+
+
 def test_migrations_are_idempotent_on_reopen():
     """Opening a second PostgresContentStore against an already-migrated
     schema must not fail or re-apply anything — proves apply_migrations()'s

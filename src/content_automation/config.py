@@ -195,6 +195,18 @@ DEFAULT_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 # Timezone string used for all events
 TIMEZONE = os.getenv("CONTENT_CALENDAR_TIMEZONE", "America/New_York")
 
+# Milestone 3.8 (hosted scheduling cadence configuration) — how many days
+# ahead of "now" calendar.hosted_cadence.generate_slot_datetimes() generates
+# content_slots for, per user, each time a cadence is saved. Deliberately a
+# fixed, documented, bounded window (per the milestone's own brief: "a
+# reasonable initial generation horizon... rather than inventing an
+# indefinite calendar") — 4 weeks is long enough for a meaningful upcoming-
+# slots preview and FIFO runway, short enough to never run away into years
+# of rows for a cadence that's never touched again. Unrelated to the CLI/
+# global cadence path above (POSTS_PER_WEEK/POSTING_DAYS/POSTING_TIME),
+# which generates one calendar month at a time instead.
+CADENCE_GENERATION_HORIZON_DAYS = 28
+
 # ---------------------------------------------------------------------------
 # Dedicated app-owned Google Calendar
 # Added: September 2026. Normal operation (no --calendar override) always

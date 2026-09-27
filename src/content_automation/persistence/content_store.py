@@ -107,13 +107,17 @@ CREATE TABLE IF NOT EXISTS videos (
 SCHEMA_CONTENT_SLOTS = """
 CREATE TABLE IF NOT EXISTS content_slots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scheduled_at TEXT NOT NULL UNIQUE,
+    scheduled_at TEXT NOT NULL,
     pillar_key TEXT,
     prompt TEXT,
     status TEXT NOT NULL DEFAULT 'OPEN',
     assigned_video_id INTEGER REFERENCES videos(id),
     google_calendar_event_id TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    user_id INTEGER REFERENCES users(id),
+    timezone TEXT,
+    cadence_id INTEGER REFERENCES posting_cadences(id),
+    UNIQUE(user_id, scheduled_at)
 );
 """
 
@@ -335,6 +339,41 @@ CREATE TABLE IF NOT EXISTS upload_attempts (
 );
 """
 
+# Milestone 3.8 (hosted scheduling cadence configuration). One row per user
+# for the cadence itself (a single active-or-inactive cadence per user, not
+# multiple named cadences), a child table for its "weekday -> posting time"
+# pairs — a plain relational shape rather than a JSON blob column, matching
+# this codebase's existing preference throughout (no JSON columns exist
+# anywhere else in this schema). weekday values match cadence.py's
+# WEEKDAY_NAMES ("monday".."sunday") for consistency with the existing
+# global cadence model, even though this is a separate, per-user one (see
+# docs/decisions/0012-hosted-cadence-configuration.md for why a second,
+# richer model was added instead of extending calendar/cadence.py in
+# place). id is stable across edits — PUT /api/cadence updates this same
+# row's timezone/is_active/updated_at rather than inserting a new one, so
+# content_slots.cadence_id keeps meaning "this user's one cadence" across
+# any number of edits, which the reconciliation logic below depends on.
+SCHEMA_POSTING_CADENCES = """
+CREATE TABLE IF NOT EXISTS posting_cadences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+    timezone TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+SCHEMA_POSTING_CADENCE_TIMES = """
+CREATE TABLE IF NOT EXISTS posting_cadence_times (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cadence_id INTEGER NOT NULL REFERENCES posting_cadences(id),
+    weekday TEXT NOT NULL,
+    posting_time TEXT NOT NULL,
+    UNIQUE(cadence_id, weekday, posting_time)
+);
+"""
+
 
 def _migrate_upload_batches_rename_total_bytes(conn: sqlite3.Connection) -> None:
     """2026-09-27 upload-failure-semantics/telemetry-accuracy follow-up:
@@ -447,6 +486,14 @@ def _ensure_platform_posts_columns(conn: sqlite3.Connection) -> None:
 # migration, following the exact same pattern as videos/platform_posts.
 _CONTENT_SLOTS_MIGRATION_COLUMNS = {
     "user_id": "INTEGER REFERENCES users(id)",
+    # Milestone 3.8 (hosted cadence configuration): timezone is stamped at
+    # generation time (NULL for every legacy row, meaning "assume the
+    # global config.TIMEZONE" — identical to today's actual behavior for
+    # those rows). cadence_id is provenance — NULL means manual/legacy
+    # (never touched by cadence-edit reconciliation), non-NULL means "this
+    # exact posting_cadences row generated this slot".
+    "timezone": "TEXT",
+    "cadence_id": "INTEGER REFERENCES posting_cadences(id)",
 }
 
 
@@ -552,6 +599,71 @@ def _migrate_content_slots_unique_constraint(conn: sqlite3.Connection) -> None:
             f"status per timestamp.",
             file=sys.stderr,
         )
+
+
+def _content_slots_needs_per_user_uniqueness_migration(conn: sqlite3.Connection) -> bool:
+    """True if content_slots' stored CREATE TABLE SQL does not already
+    contain the Milestone 3.8 composite constraint. Checked structurally
+    against sqlite_master rather than assumed from a version number, same
+    technique as _content_slots_needs_migration above."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'content_slots'"
+    ).fetchone()
+    sql = (row["sql"] or "") if row is not None else ""
+    return "UNIQUE(user_id, scheduled_at)" not in sql
+
+
+def _migrate_content_slots_to_per_user_uniqueness(conn: sqlite3.Connection) -> None:
+    """Milestone 3.8 (hosted scheduling cadence configuration): widens
+    content_slots' uniqueness from the global UNIQUE(scheduled_at) to
+    UNIQUE(user_id, scheduled_at) — required for real multi-tenant slot
+    generation (two different users generating a slot for the same
+    wall-clock timestamp must not silently collide via INSERT OR IGNORE,
+    which is exactly what the old global constraint caused). This is a
+    strict widening, never a narrowing: every row that satisfied
+    UNIQUE(scheduled_at) trivially satisfies UNIQUE(user_id, scheduled_at)
+    too, so no existing data can violate it — no dedup/conflict-resolution
+    pass is needed here, unlike _migrate_content_slots_unique_constraint
+    above. One accepted consequence, deliberately not engineered around:
+    SQL NULL is never equal to itself for uniqueness purposes, so rows
+    with user_id IS NULL no longer participate in any uniqueness
+    guarantee at all. Real production data has zero NULL-user_id rows
+    (fully backfilled — see ADR-0007's own follow-up), so this only
+    theoretically affects an intentionally-unscoped test/tooling caller.
+
+    Uses the same rename+recreate+copy+drop technique (and the same
+    PRAGMA legacy_alter_table=ON FK-safety guard) as
+    _migrate_content_slots_unique_constraint — see that function's own
+    docstring for why the guard is necessary. Column set is read
+    dynamically from the old table (PRAGMA table_info) rather than
+    assumed, so this is correct whether or not user_id/timezone/cadence_id
+    already exist on the table being migrated."""
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("ALTER TABLE content_slots RENAME TO content_slots_old")
+            conn.execute(SCHEMA_CONTENT_SLOTS)
+
+            old_columns = {row["name"] for row in conn.execute("PRAGMA table_info(content_slots_old)").fetchall()}
+            new_columns = [
+                "id", "scheduled_at", "pillar_key", "prompt", "status", "assigned_video_id",
+                "google_calendar_event_id", "created_at", "user_id", "timezone", "cadence_id",
+            ]
+            select_list = ", ".join(c if c in old_columns else "NULL" for c in new_columns)
+            conn.execute(
+                f"INSERT INTO content_slots ({', '.join(new_columns)}) "
+                f"SELECT {select_list} FROM content_slots_old"
+            )
+            conn.execute("DROP TABLE content_slots_old")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _videos_fk_needs_repair(conn: sqlite3.Connection) -> bool:
@@ -719,6 +831,27 @@ class SlotRecord:
     google_calendar_event_id: str | None
     created_at: str
     user_id: int | None
+    timezone: str | None
+    cadence_id: int | None
+
+
+@dataclass
+class CadenceRecord:
+    id: int
+    user_id: int
+    timezone: str
+    is_active: bool
+    created_at: str
+    updated_at: str
+    posting_times: list["CadenceTimeRecord"]
+
+
+@dataclass
+class CadenceTimeRecord:
+    id: int
+    cadence_id: int
+    weekday: str
+    posting_time: str
 
 
 @dataclass
@@ -889,6 +1022,8 @@ class ContentStore:
         if _content_slots_needs_migration(self._conn):
             _migrate_content_slots_unique_constraint(self._conn)
         self._conn.executescript(SCHEMA_CONTENT_SLOTS)
+        if _content_slots_needs_per_user_uniqueness_migration(self._conn):
+            _migrate_content_slots_to_per_user_uniqueness(self._conn)
         _ensure_content_slots_columns(self._conn)
         self._conn.executescript(SCHEMA_PLATFORM_POSTS)
         _ensure_platform_posts_columns(self._conn)
@@ -911,6 +1046,14 @@ class ContentStore:
         _migrate_upload_batches_rename_total_bytes(self._conn)
         _ensure_upload_batches_columns(self._conn)
         self._conn.executescript(SCHEMA_UPLOAD_ATTEMPTS)
+        # Milestone 3.8: created after users so its REFERENCES users(id)
+        # clause is meaningful from the first run. content_slots' own
+        # cadence_id REFERENCES posting_cadences(id) is declared earlier
+        # (above) purely for readability of SCHEMA_CONTENT_SLOTS — SQLite
+        # does not require the referenced table to exist first, same as
+        # every other forward reference in this __init__.
+        self._conn.executescript(SCHEMA_POSTING_CADENCES)
+        self._conn.executescript(SCHEMA_POSTING_CADENCE_TIMES)
 
     def close(self) -> None:
         self._conn.close()
@@ -1021,28 +1164,38 @@ class ContentStore:
         created_at: str,
         google_calendar_event_id: str | None = None,
         user_id: int | None = None,
+        timezone: str | None = None,
+        cadence_id: int | None = None,
     ) -> bool:
-        """Insert a content_slot unless one already exists for this scheduled_at.
+        """Insert a content_slot unless one already exists for this
+        (user_id, scheduled_at) pair (Milestone 3.8 widened this from a
+        global scheduled_at uniqueness — see
+        _migrate_content_slots_to_per_user_uniqueness's own docstring).
 
         Returns True if a new row was created, False if it already existed —
         this is what keeps re-running generate_calendar.py for the same month
-        from duplicating slots, and what stops a changed strategy from
-        silently overwriting an existing slot's pillar/prompt: the row already
-        there always wins, regardless of what the current config would now
-        compute for that timestamp.
+        (or the hosted cadence generator for the same horizon) from
+        duplicating slots, and what stops a changed strategy from silently
+        overwriting an existing slot's pillar/prompt: the row already there
+        always wins, regardless of what the current config would now compute
+        for that timestamp.
 
         user_id (Milestone 3.2) is optional, defaulting to None (legacy/
-        unscoped) — see insert_video's docstring for why. The real
-        production caller (calendar.generate_calendar.push_events) always
-        passes the resolved local user's id.
+        unscoped) — see insert_video's docstring for why. The CLI caller
+        (calendar.generate_calendar.push_events) always passes the resolved
+        local user's id and leaves timezone/cadence_id at their defaults
+        (NULL — this is not a hosted-cadence-generated slot). The hosted
+        cadence generator (calendar.hosted_cadence, Milestone 3.8) always
+        passes all four.
         """
         cur = self._conn.execute(
             """
             INSERT OR IGNORE INTO content_slots
-                (scheduled_at, pillar_key, prompt, status, google_calendar_event_id, created_at, user_id)
-            VALUES (?, ?, ?, 'OPEN', ?, ?, ?)
+                (scheduled_at, pillar_key, prompt, status, google_calendar_event_id, created_at,
+                 user_id, timezone, cadence_id)
+            VALUES (?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)
             """,
-            (scheduled_at, pillar_key, prompt, google_calendar_event_id, created_at, user_id),
+            (scheduled_at, pillar_key, prompt, google_calendar_event_id, created_at, user_id, timezone, cadence_id),
         )
         return cur.rowcount > 0
 
@@ -1182,6 +1335,126 @@ class ContentStore:
                 "UPDATE videos SET assigned_slot_id = ? WHERE id = ?",
                 (slot_id, video_id),
             )
+
+    def list_content_slots_for_user(self, user_id: int, from_iso: str, to_iso: str) -> list[SlotRecord]:
+        """Every content_slot owned by user_id with scheduled_at in
+        [from_iso, to_iso) — the hosted cadence preview's one read query
+        (Milestone 3.8). Legacy/unowned (user_id IS NULL) rows are
+        deliberately excluded, unlike find_earliest_open_slot*'s
+        assignment-matching queries — this is a per-user listing, not a
+        claim, so there is no "fall back to unowned" case to honor."""
+        rows = self._conn.execute(
+            """
+            SELECT * FROM content_slots
+            WHERE user_id = ? AND scheduled_at >= ? AND scheduled_at < ?
+            ORDER BY scheduled_at ASC
+            """,
+            (user_id, from_iso, to_iso),
+        ).fetchall()
+        return [_row_to_slot(row) for row in rows]
+
+    # -- posting_cadences (Milestone 3.8) ---------------------------------
+
+    def get_cadence_for_user(self, user_id: int) -> CadenceRecord | None:
+        row = self._conn.execute("SELECT * FROM posting_cadences WHERE user_id = ?", (user_id,)).fetchone()
+        if row is None:
+            return None
+        time_rows = self._conn.execute(
+            "SELECT * FROM posting_cadence_times WHERE cadence_id = ? ORDER BY weekday, posting_time",
+            (row["id"],),
+        ).fetchall()
+        return CadenceRecord(
+            id=row["id"], user_id=row["user_id"], timezone=row["timezone"], is_active=bool(row["is_active"]),
+            created_at=row["created_at"], updated_at=row["updated_at"],
+            posting_times=[CadenceTimeRecord(**dict(t)) for t in time_rows],
+        )
+
+    def save_cadence_and_regenerate_slots(
+        self,
+        user_id: int,
+        timezone: str,
+        is_active: bool,
+        posting_times: list[tuple[str, str]],
+        generated_slots: list[tuple[str, str]],
+        now_utc_iso: str,
+        now_local_iso: str,
+    ) -> CadenceRecord:
+        """Atomically: upsert the user's one posting_cadences row (stable id
+        across edits — an edit UPDATEs in place, never inserting a second
+        row per user), fully replace its posting_cadence_times, delete
+        every future OPEN slot this cadence previously generated
+        (reconciliation — a changed cadence, or one just set inactive,
+        must not leave stale OPEN slots behind), then insert the freshly
+        generated slots. All in one transaction: a caller must never be
+        able to observe a saved cadence whose slot pool doesn't match it.
+
+        Two different "now" values are required, matching this codebase's
+        existing scheduled_at (naive local) vs. updated_at (aware UTC)
+        convention split (see AGENTS.md "Timestamp conventions"):
+        now_utc_iso stamps created_at/updated_at (aware UTC, matching
+        every other *_at column that isn't scheduled_at); now_local_iso is
+        the naive-local boundary compared against scheduled_at in the
+        reconciliation DELETE below, and must be the exact same "now" the
+        caller's calendar.hosted_cadence.generate_slot_datetimes() used to
+        decide which candidates were still in the future — otherwise a
+        slot could be reconciled away and regenerated inconsistently
+        around the boundary instant.
+
+        Preserved unconditionally by the reconciliation DELETE below,
+        regardless of cadence_id: any slot with status
+        ASSIGNED/PUBLISHED/FAILED, and any slot with cadence_id IS NULL
+        (manual/legacy — includes every pre-3.8 CLI-created row). Only a
+        *future*, *OPEN*, *this-cadence's* slot is ever removed here.
+
+        generated_slots is a list of (scheduled_at, timezone) pairs
+        already computed by calendar.hosted_cadence (pure, no DB access)
+        — this method only persists them, mirroring
+        media_storage.create_video_from_upload's own "pure computation,
+        then one persistence call" shape. An inactive cadence's caller
+        passes an empty generated_slots list — the reconciliation DELETE
+        still runs, correctly clearing any previously-generated future
+        OPEN slots even though nothing new is inserted.
+        """
+        with self.transaction() as conn:
+            existing = conn.execute("SELECT id FROM posting_cadences WHERE user_id = ?", (user_id,)).fetchone()
+            if existing is None:
+                cur = conn.execute(
+                    "INSERT INTO posting_cadences (user_id, timezone, is_active, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (user_id, timezone, int(is_active), now_utc_iso, now_utc_iso),
+                )
+                cadence_id = cur.lastrowid
+            else:
+                cadence_id = existing["id"]
+                conn.execute(
+                    "UPDATE posting_cadences SET timezone = ?, is_active = ?, updated_at = ? WHERE id = ?",
+                    (timezone, int(is_active), now_utc_iso, cadence_id),
+                )
+
+            conn.execute("DELETE FROM posting_cadence_times WHERE cadence_id = ?", (cadence_id,))
+            for weekday, posting_time in posting_times:
+                conn.execute(
+                    "INSERT INTO posting_cadence_times (cadence_id, weekday, posting_time) VALUES (?, ?, ?)",
+                    (cadence_id, weekday, posting_time),
+                )
+
+            conn.execute(
+                "DELETE FROM content_slots "
+                "WHERE user_id = ? AND cadence_id = ? AND status = 'OPEN' AND scheduled_at > ?",
+                (user_id, cadence_id, now_local_iso),
+            )
+
+            for scheduled_at, slot_timezone in generated_slots:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO content_slots
+                        (scheduled_at, pillar_key, prompt, status, created_at, user_id, timezone, cadence_id)
+                    VALUES (?, NULL, NULL, 'OPEN', ?, ?, ?, ?)
+                    """,
+                    (scheduled_at, now_utc_iso, user_id, slot_timezone, cadence_id),
+                )
+
+        return self.get_cadence_for_user(user_id)
 
     # -- platform_posts (Milestone 2.0) ----------------------------------
 

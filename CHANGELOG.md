@@ -2,6 +2,79 @@
 
 ## 2026-09-27
 
+### Milestone 3.8 — Scheduling + Cadence Configuration
+
+Added the first hosted, per-user posting-cadence configuration + future slot generation —
+scoped deliberately to schema + generation only, per the milestone's own brief; no
+queue/calendar editing UI, publishing, or assignment endpoint yet (still future scope).
+See `docs/decisions/0012-hosted-cadence-configuration.md` for the full design and the
+reasoning behind each of the decisions below.
+
+**Investigation before writing any code found two real gaps the brief didn't
+anticipate**, both resolved before building the feature (see the ADR's Decisions 1–2):
+the 9 existing `content_slots`/5 `platform_posts`/5 `videos` rows from CLI usage belong to
+`user_id=1` (`local@pickle-batch.local`, no web-auth login at all) — **not** the real
+hosted account (`user_id=2`) as assumed; decided to leave them separate rather than
+merge ownership. `content_slots.scheduled_at` had a *global* `UNIQUE` constraint, not
+per-user — two hosted users generating a slot at the same wall-clock timestamp would have
+silently collided; widened to `UNIQUE(user_id, scheduled_at)` on both backends (a strict,
+non-destructive widening — every existing row already satisfies it).
+
+**New cadence model:** `posting_cadences` (one stable-id-across-edits cadence per user —
+timezone, active/inactive) + `posting_cadence_times` (its "weekday, HH:MM" rows), both
+backends. `content_slots` gains `timezone` (stamped at generation time, `NULL` for every
+legacy row) and `cadence_id` (provenance — `NULL` means manual/legacy, never touched by
+cadence-edit reconciliation). New Postgres migration:
+`postgres_migrations/0007_hosted_cadence_and_per_user_slot_uniqueness.sql`; SQLite via a
+new rebuild function reusing the existing `PRAGMA legacy_alter_table=ON` FK-safety
+technique.
+
+**Slot generation:** new `calendar/hosted_cadence.py` (pure, stdlib-only, reuses
+`calendar/cadence.py`'s `WEEKDAY_NAMES`/`parse_posting_time`/`ScheduleConfigError` rather
+than redefining them — `cadence.py` itself is untouched, still serving the unrelated
+CLI/global path). Rolling 28-day horizon
+(`config.CADENCE_GENERATION_HORIZON_DAYS`), multiple posting times per weekday, real
+per-user IANA timezone. Explicit, tested DST policy: a nonexistent local time
+(spring-forward gap) is skipped for that instance, never silently shifted; an ambiguous
+local time (fall-back) resolves via Python's default `fold=0`, documented rather than
+accidental.
+
+**Cadence-edit reconciliation** (added after plan review caught the gap): editing a
+cadence, or setting it inactive, now removes the previous config's future `OPEN`
+cadence-generated slots before inserting the new horizon — one atomic store method,
+`save_cadence_and_regenerate_slots`, mirroring `assign_slot`'s own "one method, one
+transaction" shape. `ASSIGNED`/`PUBLISHED`/`FAILED` slots and any manual/legacy
+(`cadence_id IS NULL`) slot are preserved unconditionally, regardless of date.
+
+**API** (`api/routes/cadence.py`, new): `GET /api/cadence`, `PUT /api/cadence`
+(save + reconcile + regenerate, one atomic operation), `GET /api/cadence/slots` (upcoming
+slots for the Settings preview). `api/app.py`'s CORS `allow_methods` gained `PUT`.
+
+**Frontend:** new "Scheduling" section on the existing Settings page
+(`components/app/SchedulingSettings.tsx`, `lib/api/cadence.ts`) — timezone select, active
+toggle, add/remove posting times, save, and a simple upcoming-slots preview. No
+drag/drop, no per-slot editing, no calendar view (3.9's scope).
+
+Tests: backend 853 passed (824 baseline + 29 net new — `tests/test_hosted_cadence.py` is
+new (15, pure generation/DST/validation logic), `tests/test_api_cadence.py` is new (11,
+real end-to-end including the per-user-uniqueness proof and reconciliation), one new
+Postgres integration test proving the same against real `POSTGRES_TEST_SCHEMA`, two new
+SQLite migration tests, one new `test_api_cors.py` test (`PUT`/`DELETE` preflight allowed)
+plus one existing CORS test updated (`PUT` is no longer a "disallowed method" example,
+`PATCH` is), and five existing `insert_slot_if_missing`-based tests updated to pass a real
+`user_id` (matching real `generate_calendar.py` usage) now that uniqueness is per-user —
+one of those five gained a sibling test documenting the accepted unscoped/`NULL`
+consequence explicitly, so the net test-count change is fully explainable. Frontend: 97
+passed (92 baseline + 5 new `tests/routes/settings-scheduling.test.tsx`); `npm run lint`
+and `npm run build` both clean.
+
+Not yet applied to real production Postgres, and not yet deployed — migration 0007 exists
+in this repo, will be picked up automatically by the existing packaging fix (glob-based,
+covers the whole `postgres_migrations/*.sql` directory), and — like 0006 before it — should
+be deployed with this code rather than applied ahead of it (no destructive rename this
+time, so there is no strict ordering hazard, but the new tables/columns are meaningless to
+any code that doesn't yet exist in production).
+
 ### Milestone 3.7 — Upload Failure Semantics + Telemetry Accuracy
 
 Fixed three real gaps a live Supabase 413 EntityTooLarge exposed during hosted-upload

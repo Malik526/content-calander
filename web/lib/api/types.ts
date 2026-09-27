@@ -99,3 +99,37 @@ export interface VideoUploadResult {
 export interface VideoUploadBatchResponse {
   results: VideoUploadResult[];
 }
+
+/**
+ * The real GET/PUT /api/cadence and GET /api/cadence/slots response
+ * shapes (Milestone 3.8) — see api/schemas/cadence.py. Same
+ * snake_case-mirrors-the-wire convention as VideoResponse above.
+ */
+export interface PostingTime {
+  weekday: string;
+  posting_time: string;
+}
+
+export interface CadenceResponse {
+  configured: boolean;
+  timezone: string | null;
+  is_active: boolean;
+  posting_times: PostingTime[];
+}
+
+export interface CadenceRequest {
+  timezone: string;
+  is_active: boolean;
+  posting_times: PostingTime[];
+}
+
+export interface SlotResponse {
+  id: number;
+  scheduled_at: string;
+  status: string;
+  timezone: string | null;
+}
+
+export interface SlotListResponse {
+  slots: SlotResponse[];
+}

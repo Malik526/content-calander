@@ -30,6 +30,7 @@ from typing import Protocol
 
 from content_automation.persistence.content_store import (
     AuthIdentityRecord,
+    CadenceRecord,
     OAuthStateRecord,
     PlatformConnectionRecord,
     PlatformCredentialRecord,
@@ -144,3 +145,22 @@ class ContentStoreProtocol(Protocol):
     def update_upload_attempt(self, attempt_id: int, **fields) -> None: ...
 
     def get_upload_attempts_for_batch(self, batch_id: int) -> list[UploadAttemptRecord]: ...
+
+    # -- Milestone 3.8 (hosted scheduling cadence configuration) — the
+    # methods api/routes/cadence.py and calendar/hosted_cadence.py consume
+    # through this Protocol, exactly like every milestone above.
+
+    def get_cadence_for_user(self, user_id: int) -> CadenceRecord | None: ...
+
+    def save_cadence_and_regenerate_slots(
+        self,
+        user_id: int,
+        timezone: str,
+        is_active: bool,
+        posting_times: list[tuple[str, str]],
+        generated_slots: list[tuple[str, str]],
+        now_utc_iso: str,
+        now_local_iso: str,
+    ) -> CadenceRecord: ...
+
+    def list_content_slots_for_user(self, user_id: int, from_iso: str, to_iso: str) -> list[SlotRecord]: ...

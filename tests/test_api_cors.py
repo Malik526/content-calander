@@ -44,6 +44,7 @@ def test_cors_allow_methods_includes_delete_get_and_post():
     assert "DELETE" in allow_methods
     assert "GET" in allow_methods
     assert "POST" in allow_methods
+    assert "PUT" in allow_methods  # Milestone 3.8 — PUT /api/cadence
 
 
 def test_delete_preflight_succeeds_for_an_allowed_origin():
@@ -85,16 +86,35 @@ def test_get_and_post_preflight_remain_unaffected_by_the_delete_fix():
 
 
 def test_disallowed_method_preflight_still_fails_closed():
-    """A method that's genuinely never been allowed (e.g. PUT) must still
-    be rejected — proves the fix added DELETE specifically, not "*"."""
+    """A method that's genuinely never been allowed (e.g. PATCH) must
+    still be rejected — proves the fix added specific methods (DELETE,
+    later PUT for Milestone 3.8's /api/cadence), not "*". PUT itself
+    moved to the allowed list once /api/cadence needed it — see
+    test_put_and_delete_preflight_are_allowed below."""
     client = TestClient(app_module.app)
 
     response = client.options(
         "/api/videos/123",
         headers={
             "Origin": _ALLOWED_ORIGIN,
-            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Method": "PATCH",
         },
     )
 
     assert response.status_code == 400
+
+
+def test_put_and_delete_preflight_are_allowed():
+    """Milestone 3.8 added PUT (for PUT /api/cadence) to allow_methods,
+    alongside DELETE (Milestone 3.7's own CORS fix)."""
+    client = TestClient(app_module.app)
+
+    for method in ("PUT", "DELETE"):
+        response = client.options(
+            "/api/cadence",
+            headers={
+                "Origin": _ALLOWED_ORIGIN,
+                "Access-Control-Request-Method": method,
+            },
+        )
+        assert response.status_code == 200, f"{method} preflight should be allowed"

@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsPage from "@/app/app/settings/page";
 
 /**
@@ -25,6 +25,22 @@ const platformsApi = vi.hoisted(() => ({
   disconnectTikTok: vi.fn(),
 }));
 vi.mock("@/lib/api/platforms", () => platformsApi);
+
+// SettingsPage also renders SchedulingSettings (Milestone 3.8) — mocked
+// here purely so its own independent data fetch doesn't produce a second,
+// unrelated error alert that makes these TikTok-focused tests' own
+// screen.getByRole("alert") assertions ambiguous. Its own behavior is
+// covered by tests/routes/settings-scheduling.test.tsx.
+const cadenceApi = vi.hoisted(() => ({
+  getCadence: vi.fn(),
+  saveCadence: vi.fn(),
+  getUpcomingSlots: vi.fn(),
+}));
+vi.mock("@/lib/api/cadence", () => cadenceApi);
+
+beforeEach(() => {
+  cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
+});
 
 afterEach(() => {
   vi.clearAllMocks();
