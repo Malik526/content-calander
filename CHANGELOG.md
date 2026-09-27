@@ -2,6 +2,66 @@
 
 ## 2026-09-27
 
+### Milestone 3.8.1 — Scheduling UX Correction
+
+Frontend-only usability correction on top of Milestone 3.8 — no backend/schema/API
+change. Real hosted use of the 3.8 Settings section surfaced two real usability gaps: the
+cadence editor only let a user add one `(weekday, time)` pair at a time via two dropdowns,
+and the upcoming-slots preview was a raw `scheduled_at` ISO string next to the literal
+status word `OPEN`, neither of which a real user could read at a glance.
+
+**Moved scheduling out of Settings and into Queue.** `/app/queue` (previously a
+Milestone 3.5 placeholder shell with a hardcoded empty `QueueItem[]`) is now the cadence
+home — "Posting rhythm" and "Upcoming schedule" sections, both driven by the unchanged
+`GET/PUT /api/cadence` and `GET /api/cadence/slots` contract. Settings' own "Scheduling"
+section was removed outright (not reduced to a partial editor) so there is exactly one
+place that reads/writes the cadence config, per the brief's "avoid creating two separate
+sources of truth."
+
+**New `components/app/WeeklyRhythmEditor.tsx`** replaces the old one-weekday-at-a-time
+picker with a full seven-row grid (Monday–Sunday), each day independently toggleable and
+each active day holding an arbitrary number of times with individual Remove affordances
+and its own "+ Add time" control. A day's on/off state is derived (on iff it has at least
+one time) rather than a second stored flag — turning a day on seeds it with one default
+time (09:00), turning it off drops all of that day's times from the pending edit. Adding
+an exact-duplicate `(weekday, time)` pair is a client-side no-op, since
+`posting_cadence_times` has a real `UNIQUE(cadence_id, weekday, posting_time)` constraint
+this UI can simply avoid tripping rather than surfacing as a save-time error.
+
+**New `components/app/UpcomingSchedulePreview.tsx`** replaces the raw ISO/`OPEN` list
+with locale-formatted entries (e.g. "Mon, Oct 5, 9:00 AM"). `scheduled_at` is a
+naive-local string already in the cadence's own timezone (see AGENTS.md's timestamp
+convention note); `new Date(...)` on a bare (no `Z`/offset) ISO string parses it as local
+wall-clock time in JS, so formatting it back out reformats the same numbers rather than
+converting between timezones. `OPEN` (every slot's normal state today — no assignment
+endpoint exists yet) is never shown; a real, meaningful status (e.g. `ASSIGNED`) is shown
+capitalized when one exists, for 3.9 to build on.
+
+Saving still calls `PUT /api/cadence` once, exactly as 3.8 built it — the atomic
+save+reconcile+regenerate behavior is unchanged; this pass only changed how the existing
+config is edited and previewed.
+
+`components/app/SchedulingSettings.tsx` (3.8's Settings-page container) is deleted,
+superseded by `components/app/QueueScheduling.tsx`, which also fixes a real dev-mock-session
+gap the old component didn't handle: with no `accessToken` (no backend to call — the same
+case `library/page.tsx` already handles), it now settles immediately to "not configured"
+instead of spinning forever.
+
+Tests: frontend 100 passed (97 baseline − 5 retired `tests/routes/settings-scheduling.test.tsx`
++ 8 new `tests/routes/queue-scheduling.test.tsx`, covering: existing cadence loads into the
+weekly grid, a weekday can be enabled/disabled, multiple times can be added to one day, an
+individual time can be removed, save sends the complete weekly cadence, upcoming slots
+render human-readable rather than raw ISO/`OPEN`, and a real non-`OPEN` status is shown
+when present); `tests/routes/settings-tiktok.test.tsx`'s now-unnecessary cadence mock was
+removed (Settings no longer touches `lib/api/cadence`); `tests/routes/app-routes.test.tsx`'s
+`/app/queue` case updated for the new page (real empty state is now "no cadence configured"
+under a `SessionProvider`, not the old hardcoded placeholder text). `npm run lint` and
+`npm run build` both clean. Backend suite untouched and not re-run for this frontend-only
+change beyond confirming no backend files were modified.
+
+Deferred to 3.9, per the brief: the full month/week calendar view, drag/drop, manual
+one-off slot creation, video-to-slot assignment, rescheduling, and published-history UI.
+
 ### Milestone 3.8 — Scheduling + Cadence Configuration
 
 Added the first hosted, per-user posting-cadence configuration + future slot generation —

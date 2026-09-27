@@ -1,39 +1,30 @@
-import { QueueItemCard } from "@/components/app/QueueItemCard";
-import { EmptyState } from "@/components/ui/EmptyState";
+"use client";
+
+import { QueueScheduling } from "@/components/app/QueueScheduling";
 import { PageHeader } from "@/components/ui/PageHeader";
-import type { QueueItem } from "@/lib/api/types";
-
-export const metadata = { title: "Queue" };
-
-// Real shipped behavior: nothing scheduled yet (no backend call exists —
-// see lib/api/client.ts). QueueItemCard's populated layout is still real
-// and tested (components/app/QueueItemCard.tsx,
-// tests/components/QueueItemCard.test.tsx) — this page renders it the
-// moment `items` is non-empty, without any other change.
-const items: QueueItem[] = [];
+import { useSession } from "@/lib/session";
 
 /**
- * /app/queue — shell only (Milestone 3.5). Scheduling/cadence controls
- * are Milestone 3.8's scope — this page only displays, never edits.
+ * /app/queue (Milestone 3.8.1). Home for the hosted posting cadence:
+ * "Posting rhythm" (the weekly editor, PUT /api/cadence) and "Upcoming
+ * schedule" (a human-readable preview of GET /api/cadence/slots) — both
+ * rendered by components/app/QueueScheduling.tsx, moved here from Settings
+ * so cadence configuration and its resulting slots live together.
+ *
+ * Milestone 3.5's placeholder "Nothing scheduled yet" shell (a hardcoded
+ * empty QueueItem[] list) is retired by this change — assigned videos and
+ * published history are real 3.9 scope (a real assignment endpoint and
+ * queue/calendar editing UI don't exist yet), not something to fake here.
+ * components/app/QueueItemCard.tsx stays in the tree, unused by this page
+ * for now, for 3.9 to pick back up.
  */
 export default function QueuePage() {
+  const { accessToken } = useSession();
+
   return (
     <>
-      <PageHeader title="Queue" description="What's scheduled to publish and what already has." />
-      {items.length === 0 ? (
-        <EmptyState
-          title="Nothing scheduled yet"
-          description="Once you have videos in your library, scheduled and published posts will show up here."
-        />
-      ) : (
-        <ul className="flex flex-col gap-3">
-          {items.map((item) => (
-            <li key={item.id}>
-              <QueueItemCard item={item} />
-            </li>
-          ))}
-        </ul>
-      )}
+      <PageHeader title="Queue" description="Your recurring posting rhythm and what's coming up." />
+      <QueueScheduling accessToken={accessToken} />
     </>
   );
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { SchedulingSettings } from "@/components/app/SchedulingSettings";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -30,6 +29,12 @@ import { useSession } from "@/lib/session";
  * that as a separate value from "disconnected" (see
  * docs/decisions/0011-real-authentication-and-tiktok-connection.md
  * "Deferred") — recorded as a gap, not fabricated.
+ *
+ * Milestone 3.8.1: the posting-cadence editor that briefly lived here
+ * (Milestone 3.8's "Scheduling" section) moved to /app/queue
+ * (components/app/QueueScheduling.tsx) so it sits with the upcoming-slots
+ * preview it drives, and so there is exactly one editor for the cadence
+ * config rather than two. This page never reads or writes cadence data.
  */
 export default function SettingsPage() {
   const { user, accessToken } = useSession();
@@ -168,13 +173,6 @@ export default function SettingsPage() {
               </div>
             </Card>
           )}
-        </section>
-
-        <section aria-labelledby="scheduling-heading">
-          <h2 id="scheduling-heading" className="mb-3 text-sm font-semibold text-ink">
-            Scheduling
-          </h2>
-          <SchedulingSettings accessToken={accessToken} />
         </section>
       </div>
     </>
