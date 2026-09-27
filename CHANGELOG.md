@@ -2,6 +2,62 @@
 
 ## 2026-09-26
 
+### Production Fix — Postgres Migration Packaging
+
+Fixed a second production bug found while diagnosing the CORS fix below: once DELETE
+requests reached the handler, they 500'd because `upload_batches`/`upload_attempts` don't
+exist in production Postgres, and (confirmed on inspection) `videos.file_hash` still has
+its old `UNIQUE` constraint too — migrations `0004_add_upload_telemetry.sql` and
+`0005_drop_videos_file_hash_uniqueness.sql` had never reached the real `public` schema.
+
+Root cause: `railway.json`'s build (`pip install -r requirements.txt && pip install .` —
+a real, non-editable build, unlike the `pip install -e .` used for local dev) silently
+excluded `persistence/postgres_migrations/*.sql` from the installed package entirely.
+`postgres_migrations/` has no `__init__.py` (it's deliberately just numbered `.sql` files,
+never a Python subpackage — see `postgres_migrate.py`'s own docstring), and
+`pyproject.toml` had no packaging config beyond `[tool.setuptools.packages.find]`, which
+only discovers real packages. Reproduced directly: building this repo in a clean throwaway
+venv with Railway's exact install command showed the entire `postgres_migrations/`
+directory absent from the installed `content_automation` package — meaning
+`postgres_migrate.MIGRATIONS_DIR.glob("*.sql")` (called automatically from
+`PostgresContentStore.__init__` on every request, per ADR-0008's "self-deploying
+migrations" design) found nothing at all on Railway, silently, no error, for every
+migration, not just 0004/0005. Migrations 0001–0003 only ever reached real production
+because a developer ran a Postgres-backed CLI script (`cli/migrate_sqlite_to_postgres.py`,
+`cli/link_bootstrap_user.py`) locally against the real `DATABASE_URL`, from a full source
+checkout where the directory genuinely exists — not through the deployed Railway app.
+Confirmed via read-only inspection of production's own `schema_migrations` table (only
+0001–0003 recorded) and `pg_constraint`/`to_regclass` checks (`upload_batches`/
+`upload_attempts` absent, `videos_file_hash_key` UNIQUE constraint still present).
+
+Fix: added `[tool.setuptools.package-data]` to `pyproject.toml` —
+`"content_automation.persistence" = ["postgres_migrations/*.sql"]`. Minimum correct fix:
+no `__init__.py` added (the directory is intentionally not a subpackage), no change to
+`postgres_migrate.py`'s discovery logic or migration semantics, no change to
+`railway.json`. Verified by reproducing Railway's exact `pip install -r requirements.txt
+&& pip install .` in a fresh throwaway venv: all five `.sql` files, including 0004 and
+0005, are now present in the installed package, and importing
+`content_automation.persistence.postgres_migrate` from that installed copy and globbing
+`MIGRATIONS_DIR` finds all five — the exact runtime path Railway's own app uses. This
+means Railway's existing automatic-on-connect mechanism will now genuinely self-apply
+0004/0005 (and any future migration) the next time the deployed app opens a
+`PostgresContentStore` after this fix ships — no separate deploy-time migration step
+needed, matching ADR-0008's original design intent.
+
+Added `tests/test_packaging.py`: asserts `pyproject.toml` declares the package-data entry
+for `content_automation.persistence`, and asserts every currently-committed migration
+file sits directly under `postgres_migrations/` (not a nested subdirectory the declared
+glob pattern wouldn't cover) — a fast, no-network, no-build config-content guard against
+this exact class of silent regression recurring; the real build-based proof is the manual
+clean-venv reproduction above, not part of the automated suite (this project's `.venv`
+doesn't otherwise depend on `wheel`/`build`).
+
+Tests: backend 816 passed (814 baseline + 2 net new, both in `tests/test_packaging.py`).
+**Not yet deployed, and the two pending migrations have not yet been applied to
+production** — applying them requires opening a `PostgresContentStore` against the real
+`DATABASE_URL` (the same mechanism `cli/migrate_sqlite_to_postgres.py` uses), which is a
+production-mutating action requiring explicit user action to run.
+
 ### Production Fix — CORS DELETE Preflight
 
 Fixed a production bug reported as "DELETE /api/videos/{id} fails from

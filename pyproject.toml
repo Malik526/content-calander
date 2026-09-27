@@ -8,10 +8,27 @@ version = "0.1.0"
 description = "Pickle Batch backend: content ingestion, scheduling, and TikTok publishing."
 requires-python = ">=3.10"
 
-# Milestone 3.0 (package refactor): the only packaging configuration this
+# Milestone 3.0 (package refactor): the base packaging configuration this
 # repository needs is "make content_automation importable from anywhere in
 # the venv, without sys.path hacks" — an editable install (`pip install -e .`)
 # does exactly that via the src/ layout below. Runtime dependencies remain
 # declared in requirements.txt (installed separately), not duplicated here.
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Production incident (2026-09-26): Railway's build (`pip install .` — a
+# real, non-editable build, unlike the `pip install -e .` used for local
+# dev) was silently excluding persistence/postgres_migrations/*.sql from
+# the installed package. setuptools' package discovery above only finds
+# real packages (directories with __init__.py); postgres_migrations/ is
+# deliberately just a directory of numbered .sql files (see
+# postgres_migrate.py's own docstring — "plain numbered .sql files", not a
+# Python subpackage), so it was never a package to begin with and needs no
+# __init__.py — it just needs to be told to ride along as package data.
+# Without this, postgres_migrate.MIGRATIONS_DIR.glob("*.sql") found nothing
+# at all in the Railway-installed copy, silently, no error: every
+# migration landed in real production only because a developer happened to
+# run a Postgres-backed CLI script locally (against the real DATABASE_URL)
+# from a full source checkout instead of through the deployed app.
+[tool.setuptools.package-data]
+"content_automation.persistence" = ["postgres_migrations/*.sql"]
