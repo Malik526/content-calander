@@ -52,7 +52,16 @@ class StorageError(Exception):
     matching LocalStorage's contract exactly). `reason_code` mirrors
     publisher.PublishError's shape (this codebase's established pattern
     for a structured, non-string-parsed failure signal) — "NETWORK_ERROR"
-    for a transport-level failure, "HTTP_ERROR" for an unexpected status."""
+    for a transport-level failure, "HTTP_ERROR" for an unexpected status,
+    "OBJECT_TOO_LARGE" specifically for a 413 from put() (Milestone 3.7
+    upload-failure-semantics follow-up — the project's Storage bucket has
+    a file-size cap (`file_size_limit`, unset here so it falls back to the
+    project-level default) and a real hosted upload exceeding it is
+    expected to happen, not an unusual transport/HTTP failure; giving it
+    its own code lets a failed video's failure_reason and a failed
+    upload_attempt's error_code both say specifically "too large" instead
+    of a generic "HTTP_ERROR", which is what a future UI message like
+    "File exceeds current storage upload limit." would key off)."""
 
     def __init__(self, message: str, reason_code: str = "STORAGE_FAILED", http_status: int | None = None):
         super().__init__(message)
@@ -98,9 +107,10 @@ class SupabaseStorage:
         except requests.RequestException as exc:
             raise StorageError(f"Could not reach Supabase Storage to upload key={key!r}: {exc}", reason_code="NETWORK_ERROR") from exc
         if response.status_code >= 400:
+            reason_code = "OBJECT_TOO_LARGE" if response.status_code == 413 else "HTTP_ERROR"
             raise StorageError(
                 f"Supabase Storage upload failed for key={key!r}: HTTP {response.status_code}: {response.text[:200]!r}",
-                reason_code="HTTP_ERROR", http_status=response.status_code,
+                reason_code=reason_code, http_status=response.status_code,
             )
 
     def exists(self, key: str) -> bool:

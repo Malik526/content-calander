@@ -238,6 +238,59 @@ def test_opening_a_database_with_the_old_unique_constraint_migrates_it(tmp_path)
         assert created is False
 
 
+def test_opening_a_database_with_old_upload_batches_total_bytes_migrates_it(tmp_path):
+    """2026-09-27 upload-failure-semantics/telemetry-accuracy follow-up:
+    total_bytes silently only ever summed successful files' sizes, so it
+    was renamed to attempted_bytes with a new successful_bytes column
+    added alongside it (plus success_count/failure_count). A database
+    created before this change must have total_bytes renamed (its value
+    preserved) and gain the new columns, the first time it's opened."""
+    db_path = tmp_path / "legacy_upload_batches.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE upload_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            file_count INTEGER NOT NULL,
+            total_bytes INTEGER NOT NULL DEFAULT 0,
+            total_duration_ms INTEGER,
+            status TEXT NOT NULL DEFAULT 'IN_PROGRESS'
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO upload_batches (user_id, started_at, file_count, total_bytes, status) "
+        "VALUES (1, '2026-01-01T00:00:00', 2, 12345, 'COMPLETED')"
+    )
+    conn.commit()
+    conn.close()
+
+    with ContentStore(db_path=db_path) as store:
+        columns = {row["name"] for row in store._conn.execute("PRAGMA table_info(upload_batches)").fetchall()}
+        assert "total_bytes" not in columns
+        assert {"attempted_bytes", "successful_bytes", "success_count", "failure_count"} <= columns
+
+        row = store._conn.execute("SELECT * FROM upload_batches").fetchone()
+        assert row["attempted_bytes"] == 12345  # old value preserved under the new name
+        assert row["successful_bytes"] == 0  # new column, default
+        assert row["success_count"] is None
+        assert row["failure_count"] is None
+
+
+def test_fresh_database_creates_upload_batches_with_new_columns_directly(tmp_path):
+    """A brand-new database never had total_bytes to migrate away from —
+    it must have attempted_bytes/successful_bytes/success_count/
+    failure_count from the schema directly, with the migration functions
+    both being no-ops."""
+    with ContentStore(db_path=tmp_path / "fresh.db") as store:
+        columns = {row["name"] for row in store._conn.execute("PRAGMA table_info(upload_batches)").fetchall()}
+        assert "total_bytes" not in columns
+        assert {"attempted_bytes", "successful_bytes", "success_count", "failure_count"} <= columns
+
+
 def test_opening_a_database_missing_classifier_columns_adds_them(tmp_path):
     """Milestone 1.2 added classification_second_score/classification_margin/
     classifier to videos. A database created before that must gain these

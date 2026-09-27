@@ -87,9 +87,22 @@ What it does:
   Starlette has already fully received the multipart request body from the
   client's actual network connection — this server has no way to observe
   that transfer time directly. Throughput (bytes/sec) should be derived at
-  query time from total_bytes/total_duration_ms rather than stored as its
-  own column — see the module docstring's own "keep stored telemetry
-  minimal" framing; a derived ratio is not durable state.
+  query time from attempted_bytes (or successful_bytes)/total_duration_ms
+  rather than stored as its own column — see the module docstring's own
+  "keep stored telemetry minimal" framing; a derived ratio is not durable
+  state.
+
+  Upload-failure semantics (Milestone 3.7 follow-up, 2026-09-27): a
+  storage failure (e.g. a real Supabase 413 EntityTooLarge) now leaves the
+  video row explicitly status="FAILED"/failure_reason=<reason
+  code>/processed_at=<now> instead of a bare, un-updated DISCOVERED row
+  indistinguishable from a normal pending upload — see
+  media_storage.create_video_from_upload's own docstring. A failed
+  attempt's file_size_bytes is preserved (previously discarded even though
+  it had already been measured). upload_batches gained success_count/
+  failure_count (status stays a pure lifecycle field, never a result) and
+  attempted_bytes (renamed from total_bytes, which had silently only ever
+  summed successes) plus successful_bytes.
 
   Re-upload architecture (Milestone 3.7 follow-up): create_video_from_upload
   no longer treats file_hash as a uniqueness/identity signal at all — every
@@ -176,9 +189,18 @@ def _process_one_upload(
 ) -> _UploadOutcome:
     """Always returns an _UploadOutcome; never raises, so the calling loop
     never has to guess which exceptions are "expected" for this one file
-    vs. a real bug."""
+    vs. a real bug.
+
+    file_size_bytes is measured up front, outside the try, specifically so
+    a failure inside create_video_from_upload (e.g. a real Supabase 413
+    EntityTooLarge — Milestone 3.7 upload-failure-semantics follow-up)
+    still reports the true attempted size instead of None. Before this
+    fix, a failed attempt's file_size_bytes was always discarded even
+    though it had already been measured — silently breaking any later
+    analysis of file size vs. failure, since the one thing worth knowing
+    about a too-large file (how large) was the one thing never recorded."""
+    file_size_bytes = tmp_path.stat().st_size
     try:
-        file_size_bytes = tmp_path.stat().st_size
         video = media_storage.create_video_from_upload(
             store, storage, user_id, local_path=tmp_path, original_filename=original_filename,
             file_hash=file_hash(tmp_path), file_size_bytes=file_size_bytes, created_at=_now_iso(),
@@ -192,22 +214,53 @@ def _process_one_upload(
         # raise (a storage.StorageError, a DB error, anything else) is
         # turned into a per-file result here, not left to propagate and
         # 500 the whole request for every other file already/still queued.
+        # media_storage.create_video_from_upload has already marked the
+        # video row FAILED (with its own failure_reason) before raising —
+        # this outcome's video_id stays None because the route's own
+        # upload_attempts row still isn't linked to it in this pass (see
+        # CHANGELOG's Milestone 3.7 telemetry-accuracy entry for why that
+        # residual gap was left alone rather than expanding this fix).
         return _UploadOutcome(
             result=VideoUploadResult(filename=original_filename, success=False, error=str(exc)),
-            file_size_bytes=None, error_code=getattr(exc, "reason_code", _UPLOAD_FAILED), video_id=None,
+            file_size_bytes=file_size_bytes, error_code=getattr(exc, "reason_code", _UPLOAD_FAILED), video_id=None,
         )
     finally:
         tmp_path.unlink(missing_ok=True)
 
 
-def _record_batch_completion(store: ContentStoreProtocol, batch_id: int, started_monotonic: float, total_bytes: int) -> None:
+def _record_batch_completion(
+    store: ContentStoreProtocol,
+    batch_id: int,
+    started_monotonic: float,
+    attempted_bytes: int,
+    successful_bytes: int,
+    success_count: int,
+    failure_count: int,
+) -> None:
     """Telemetry only — a failure here must never surface as an upload
     failure to the caller, since every file has already been fully
-    processed by the time this runs."""
+    processed by the time this runs.
+
+    status stays a pure lifecycle field ("COMPLETED" means "batch
+    processing finished", never a result) — success_count/failure_count
+    (Milestone 3.7 telemetry-accuracy follow-up) carry the outcome
+    explicitly instead, so a batch with some failures doesn't need a new
+    status value like "PARTIAL_SUCCESS" invented for it.
+
+    attempted_bytes/successful_bytes (renamed/added from the old
+    total_bytes — see persistence/postgres_migrations/0006's own comment)
+    are two different numbers on purpose: attempted_bytes sums every
+    file's measured size in this batch, success or fail; successful_bytes
+    sums only the ones that actually made it into storage. The old
+    total_bytes silently only ever accumulated successes (a bug, not
+    documented intent — see api/routes/videos.py's own git history), which
+    made it look like a batch containing a real 413 failure moved fewer
+    bytes than it actually attempted."""
     try:
         duration_ms = round((time.monotonic() - started_monotonic) * 1000)
         store.update_upload_batch(
-            batch_id, completed_at=_now_iso(), total_bytes=total_bytes, total_duration_ms=duration_ms,
+            batch_id, completed_at=_now_iso(), attempted_bytes=attempted_bytes, successful_bytes=successful_bytes,
+            success_count=success_count, failure_count=failure_count, total_duration_ms=duration_ms,
             status="COMPLETED",
         )
     except Exception:  # noqa: BLE001 — telemetry write failures are swallowed, not surfaced.
@@ -225,7 +278,10 @@ def upload_videos(
     batch = store.create_upload_batch(user.id, started_at=_now_iso(), file_count=len(files))
 
     results: list[VideoUploadResult] = []
-    total_bytes = 0
+    attempted_bytes = 0
+    successful_bytes = 0
+    success_count = 0
+    failure_count = 0
     for upload in files:
         original_filename = upload.filename or "unnamed"
         suffix = Path(original_filename).suffix.lower()
@@ -234,6 +290,7 @@ def upload_videos(
 
         if suffix not in SUPPORTED_VIDEO_EXTENSIONS:
             upload.file.close()
+            failure_count += 1
             results.append(VideoUploadResult(
                 filename=original_filename, success=False,
                 error=f"Unsupported file type {suffix or '(none)'!r}. Supported: {', '.join(sorted(SUPPORTED_VIDEO_EXTENSIONS))}.",
@@ -250,7 +307,13 @@ def upload_videos(
         outcome = _process_one_upload(store, storage, user.id, tmp_path, original_filename)
         results.append(outcome.result)
         if outcome.file_size_bytes is not None:
-            total_bytes += outcome.file_size_bytes
+            attempted_bytes += outcome.file_size_bytes
+        if outcome.result.success:
+            success_count += 1
+            if outcome.file_size_bytes is not None:
+                successful_bytes += outcome.file_size_bytes
+        else:
+            failure_count += 1
         store.update_upload_attempt(
             attempt.id, completed_at=_now_iso(),
             duration_ms=round((time.monotonic() - attempt_started_monotonic) * 1000),
@@ -258,7 +321,13 @@ def upload_videos(
             error_code=outcome.error_code, file_size_bytes=outcome.file_size_bytes, video_id=outcome.video_id,
         )
 
-    _record_batch_completion(store, batch.id, batch_started_monotonic, total_bytes)
+    # Sequential, one file at a time, deliberately unchanged in this pass —
+    # see CHANGELOG's Milestone 3.7 telemetry-accuracy entry: this gives a
+    # clean FIFO timing baseline for the upload-benchmark comparison,
+    # concurrency stays a future benchmark question, not part of this fix.
+    _record_batch_completion(
+        store, batch.id, batch_started_monotonic, attempted_bytes, successful_bytes, success_count, failure_count,
+    )
     return VideoUploadBatchResponse(results=results)
 
 

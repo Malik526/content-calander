@@ -1,5 +1,83 @@
 # Content Automation — Changelog
 
+## 2026-09-27
+
+### Milestone 3.7 — Upload Failure Semantics + Telemetry Accuracy
+
+Fixed three real gaps a live Supabase 413 EntityTooLarge exposed during hosted-upload
+testing (two of three re-uploaded files exceeded the project's effective Storage size
+cap — see `docs/evaluations/upload-benchmarks/` for the investigation and byte sizes).
+
+**Failed uploads now leave an explicit, structured failure state, never a bare
+`DISCOVERED` row.** `media/media_storage.py`'s `create_video_from_upload` now wraps
+`storage.put()`: on failure the already-inserted video row is marked
+`status="FAILED"`/`failure_reason=<the storage error's reason_code>`/`processed_at=now`,
+then the original exception is re-raised so the route's own per-attempt failure handling
+is unchanged. This reuses `media/processing.py`'s own established local-ingestion
+failure convention rather than inventing a second one. The row is kept, not deleted (real
+evidence an upload was attempted). Known residual gap, left alone deliberately to keep
+this pass minimal: the corresponding `upload_attempts` row still isn't linked
+(`video_id`) back to this now-FAILED row — the two can only be correlated by filename/
+timing, same as before this fix.
+
+**`SupabaseStorage.put()` gained a specific `"OBJECT_TOO_LARGE"` reason_code for a 413
+response** (`storage/supabase_storage.py`), distinct from the generic `"HTTP_ERROR"` used
+for every other 4xx/5xx — lets a failed video's `failure_reason` and its attempt's
+`error_code` both say specifically "too large," which a future UI message like "File
+exceeds current storage upload limit." would key off.
+
+**A failed `upload_attempts` row now retains its true attempted `file_size_bytes`**
+instead of `None`. `api/routes/videos.py`'s `_process_one_upload` measured the size
+before calling `create_video_from_upload` but discarded it in the exception branch even
+though it was already known — silently breaking any later analysis of file size vs.
+failure. The measurement now happens outside the `try` and is passed through on both
+success and failure.
+
+**`upload_batches` gained explicit outcome/byte-accounting columns**
+(`persistence/postgres_migrations/0006_upload_failure_semantics_and_byte_accounting.sql`,
+SQLite via `_migrate_upload_batches_rename_total_bytes`/`_ensure_upload_batches_columns`
+in `persistence/content_store.py`): `success_count`/`failure_count` make a batch's
+outcome explicit without overloading `status` (which stays a pure lifecycle field —
+`IN_PROGRESS` -> `COMPLETED` — never a result field like an invented `PARTIAL_SUCCESS`).
+`total_bytes` — which silently only ever summed *successful* files' sizes, a bug, not
+documented intent, misleading for any batch containing a failure — is renamed to
+`attempted_bytes` (every file's measured size, success or fail), with a new
+`successful_bytes` column carrying the previously-intended successful-only meaning
+explicitly. **Deployment-ordering note:** unlike migrations 0004/0005 (purely additive),
+0006 renames an existing column — it must be applied at the same time as or after this
+code is deployed, never ahead of it, or the currently-running old code's
+`_record_batch_completion` (which still writes to `total_bytes`) will start failing on
+every upload the moment the rename lands.
+
+**Sequential per-file upload processing is unchanged** — still one file at a time, no
+concurrency introduced. This remains a deliberate baseline for the upload-benchmark
+comparison; concurrency stays a future benchmark question, not part of this fix (see
+`api/routes/videos.py`'s own comment at the batch-completion call site).
+
+No architecture change, no compression/transcoding, no direct-to-storage — exactly as
+scoped. Raising the Supabase bucket's `file_size_limit` (currently unset, falling back to
+the project's default) remains a separate, not-yet-made configuration decision.
+
+Tests: backend 824 passed (816 baseline + 8 net new — `tests/test_media_storage.py`
+gained 2 (storage failure marks the row FAILED with a reason_code, and with a generic
+fallback reason when the exception carries none); `tests/test_storage_supabase_error_codes.py`
+is new (3, unconditional/network-free, monkeypatched HTTP responses) proving the 413 ->
+`OBJECT_TOO_LARGE` mapping specifically, plus the unchanged 500 -> `HTTP_ERROR` and 2xx ->
+success cases; `tests/test_content_store.py` gained 2 (the SQLite rename migration against
+a legacy database, and a fresh database getting the new columns directly); `tests/test_api_videos.py`
+gained 1 real end-to-end test (a simulated 413 via a size-capped storage double,
+reproducing the real incident) and had 2 existing tests extended with
+success_count/failure_count/attempted_bytes/successful_bytes assertions;
+`tests/test_postgres_content_store.py` had 1 existing test extended and genuinely
+exercised migration 0006 against real Postgres (`POSTGRES_TEST_SCHEMA`, not the real
+`public` schema). No frontend changes — `web/` untouched, so no frontend verification was
+run.
+
+Not yet applied to real production Postgres, and not yet deployed — migration 0006 exists
+in this repo (and will be picked up automatically by the same packaging fix from the
+previous entry below, since that fix covers the whole `postgres_migrations/*.sql` glob,
+not a hardcoded file list) but requires the deployment-ordering care noted above.
+
 ## 2026-09-26
 
 ### Documentation — Split Upload Benchmark Data Into Its Own Folder

@@ -82,6 +82,7 @@ Dependencies:
 """
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -195,7 +196,21 @@ def create_video_from_upload(
     this exact content uploaded before" for its own purposes (e.g. warning
     a user before they re-upload) should query store.get_video_by_hash
     itself — this function no longer makes that decision on the caller's
-    behalf."""
+    behalf.
+
+    If storage.put() fails (Milestone 3.7 upload-failure-semantics
+    follow-up — e.g. a real Supabase 413 EntityTooLarge), the row already
+    inserted below is marked status="FAILED"/failure_reason=<the failure's
+    reason_code>/processed_at=now, then the original exception is
+    re-raised so the caller (api/routes/videos.py's _process_one_upload)
+    still records the attempt as failed exactly as before. This reuses the
+    exact same status/failure_reason convention media/processing.py's
+    local-ingestion pipeline already uses for its own failures, rather
+    than inventing a second one — before this fix, a storage failure left
+    the row looking like a normal, merely-not-yet-processed DISCOVERED
+    video forever, with no signal anything had gone wrong. The row is
+    deliberately kept, not deleted, in this pass — it is real evidence an
+    upload was attempted (filename/hash/timestamp)."""
     # Milestone 3.7 has no local-discovery-directory concept at all for a
     # hosted upload — original_path only has to be obviously not a real
     # filesystem path (get_video_by_path, used solely by the local CLI's
@@ -211,7 +226,16 @@ def create_video_from_upload(
         created_at=created_at, user_id=user_id,
     )
     key = build_storage_key(user_id, video.id, Path(original_filename).suffix)
-    storage.put(key, local_path)
+    try:
+        storage.put(key, local_path)
+    except Exception as exc:
+        store.update_video(
+            video.id,
+            status="FAILED",
+            failure_reason=getattr(exc, "reason_code", "UPLOAD_FAILED"),
+            processed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        raise
     store.update_video(video.id, storage_provider=storage.provider_name, storage_key=key, file_size_bytes=file_size_bytes)
     return store.get_video(video.id)
 

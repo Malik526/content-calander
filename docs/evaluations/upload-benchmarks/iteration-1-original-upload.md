@@ -38,9 +38,9 @@ recoverable one.
 
 ## Upload batches
 
-| batch_id | file_count | total_bytes | total_duration_ms | status |
-|---|---|---|---|---|
-| _none — table exists but has 0 rows; this upload predates the telemetry instrumentation (see above), not a data-loss finding_ | | | | |
+| batch_id | file_count | attempted_bytes | successful_bytes | success_count | failure_count | total_duration_ms | status |
+|---|---|---|---|---|---|---|---|
+| _none — table exists but has 0 rows; this upload predates the telemetry instrumentation (see above), not a data-loss finding_ | | | | | | | |
 
 ## Upload attempts
 

@@ -84,7 +84,8 @@ hosted database. This is a **read-only** workflow; nothing here writes anything.
 3. **Upload batches:**
 
    ```sql
-   select id, started_at, completed_at, file_count, total_bytes, total_duration_ms, status
+   select id, started_at, completed_at, file_count, attempted_bytes, successful_bytes,
+          success_count, failure_count, total_duration_ms, status
    from upload_batches
    where user_id = <id>
    order by started_at desc;
@@ -105,7 +106,9 @@ hosted database. This is a **read-only** workflow; nothing here writes anything.
    minimal, derive at query time" convention):
 
    `throughput_bytes_per_sec = file_size_bytes / (duration_ms / 1000)` per attempt;
-   `batch_throughput = total_bytes / (total_duration_ms / 1000)` per batch.
+   `batch_throughput = attempted_bytes / (total_duration_ms / 1000)` per batch (or
+   `successful_bytes` for a successful-only view — see the 2026-09-27 CHANGELOG entry for
+   why these are two different columns now, not one ambiguous `total_bytes`).
 
 6. **Check the real Supabase Storage bucket directly** (dashboard, or the Storage API) —
    confirm the objects actually exist at the `storage_key` paths from step 2, and note

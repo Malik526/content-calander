@@ -282,14 +282,27 @@ CREATE TABLE IF NOT EXISTS oauth_states (
 # upload *event*, and a single video could in principle be the target of
 # more than one attempt (a retried duplicate upload — see
 # media_storage.create_video_from_upload's idempotency). upload_attempts.
-# video_id is nullable because a failed attempt (unsupported file type,
-# storage error, duplicate content) never gets a video row at all.
-# duration_ms on both tables is server-side wall-clock only (time.monotonic()
-# deltas at the point this process measures it) — see
-# api/routes/videos.py's own docstring for exactly what span each duration
-# covers and why it is never labeled "network latency" (this server never
-# observes the client's actual upload transfer time; by the time a route
-# handler runs, Starlette has already fully received the multipart body).
+# video_id is nullable because an attempt can fail before any video row
+# exists at all (unsupported file type), and — as of the 2026-09-27
+# upload-failure-semantics follow-up — even a storage-layer failure whose
+# video row *does* exist (marked status="FAILED") still isn't linked back
+# here in this pass; see api/routes/videos.py's _process_one_upload for
+# why that residual gap was left alone. duration_ms on both tables is
+# server-side wall-clock only (time.monotonic() deltas at the point this
+# process measures it) — see api/routes/videos.py's own docstring for
+# exactly what span each duration covers and why it is never labeled
+# "network latency" (this server never observes the client's actual
+# upload transfer time; by the time a route handler runs, Starlette has
+# already fully received the multipart body).
+#
+# attempted_bytes/successful_bytes/success_count/failure_count (also
+# 2026-09-27): attempted_bytes replaces the old total_bytes name, which
+# silently only ever summed *successful* files' sizes — misleading for any
+# batch containing a real failure (see CHANGELOG's Milestone 3.7
+# telemetry-accuracy entry). status stays IN_PROGRESS -> COMPLETED, a pure
+# lifecycle field; success_count/failure_count carry the outcome
+# explicitly instead of overloading status with a value like
+# "PARTIAL_SUCCESS".
 SCHEMA_UPLOAD_BATCHES = """
 CREATE TABLE IF NOT EXISTS upload_batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -297,7 +310,10 @@ CREATE TABLE IF NOT EXISTS upload_batches (
     started_at TEXT NOT NULL,
     completed_at TEXT,
     file_count INTEGER NOT NULL,
-    total_bytes INTEGER NOT NULL DEFAULT 0,
+    attempted_bytes INTEGER NOT NULL DEFAULT 0,
+    successful_bytes INTEGER NOT NULL DEFAULT 0,
+    success_count INTEGER,
+    failure_count INTEGER,
     total_duration_ms INTEGER,
     status TEXT NOT NULL DEFAULT 'IN_PROGRESS'
 );
@@ -318,6 +334,37 @@ CREATE TABLE IF NOT EXISTS upload_attempts (
     error_code TEXT
 );
 """
+
+
+def _migrate_upload_batches_rename_total_bytes(conn: sqlite3.Connection) -> None:
+    """2026-09-27 upload-failure-semantics/telemetry-accuracy follow-up:
+    total_bytes silently only ever summed *successful* files' sizes (a
+    bug, not documented intent), misleading for any batch with a failure.
+    Renamed to attempted_bytes (every file's measured size, success or
+    fail); successful_bytes is a genuinely new column, added by
+    _ensure_upload_batches_columns below. ALTER TABLE ... RENAME COLUMN is
+    supported since SQLite 3.25 (2018) — no table rebuild needed since
+    this changes a name, not a type or constraint. A no-op for a brand-new
+    database, which is created with attempted_bytes directly (see
+    SCHEMA_UPLOAD_BATCHES above) and never had total_bytes to rename."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(upload_batches)").fetchall()}
+    if "total_bytes" in existing and "attempted_bytes" not in existing:
+        conn.execute("ALTER TABLE upload_batches RENAME COLUMN total_bytes TO attempted_bytes")
+
+
+_UPLOAD_BATCHES_MIGRATION_COLUMNS = {
+    "successful_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "success_count": "INTEGER",
+    "failure_count": "INTEGER",
+}
+
+
+def _ensure_upload_batches_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(upload_batches)").fetchall()}
+    for column, sql_type in _UPLOAD_BATCHES_MIGRATION_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE upload_batches ADD COLUMN {column} {sql_type}")
+
 
 # The one local bootstrap identity every pre-3.2 row (and every CLI
 # invocation, until a real auth layer exists) is attributed to. Not a
@@ -753,7 +800,10 @@ class UploadBatchRecord:
     started_at: str
     completed_at: str | None
     file_count: int
-    total_bytes: int
+    attempted_bytes: int
+    successful_bytes: int
+    success_count: int | None
+    failure_count: int | None
     total_duration_ms: int | None
     status: str
 
@@ -858,6 +908,8 @@ class ContentStore:
         # Milestone 3.7 follow-up: created after users/videos so their
         # REFERENCES clauses are meaningful from the first run.
         self._conn.executescript(SCHEMA_UPLOAD_BATCHES)
+        _migrate_upload_batches_rename_total_bytes(self._conn)
+        _ensure_upload_batches_columns(self._conn)
         self._conn.executescript(SCHEMA_UPLOAD_ATTEMPTS)
 
     def close(self) -> None:

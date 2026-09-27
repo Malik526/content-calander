@@ -22,6 +22,7 @@ from content_automation.api.dependencies import auth as auth_deps
 from content_automation.api.dependencies import storage as storage_deps
 from content_automation.persistence.content_store import ContentStore
 from content_automation.storage.local import LocalStorage
+from content_automation.storage.supabase_storage import StorageError
 
 
 @pytest.fixture
@@ -247,7 +248,11 @@ def test_upload_records_a_batch_and_one_attempt_per_file_with_timing(client, use
         assert batch.file_count == 2
         assert batch.status == "COMPLETED"
         assert batch.completed_at is not None
-        assert batch.total_bytes == len(b"one-bytes") + len(b"two-longer-bytes")
+        expected_bytes = len(b"one-bytes") + len(b"two-longer-bytes")
+        assert batch.attempted_bytes == expected_bytes
+        assert batch.successful_bytes == expected_bytes
+        assert batch.success_count == 2
+        assert batch.failure_count == 0
         assert batch.total_duration_ms is not None and batch.total_duration_ms >= 0
 
         attempts = store.get_upload_attempts_for_batch(batch.id)
@@ -286,8 +291,90 @@ def test_upload_records_failed_attempts_distinctly_from_successful_ones(client, 
 
         # a batch with a mix of successful/failed attempts still completes —
         # there is no distinct batch-level "partial failure" status; the
-        # real signal lives on each attempt (see module docstring).
+        # explicit result lives in success_count/failure_count instead
+        # (2026-09-27 telemetry-accuracy follow-up), not an invented status
+        # value like PARTIAL_SUCCESS.
         assert batch.status == "COMPLETED"
+        assert batch.success_count == 1
+        assert batch.failure_count == 1
+
+
+class _SizeLimitedStorage:
+    """Wraps a real LocalStorage but rejects anything over max_bytes with
+    a StorageError shaped exactly like SupabaseStorage's real 413
+    EntityTooLarge response — 2026-09-27 upload-failure-semantics
+    follow-up, simulating the real production incident that triggered it
+    without a real Supabase project or a genuinely huge test file."""
+
+    provider_name = "supabase"
+
+    def __init__(self, real_storage, max_bytes):
+        self._real = real_storage
+        self._max_bytes = max_bytes
+
+    def put(self, key, local_path):
+        if local_path.stat().st_size > self._max_bytes:
+            raise StorageError(f"simulated 413 for key={key!r}", reason_code="OBJECT_TOO_LARGE", http_status=413)
+        self._real.put(key, local_path)
+
+    def exists(self, key):
+        return self._real.exists(key)
+
+    def delete(self, key):
+        self._real.delete(key)
+
+    def materialize(self, key):
+        return self._real.materialize(key)
+
+
+def test_upload_storage_failure_marks_video_failed_and_preserves_size_and_counts(client, users, db_path, tmp_path):
+    """End-to-end reproduction of the real production incident (a
+    Supabase 413 EntityTooLarge on one file in a batch, another
+    succeeding): the failed video row must be explicitly FAILED (not a
+    bare DISCOVERED row), its attempt must retain the true attempted file
+    size, the successful file must be completely unaffected, and the
+    batch's success_count/failure_count/attempted_bytes/successful_bytes
+    must all reflect the real mixed outcome."""
+    user_a, _ = users
+    app_module.app.dependency_overrides[storage_deps.get_storage] = lambda: _SizeLimitedStorage(
+        LocalStorage(root=tmp_path / "objects"), max_bytes=20,
+    )
+    _act_as(user_a)
+
+    small_content = b"small ok bytes"  # 14 bytes, under the 20-byte cap
+    big_content = b"this file is deliberately over the size cap"  # over 20 bytes
+    response = client.post(
+        "/api/videos",
+        files=[("files", _mp4("small.mp4", small_content)), ("files", _mp4("big.mp4", big_content))],
+    )
+
+    body = response.json()
+    results = {r["filename"]: r for r in body["results"]}
+    assert results["small.mp4"]["success"] is True
+    assert results["big.mp4"]["success"] is False
+
+    with ContentStore(db_path=db_path) as store:
+        videos = {v.original_filename: v for v in store.list_videos_for_user(user_a.id)}
+        assert videos["small.mp4"].status == "DISCOVERED"
+        assert videos["small.mp4"].storage_provider == "supabase"
+
+        failed_video = videos["big.mp4"]
+        assert failed_video.status == "FAILED"
+        assert failed_video.failure_reason == "OBJECT_TOO_LARGE"
+        assert failed_video.processed_at is not None
+        assert failed_video.storage_provider is None  # never reached the update after put() failed
+        assert failed_video.storage_key is None
+
+        batch = store.list_upload_batches_for_user(user_a.id)[0]
+        attempts = {a.original_filename: a for a in store.get_upload_attempts_for_batch(batch.id)}
+        assert attempts["big.mp4"].status == "FAILED"
+        assert attempts["big.mp4"].error_code == "OBJECT_TOO_LARGE"
+        assert attempts["big.mp4"].file_size_bytes == len(big_content)  # preserved, not None
+
+        assert batch.success_count == 1
+        assert batch.failure_count == 1
+        assert batch.attempted_bytes == len(small_content) + len(big_content)
+        assert batch.successful_bytes == len(small_content)
 
 
 def test_upload_records_a_successful_attempt_for_re_uploaded_content_not_a_duplicate_error(client, users, db_path):

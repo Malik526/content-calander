@@ -12,6 +12,7 @@ import pytest
 from content_automation.media import media_storage
 from content_automation.persistence.content_store import ContentStore
 from content_automation.storage.local import LocalStorage
+from content_automation.storage.supabase_storage import StorageError
 
 NOW = datetime(2026, 9, 14, 8, 0, 0)
 
@@ -158,6 +159,85 @@ def test_create_video_from_upload_creates_an_owned_row_and_stores_bytes(store, s
     assert video.storage_key == f"users/{user.id}/videos/{video.id}/source.mp4"
     assert video.file_size_bytes == upload_path.stat().st_size
     assert storage.exists(video.storage_key)
+
+
+class _FailingStorage:
+    """A minimal StorageProtocol double whose put() always fails with a
+    given reason_code — 2026-09-27 upload-failure-semantics follow-up.
+    Structural typing (StorageProtocol is a Protocol, not a base class),
+    so this doesn't need to inherit from anything; only put() is exercised
+    by create_video_from_upload's failure path, so the other three
+    methods are never called in these tests."""
+
+    provider_name = "supabase"
+
+    def __init__(self, reason_code="HTTP_ERROR"):
+        self.reason_code = reason_code
+
+    def put(self, key, local_path):
+        raise StorageError(f"simulated failure for key={key!r}", reason_code=self.reason_code)
+
+    def exists(self, key):
+        raise NotImplementedError
+
+    def delete(self, key):
+        raise NotImplementedError
+
+    def materialize(self, key):
+        raise NotImplementedError
+
+
+def test_create_video_from_upload_marks_the_row_failed_when_storage_put_fails(store, tmp_path):
+    """2026-09-27 upload-failure-semantics follow-up, triggered by a real
+    Supabase 413 EntityTooLarge in production: a storage.put() failure
+    must leave the already-inserted video row explicitly FAILED, not a
+    bare DISCOVERED row indistinguishable from a normal pending upload."""
+    from content_automation.media.inspection import file_hash
+
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    upload_path = _upload_tmp_file(tmp_path)
+    failing_storage = _FailingStorage(reason_code="OBJECT_TOO_LARGE")
+
+    with pytest.raises(StorageError):
+        media_storage.create_video_from_upload(
+            store, failing_storage, user.id, local_path=upload_path, original_filename="clip.mp4",
+            file_hash=file_hash(upload_path), file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+        )
+
+    [video] = store.list_videos_for_user(user.id)
+    assert video.status == "FAILED"
+    assert video.failure_reason == "OBJECT_TOO_LARGE"
+    assert video.processed_at is not None
+    # storage/size metadata was never reached — the row stays exactly as
+    # insert_video left it for these fields.
+    assert video.storage_provider is None
+    assert video.storage_key is None
+    assert video.file_size_bytes is None
+
+
+def test_create_video_from_upload_uses_a_generic_reason_when_the_exception_has_none(store, tmp_path):
+    """getattr(exc, "reason_code", "UPLOAD_FAILED") fallback — a storage
+    backend raising a plain exception (no reason_code attribute) must
+    still mark the row FAILED with some structured value, never crash
+    while trying to record the failure itself."""
+    from content_automation.media.inspection import file_hash
+
+    class _PlainFailingStorage(_FailingStorage):
+        def put(self, key, local_path):
+            raise RuntimeError("no reason_code here")
+
+    user = store.create_user("a@example.com", "A", NOW.isoformat())
+    upload_path = _upload_tmp_file(tmp_path)
+
+    with pytest.raises(RuntimeError):
+        media_storage.create_video_from_upload(
+            store, _PlainFailingStorage(), user.id, local_path=upload_path, original_filename="clip.mp4",
+            file_hash=file_hash(upload_path), file_size_bytes=upload_path.stat().st_size, created_at=NOW.isoformat(),
+        )
+
+    [video] = store.list_videos_for_user(user.id)
+    assert video.status == "FAILED"
+    assert video.failure_reason == "UPLOAD_FAILED"
 
 
 def test_create_video_from_upload_creates_a_distinct_record_for_the_same_user_re_uploading_identical_content(

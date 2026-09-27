@@ -123,7 +123,8 @@ def test_upload_batch_and_attempt_persistence_is_isolated_per_tenant(store):
     attempt_a = store.create_upload_attempt(batch_a.id, user_a.id, "clip.mp4", started_at=NOW.isoformat())
     store.update_upload_attempt(attempt_a.id, completed_at=NOW.isoformat(), duration_ms=42, status="SUCCESS")
     store.update_upload_batch(
-        batch_a.id, completed_at=NOW.isoformat(), total_bytes=100, total_duration_ms=50, status="COMPLETED",
+        batch_a.id, completed_at=NOW.isoformat(), attempted_bytes=100, successful_bytes=100,
+        success_count=1, failure_count=0, total_duration_ms=50, status="COMPLETED",
     )
 
     batch_b = store.create_upload_batch(user_b.id, started_at=NOW.isoformat(), file_count=1)
@@ -133,7 +134,10 @@ def test_upload_batch_and_attempt_persistence_is_isolated_per_tenant(store):
 
     refreshed = store.list_upload_batches_for_user(user_a.id)[0]
     assert refreshed.status == "COMPLETED"
-    assert refreshed.total_bytes == 100
+    assert refreshed.attempted_bytes == 100
+    assert refreshed.successful_bytes == 100
+    assert refreshed.success_count == 1
+    assert refreshed.failure_count == 0
 
     attempts = store.get_upload_attempts_for_batch(batch_a.id)
     assert len(attempts) == 1
