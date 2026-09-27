@@ -7,9 +7,10 @@
 > `file_hash` is no longer a uniqueness constraint, every upload always creates a new
 > `videos` row, and `DuplicateVideoContentError` no longer exists. See ADR-0009's newest
 > addendum, `CHANGELOG.md`'s "Re-upload Architecture" entry, and
-> `docs/evaluations/productization/milestone-3.7-upload-benchmark-snapshot.md` for the
-> full record. Left unedited below per this repo's own "don't rewrite historical
-> evaluation records" convention.
+> `docs/evaluations/upload-benchmarks/` (moved there 2026-09-26 from
+> `docs/evaluations/productization/milestone-3.7-upload-benchmark-snapshot.md`, which now
+> just points there) for the full record. Left unedited below per this repo's own "don't
+> rewrite historical evaluation records" convention.
 
 ## Objective
 

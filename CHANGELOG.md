@@ -2,6 +2,23 @@
 
 ## 2026-09-26
 
+### Documentation — Split Upload Benchmark Data Into Its Own Folder
+
+Moved the upload-comparison raw data (methodology, Iteration 1, Iteration 2, comparison
+table) out of `docs/evaluations/productization/milestone-3.7-upload-benchmark-snapshot.md`
+into a new dedicated folder, `docs/evaluations/upload-benchmarks/` (`README.md`,
+`iteration-1-original-upload.md`, `iteration-2-reupload.md`, `comparison.md`) — still
+inside the existing `docs/evaluations/` tree, not a new parallel top-level location.
+Reason: milestone evaluation docs are meant to stay concise status/decision records; this
+benchmark's raw per-iteration data (captured today — see the packaging/CORS fixes above
+for why production was touched) doesn't belong growing inside one. The old file is kept
+in place as a short forward-pointing note per this repo's own "don't delete relocated
+evaluation evidence" convention (see Milestone 3.0's own doc for the precedent) rather
+than deleted. Updated `AGENTS.md`'s Milestone 3.7 bullet and
+`milestone-3.7-batch-upload-readiness.md`'s existing forward-pointing note to point at the
+new location; no other file's content changed. Documentation-only — no code, tests, or
+production data touched.
+
 ### Production Fix — Postgres Migration Packaging
 
 Fixed a second production bug found while diagnosing the CORS fix below: once DELETE
