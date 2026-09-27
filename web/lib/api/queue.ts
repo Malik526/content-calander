@@ -1,0 +1,38 @@
+/**
+ * queue.ts — typed calls to the real /api/queue endpoints Milestone 3.9
+ * (Queue + Calendar Functionality) added
+ * (src/content_automation/api/routes/queue.py). Same pattern as
+ * lib/api/cadence.ts/videos.ts: every function takes the caller's current
+ * accessToken explicitly rather than reading it itself.
+ */
+
+import { apiRequest } from "@/lib/api/client";
+import type { QueueSlotListResponse, QueueSlotResponse } from "@/lib/api/types";
+
+/** fromIso/toIso are plain "YYYY-MM-DDTHH:MM:SS"-style bounds, matching
+ * the naive-local scheduled_at convention this window is compared against
+ * server-side (see api/routes/queue.py) — the caller (QueueBoard) computes
+ * these from whatever month/window it's currently displaying. */
+export function listQueueSlots(accessToken: string | null, fromIso: string, toIso: string): Promise<QueueSlotListResponse> {
+  const params = new URLSearchParams({ from: fromIso, to: toIso });
+  return apiRequest<QueueSlotListResponse>(`/api/queue/slots?${params.toString()}`, { accessToken });
+}
+
+/** Manual assignment: claim a specific OPEN slot for a specific owned video. */
+export function assignVideoToSlot(accessToken: string | null, slotId: number, videoId: number): Promise<QueueSlotResponse> {
+  return apiRequest<QueueSlotResponse>(`/api/queue/slots/${slotId}/assign`, {
+    method: "POST", body: { video_id: videoId }, accessToken,
+  });
+}
+
+/** Automatic/FIFO assignment: claim the caller's earliest eligible OPEN slot. */
+export function assignNextOpenSlot(accessToken: string | null, videoId: number): Promise<QueueSlotResponse> {
+  return apiRequest<QueueSlotResponse>("/api/queue/assign-next", {
+    method: "POST", body: { video_id: videoId }, accessToken,
+  });
+}
+
+/** "Remove from schedule" — reopens the slot without deleting the video. */
+export function unassignSlot(accessToken: string | null, slotId: number): Promise<QueueSlotResponse> {
+  return apiRequest<QueueSlotResponse>(`/api/queue/slots/${slotId}/unassign`, { method: "POST", accessToken });
+}

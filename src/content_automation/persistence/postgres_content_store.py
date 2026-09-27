@@ -55,6 +55,7 @@ from content_automation.persistence.content_store import (
     OwnershipMismatchError,
     PlatformConnectionRecord,
     PlatformCredentialRecord,
+    PlatformPostInProgressError,
     PlatformPostRecord,
     SlotRecord,
     SlotUnavailableError,
@@ -501,6 +502,34 @@ class PostgresContentStore:
                 (video_id, slot_id),
             )
             self._conn.execute("UPDATE videos SET assigned_slot_id = %s WHERE id = %s", (slot_id, video_id))
+
+    def unassign_slot(self, slot_id: int) -> None:
+        """See ContentStore.unassign_slot — identical contract (reverse an
+        assign_slot() claim, deleting only a still-PENDING platform_posts
+        row; refuses via PlatformPostInProgressError if a real publish
+        attempt already exists)."""
+        with self._conn.transaction():
+            slot_row = self._conn.execute(
+                "SELECT status, assigned_video_id FROM content_slots WHERE id = %s", (slot_id,)
+            ).fetchone()
+            if slot_row is None or slot_row["status"] != "ASSIGNED" or slot_row["assigned_video_id"] is None:
+                raise SlotUnavailableError(f"content_slot {slot_id} is not currently assigned")
+            video_id = slot_row["assigned_video_id"]
+
+            post_rows = self._conn.execute(
+                "SELECT status FROM platform_posts WHERE video_id = %s", (video_id,)
+            ).fetchall()
+            if any(row["status"] != "PENDING" for row in post_rows):
+                raise PlatformPostInProgressError(
+                    f"video {video_id} has a platform post that is already publishing, published, "
+                    "or failed — remove it from schedule is refused to preserve that record."
+                )
+
+            self._conn.execute("DELETE FROM platform_posts WHERE video_id = %s AND status = 'PENDING'", (video_id,))
+            self._conn.execute(
+                "UPDATE content_slots SET status = 'OPEN', assigned_video_id = NULL WHERE id = %s", (slot_id,)
+            )
+            self._conn.execute("UPDATE videos SET assigned_slot_id = NULL WHERE id = %s", (video_id,))
 
     def list_content_slots_for_user(self, user_id: int, from_iso: str, to_iso: str) -> list[SlotRecord]:
         """See ContentStore.list_content_slots_for_user — identical

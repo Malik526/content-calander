@@ -1,18 +1,20 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import QueuePage from "@/app/app/queue/page";
 
 /**
- * Queue's posting-cadence sections (Milestone 3.8.1) — lib/api/cadence.ts
- * is mocked directly, same pattern as tests/routes/settings-tiktok.test.tsx
- * mocking lib/api/platforms. Replaces tests/routes/settings-scheduling.test.tsx,
- * which covered this same cadence editor when it lived on the Settings page
- * (Milestone 3.8) — the editor moved to Queue and was rebuilt as a
- * full-week grid (components/app/WeeklyRhythmEditor.tsx) with a
- * human-readable upcoming-slots preview
- * (components/app/UpcomingSchedulePreview.tsx); backend behavior and the
- * lib/api/cadence.ts contract are unchanged.
+ * Queue's "Posting rhythm" section (Milestones 3.8/3.8.1) —
+ * lib/api/cadence.ts is mocked directly, same pattern as
+ * tests/routes/settings-tiktok.test.tsx mocking lib/api/platforms.
+ * lib/api/queue.ts and lib/api/videos.ts are also mocked here (with
+ * default-empty resolved values in beforeEach) purely so QueueBoard's own
+ * independent data fetch — the real Queue section Milestone 3.9 added
+ * below this one on the same page — doesn't produce unrelated error
+ * alerts that make these cadence-focused tests' own assertions ambiguous,
+ * the same reasoning tests/routes/settings-tiktok.test.tsx already
+ * established for this component. QueueBoard's own behavior is covered by
+ * tests/routes/queue-board.test.tsx.
  */
 
 const mockSession = vi.hoisted(() => ({
@@ -30,6 +32,26 @@ const cadenceApi = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api/cadence", () => cadenceApi);
 
+const queueApi = vi.hoisted(() => ({
+  listQueueSlots: vi.fn(),
+  assignVideoToSlot: vi.fn(),
+  assignNextOpenSlot: vi.fn(),
+  unassignSlot: vi.fn(),
+}));
+vi.mock("@/lib/api/queue", () => queueApi);
+
+const videosApi = vi.hoisted(() => ({
+  listVideos: vi.fn(),
+  uploadVideos: vi.fn(),
+  deleteVideo: vi.fn(),
+}));
+vi.mock("@/lib/api/videos", () => videosApi);
+
+beforeEach(() => {
+  queueApi.listQueueSlots.mockResolvedValue({ slots: [] });
+  videosApi.listVideos.mockResolvedValue({ videos: [] });
+});
+
 afterEach(() => {
   vi.clearAllMocks();
 });
@@ -40,7 +62,6 @@ describe("QueuePage — posting rhythm", () => {
       configured: true, timezone: "America/New_York", is_active: true,
       posting_times: [{ weekday: "monday", posting_time: "09:00" }],
     });
-    cadenceApi.getUpcomingSlots.mockResolvedValue({ slots: [] });
 
     render(<QueuePage />);
 
@@ -67,7 +88,6 @@ describe("QueuePage — posting rhythm", () => {
       configured: true, timezone: "America/New_York", is_active: true,
       posting_times: [{ weekday: "friday", posting_time: "18:00" }],
     });
-    cadenceApi.getUpcomingSlots.mockResolvedValue({ slots: [] });
 
     render(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("checkbox", { name: "Friday" })).toBeChecked());
@@ -85,7 +105,6 @@ describe("QueuePage — posting rhythm", () => {
       configured: true, timezone: "America/New_York", is_active: true,
       posting_times: [{ weekday: "monday", posting_time: "09:00" }],
     });
-    cadenceApi.getUpcomingSlots.mockResolvedValue({ slots: [] });
 
     render(<QueuePage />);
     await waitFor(() => expect(screen.getByText("9:00 AM")).toBeInTheDocument());
@@ -108,7 +127,6 @@ describe("QueuePage — posting rhythm", () => {
         { weekday: "monday", posting_time: "18:00" },
       ],
     });
-    cadenceApi.getUpcomingSlots.mockResolvedValue({ slots: [] });
 
     render(<QueuePage />);
     await waitFor(() => expect(screen.getByText("6:00 PM")).toBeInTheDocument());
@@ -132,7 +150,6 @@ describe("QueuePage — posting rhythm", () => {
         { weekday: "friday", posting_time: "09:00" },
       ],
     });
-    cadenceApi.getUpcomingSlots.mockResolvedValue({ slots: [] });
 
     render(<QueuePage />);
     await waitFor(() => expect(screen.getByText("9:00 AM")).toBeInTheDocument());
@@ -154,41 +171,5 @@ describe("QueuePage — posting rhythm", () => {
         }),
       ),
     );
-  });
-
-  it("renders upcoming slots in a human-readable form, not raw ISO/OPEN", async () => {
-    cadenceApi.getCadence.mockResolvedValue({
-      configured: true, timezone: "America/New_York", is_active: true,
-      posting_times: [{ weekday: "monday", posting_time: "09:00" }],
-    });
-    cadenceApi.getUpcomingSlots.mockResolvedValue({
-      slots: [{ id: 1, scheduled_at: "2026-10-05T09:00:00", status: "OPEN", timezone: "America/New_York" }],
-    });
-
-    render(<QueuePage />);
-
-    await waitFor(() =>
-      expect(within(screen.getByRole("region", { name: "Upcoming schedule" })).queryByText("No upcoming posts scheduled yet.")).not.toBeInTheDocument(),
-    );
-    const upcoming = within(screen.getByRole("region", { name: "Upcoming schedule" }));
-    expect(screen.queryByText("2026-10-05T09:00:00")).not.toBeInTheDocument();
-    expect(upcoming.queryByText("OPEN")).not.toBeInTheDocument();
-    expect(upcoming.getByText(/Oct/)).toBeInTheDocument();
-    expect(upcoming.getByText(/9:00/)).toBeInTheDocument();
-  });
-
-  it("shows a real, non-OPEN slot status when one exists", async () => {
-    cadenceApi.getCadence.mockResolvedValue({
-      configured: true, timezone: "America/New_York", is_active: true,
-      posting_times: [{ weekday: "monday", posting_time: "09:00" }],
-    });
-    cadenceApi.getUpcomingSlots.mockResolvedValue({
-      slots: [{ id: 1, scheduled_at: "2026-10-05T09:00:00", status: "ASSIGNED", timezone: "America/New_York" }],
-    });
-
-    render(<QueuePage />);
-
-    const upcoming = within(await screen.findByRole("region", { name: "Upcoming schedule" }));
-    await waitFor(() => expect(upcoming.getByText("Assigned")).toBeInTheDocument());
   });
 });

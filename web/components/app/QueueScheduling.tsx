@@ -5,11 +5,10 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Spinner } from "@/components/ui/Spinner";
-import { UpcomingSchedulePreview } from "@/components/app/UpcomingSchedulePreview";
 import { WeeklyRhythmEditor } from "@/components/app/WeeklyRhythmEditor";
 import { ApiError } from "@/lib/api/client";
-import { getCadence, getUpcomingSlots, saveCadence } from "@/lib/api/cadence";
-import type { CadenceResponse, PostingTime, SlotResponse } from "@/lib/api/types";
+import { getCadence, saveCadence } from "@/lib/api/cadence";
+import type { CadenceResponse, PostingTime } from "@/lib/api/types";
 
 // A short curated list, not a full IANA database — Milestone 3.8 kept this
 // minimal per its own brief ("keep styling minimal"); any real IANA name
@@ -25,20 +24,23 @@ const TIMEZONE_OPTIONS = [
 ];
 
 /**
- * QueueScheduling — Queue's "Posting rhythm" + "Upcoming schedule"
- * sections (Milestone 3.8.1). Replaces components/app/SchedulingSettings.tsx,
- * which lived on the Settings page and exposed the cadence editor as a
- * one-time-at-a-time list plus a raw ISO/status dump — both replaced here
- * with WeeklyRhythmEditor (the full-week grid) and UpcomingSchedulePreview
- * (human-readable dates). Settings no longer has its own scheduling editor
- * at all, so this is the single source of truth for the cadence config —
- * see docs/decisions/0012-hosted-cadence-configuration.md, unchanged by
- * this UX pass.
+ * QueueScheduling — Queue's "Posting rhythm" section: view/edit the
+ * recurring cadence that defines future OPEN slot capacity (Milestone 3.8,
+ * rebuilt as a full week grid in 3.8.1). Milestone 3.9 (Queue + Calendar
+ * Functionality) removed this component's own "Upcoming schedule" preview
+ * — what actually occupies that capacity is now components/app/QueueBoard.tsx's
+ * job (real content_slots with assigned videos/publish status, not just a
+ * bare upcoming-slots list), per this milestone's own framing: "Cadence
+ * defines future OPEN capacity. Queue/Calendar shows what actually
+ * occupies that capacity." GET /api/cadence/slots itself is untouched and
+ * still used by GET /api/queue/slots's own read path indirectly (both
+ * ultimately read ContentStoreProtocol.list_content_slots_for_user), but
+ * this component no longer calls it directly.
  *
  * Save is still one action end to end: PUT /api/cadence both persists the
- * config and regenerates the slot horizon atomically (api/routes/cadence.py),
- * so this component just re-fetches the upcoming slots right after a
- * successful save.
+ * config and regenerates the slot horizon atomically
+ * (api/routes/cadence.py) — QueueBoard picks up the regenerated slots on
+ * its own next load, not through any callback from this component.
  *
  * Props:
  *   accessToken — threaded through exactly like every other lib/api/*
@@ -47,7 +49,6 @@ const TIMEZONE_OPTIONS = [
 export function QueueScheduling({ accessToken }: { accessToken: string | null }) {
   const [cadence, setCadence] = useState<CadenceResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [slots, setSlots] = useState<SlotResponse[]>([]);
 
   const [timezone, setTimezone] = useState(TIMEZONE_OPTIONS[0]);
   const [isActive, setIsActive] = useState(true);
@@ -64,10 +65,6 @@ export function QueueScheduling({ accessToken }: { accessToken: string | null })
       setTimezone(result.timezone ?? TIMEZONE_OPTIONS[0]);
       setIsActive(result.configured ? result.is_active : true);
       setPostingTimes(result.posting_times);
-      if (result.configured) {
-        const upcoming = await getUpcomingSlots(accessToken);
-        setSlots(upcoming.slots);
-      }
     } catch (error) {
       setLoadError(error instanceof ApiError ? error.message : "Could not load your posting schedule.");
     }
@@ -96,8 +93,6 @@ export function QueueScheduling({ accessToken }: { accessToken: string | null })
     try {
       const result = await saveCadence(accessToken, { timezone, is_active: isActive, posting_times: postingTimes });
       setCadence(result);
-      const upcoming = await getUpcomingSlots(accessToken);
-      setSlots(upcoming.slots);
     } catch (error) {
       setSaveError(error instanceof ApiError ? error.message : "Could not save your posting schedule.");
     } finally {
@@ -118,57 +113,41 @@ export function QueueScheduling({ accessToken }: { accessToken: string | null })
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <section aria-labelledby="posting-rhythm-heading">
-        <h2 id="posting-rhythm-heading" className="mb-3 text-sm font-semibold text-ink">
-          Posting rhythm
-        </h2>
-        <Card className="flex flex-col gap-4">
-          {saveError ? <ErrorState message={saveError} /> : null}
+    <Card className="flex flex-col gap-4">
+      {saveError ? <ErrorState message={saveError} /> : null}
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-col gap-1">
-              <label htmlFor="cadence-timezone" className="text-sm font-medium text-ink">
-                Timezone
-              </label>
-              <select
-                id="cadence-timezone"
-                value={timezone}
-                onChange={(event) => setTimezone(event.target.value)}
-                className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink"
-              >
-                {TIMEZONE_OPTIONS.map((tz) => (
-                  <option key={tz} value={tz}>
-                    {tz}
-                  </option>
-                ))}
-              </select>
-            </div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <label htmlFor="cadence-timezone" className="text-sm font-medium text-ink">
+            Timezone
+          </label>
+          <select
+            id="cadence-timezone"
+            value={timezone}
+            onChange={(event) => setTimezone(event.target.value)}
+            className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink"
+          >
+            {TIMEZONE_OPTIONS.map((tz) => (
+              <option key={tz} value={tz}>
+                {tz}
+              </option>
+            ))}
+          </select>
+        </div>
 
-            <label className="flex items-center gap-2 text-sm text-ink">
-              <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
-              Active
-            </label>
-          </div>
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+          Active
+        </label>
+      </div>
 
-          <WeeklyRhythmEditor postingTimes={postingTimes} onChange={setPostingTimes} />
+      <WeeklyRhythmEditor postingTimes={postingTimes} onChange={setPostingTimes} />
 
-          <div>
-            <Button type="button" onClick={() => void handleSave()} disabled={saving}>
-              {saving ? "Saving…" : "Save schedule"}
-            </Button>
-          </div>
-        </Card>
-      </section>
-
-      <section aria-labelledby="upcoming-schedule-heading">
-        <h2 id="upcoming-schedule-heading" className="mb-3 text-sm font-semibold text-ink">
-          Upcoming schedule
-        </h2>
-        <Card>
-          <UpcomingSchedulePreview slots={slots} />
-        </Card>
-      </section>
-    </div>
+      <div>
+        <Button type="button" onClick={() => void handleSave()} disabled={saving}>
+          {saving ? "Saving…" : "Save schedule"}
+        </Button>
+      </div>
+    </Card>
   );
 }

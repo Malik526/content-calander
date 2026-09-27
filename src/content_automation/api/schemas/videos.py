@@ -17,6 +17,13 @@ class VideoResponse(BaseModel):
     status: str
     file_size_bytes: int | None
     created_at: str
+    # Milestone 3.9 (Queue + Calendar Functionality): whether this video
+    # already occupies a content_slot — the Library/assign UI needs this to
+    # know which of the caller's videos are eligible to assign to a slot.
+    # Unlike storage_key/storage_provider (deliberately withheld — see this
+    # file's own module docstring), a video's own slot id has real,
+    # user-facing meaning and isn't an opaque internal identifier.
+    assigned_slot_id: int | None
 
 
 class VideoListResponse(BaseModel):

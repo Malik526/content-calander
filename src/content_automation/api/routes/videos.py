@@ -158,6 +158,7 @@ def _to_video_response(video: VideoRecord) -> VideoResponse:
     return VideoResponse(
         id=video.id, original_filename=video.original_filename, status=video.status,
         file_size_bytes=video.file_size_bytes, created_at=video.created_at,
+        assigned_slot_id=video.assigned_slot_id,
     )
 
 

@@ -24,7 +24,11 @@ import psycopg
 import pytest
 
 from content_automation.config import DATABASE_URL, POSTGRES_TEST_SCHEMA
-from content_automation.persistence.content_store import OwnershipMismatchError, SlotUnavailableError
+from content_automation.persistence.content_store import (
+    OwnershipMismatchError,
+    PlatformPostInProgressError,
+    SlotUnavailableError,
+)
 from content_automation.persistence.postgres_content_store import PostgresContentStore
 from content_automation.publishing.publisher import PublishResult, PublishStatusResult
 from content_automation.scheduling import crash_recovery, platform_post_materializer, reconciliation, slot_matcher, worker
@@ -260,6 +264,40 @@ def test_assign_slot_raises_slot_unavailable_when_not_open(store):
 
     with pytest.raises(SlotUnavailableError):
         store.assign_slot(video2.id, slot_id)
+
+
+# --- Milestone 3.9 (Queue + Calendar Functionality): unassign_slot ------
+
+def test_unassign_slot_reopens_the_slot_and_frees_the_video_against_real_postgres(store):
+    user = _user(store)
+    slot_id = _slot(store, user)
+    video = _video(store, user)
+    store.assign_slot(video.id, slot_id)
+    store.insert_platform_post_if_missing(
+        video.id, "tiktok", scheduled_at=NOW.isoformat(), created_at=NOW.isoformat(), user_id=user.id,
+    )
+
+    store.unassign_slot(slot_id)
+
+    assert store.get_slot(slot_id).status == "OPEN"
+    assert store.get_slot(slot_id).assigned_video_id is None
+    assert store.get_video(video.id).assigned_slot_id is None
+    assert store.list_platform_posts_for_video(video.id) == []
+
+
+def test_unassign_slot_preserves_a_published_platform_post_against_real_postgres(store):
+    user = _user(store)
+    slot_id = _slot(store, user)
+    video = _video(store, user)
+    store.assign_slot(video.id, slot_id)
+    post = store.insert_platform_post(video.id, "tiktok", created_at=NOW.isoformat(), user_id=user.id)
+    store.update_platform_post(post.id, updated_at=NOW_UTC.isoformat(), status="PUBLISHED")
+
+    with pytest.raises(PlatformPostInProgressError):
+        store.unassign_slot(slot_id)
+
+    assert store.get_slot(slot_id).status == "ASSIGNED"
+    assert store.get_platform_post(video.id, "tiktok").status == "PUBLISHED"
 
 
 # --- Phase 13: atomic claiming under real Postgres concurrency ----------

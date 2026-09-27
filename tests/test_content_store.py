@@ -440,6 +440,65 @@ def test_unassign_video_for_slot_then_delete_succeeds(store):
 
 
 # ---------------------------------------------------------------------------
+# unassign_slot (Milestone 3.9 — Queue's "Remove from schedule" action)
+# ---------------------------------------------------------------------------
+
+def test_unassign_slot_reopens_the_slot_and_frees_the_video(store):
+    user = store.create_user("a@example.com", "A", "2026-01-01T00:00:00")
+    store.insert_slot_if_missing("2026-09-14T10:00:00", None, None, "2026-09-01T00:00:00", user_id=user.id)
+    slot = store.find_earliest_open_slot_fifo("2000-01-01T00:00:00", user_id=user.id)
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00", user_id=user.id)
+    store.assign_slot(video.id, slot.id)
+    store.insert_platform_post_if_missing(
+        video.id, "tiktok", scheduled_at=slot.scheduled_at, created_at="2026-01-01T00:00:00", user_id=user.id,
+    )
+
+    store.unassign_slot(slot.id)
+
+    reopened = store.get_slot(slot.id)
+    assert reopened.status == "OPEN"
+    assert reopened.assigned_video_id is None
+    freed_video = store.get_video(video.id)
+    assert freed_video.assigned_slot_id is None
+    assert store.list_platform_posts_for_video(video.id) == []  # the PENDING row is gone, not orphaned
+
+
+def test_unassign_slot_raises_when_slot_is_not_assigned(store):
+    from content_automation.persistence.content_store import SlotUnavailableError
+
+    user = store.create_user("a@example.com", "A", "2026-01-01T00:00:00")
+    store.insert_slot_if_missing("2026-09-14T10:00:00", None, None, "2026-09-01T00:00:00", user_id=user.id)
+    slot = store.find_earliest_open_slot_fifo("2000-01-01T00:00:00", user_id=user.id)
+
+    with pytest.raises(SlotUnavailableError):
+        store.unassign_slot(slot.id)
+
+
+def test_unassign_slot_preserves_a_published_platform_post(store):
+    """A real publish attempt (or a completed publish) must never be
+    silently reversed — see unassign_slot's own docstring. Nothing changes:
+    the slot stays ASSIGNED, the video stays scheduled, and the
+    platform_posts row is untouched."""
+    from content_automation.persistence.content_store import PlatformPostInProgressError
+
+    user = store.create_user("a@example.com", "A", "2026-01-01T00:00:00")
+    store.insert_slot_if_missing("2026-09-14T10:00:00", None, None, "2026-09-01T00:00:00", user_id=user.id)
+    slot = store.find_earliest_open_slot_fifo("2000-01-01T00:00:00", user_id=user.id)
+    video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00", user_id=user.id)
+    store.assign_slot(video.id, slot.id)
+    post = store.insert_platform_post(video.id, "tiktok", created_at="2026-01-01T00:00:00", user_id=user.id)
+    store.update_platform_post(post.id, updated_at="2026-01-02T00:00:00", status="PUBLISHED")
+
+    with pytest.raises(PlatformPostInProgressError):
+        store.unassign_slot(slot.id)
+
+    unchanged_slot = store.get_slot(slot.id)
+    assert unchanged_slot.status == "ASSIGNED"
+    assert unchanged_slot.assigned_video_id == video.id
+    assert store.get_platform_post(video.id, "tiktok").status == "PUBLISHED"
+
+
+# ---------------------------------------------------------------------------
 # FIFO slots: nullable pillar_key (Milestone 1.3)
 # ---------------------------------------------------------------------------
 

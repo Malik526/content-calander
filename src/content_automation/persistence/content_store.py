@@ -1336,6 +1336,51 @@ class ContentStore:
                 (slot_id, video_id),
             )
 
+    def unassign_slot(self, slot_id: int) -> None:
+        """Reverse an assign_slot() claim (Milestone 3.9 — Queue's "Remove
+        from schedule" action): resets the slot back to OPEN and clears the
+        video's assigned_slot_id, deleting any still-PENDING platform_posts
+        row for that video (the materialize_platform_posts_for_assignment
+        side effect of the original assignment) so the video can be cleanly
+        reassigned to a different slot, or deleted, afterward.
+
+        Raises SlotUnavailableError if the slot is not currently ASSIGNED —
+        there is nothing to remove. Raises PlatformPostInProgressError,
+        without changing anything, if the assigned video already has a
+        platform_posts row that is PUBLISHING/PUBLISHED/FAILED — a real
+        publish attempt has already started or completed, so that record
+        (and the schedule relationship it documents) is preserved rather
+        than silently reversed; only a still-PENDING (never attempted) row
+        is safe to delete alongside the slot claim itself.
+
+        Deliberately narrower than clear_calendar.py's own
+        unassign_video_for_slot (which resets the video to CLASSIFIED for
+        the local CLI ingestion pipeline's own state machine — not
+        applicable to an already-uploaded hosted video, which has no
+        CLASSIFIED step to return to)."""
+        with self.transaction() as conn:
+            slot_row = conn.execute(
+                "SELECT status, assigned_video_id FROM content_slots WHERE id = ?", (slot_id,)
+            ).fetchone()
+            if slot_row is None or slot_row["status"] != "ASSIGNED" or slot_row["assigned_video_id"] is None:
+                raise SlotUnavailableError(f"content_slot {slot_id} is not currently assigned")
+            video_id = slot_row["assigned_video_id"]
+
+            post_rows = conn.execute(
+                "SELECT status FROM platform_posts WHERE video_id = ?", (video_id,)
+            ).fetchall()
+            if any(row["status"] != "PENDING" for row in post_rows):
+                raise PlatformPostInProgressError(
+                    f"video {video_id} has a platform post that is already publishing, published, "
+                    "or failed — remove it from schedule is refused to preserve that record."
+                )
+
+            conn.execute("DELETE FROM platform_posts WHERE video_id = ? AND status = 'PENDING'", (video_id,))
+            conn.execute(
+                "UPDATE content_slots SET status = 'OPEN', assigned_video_id = NULL WHERE id = ?", (slot_id,)
+            )
+            conn.execute("UPDATE videos SET assigned_slot_id = NULL WHERE id = ?", (video_id,))
+
     def list_content_slots_for_user(self, user_id: int, from_iso: str, to_iso: str) -> list[SlotRecord]:
         """Every content_slot owned by user_id with scheduled_at in
         [from_iso, to_iso) — the hosted cadence preview's one read query
@@ -2069,6 +2114,12 @@ class OwnershipMismatchError(Exception):
     """Raised by assign_slot() (Milestone 3.2) when a video and the
     content_slot it's being assigned to are both explicitly owned by
     different users. See assign_slot's docstring."""
+
+
+class PlatformPostInProgressError(Exception):
+    """Raised by unassign_slot() (Milestone 3.9) when the assigned video's
+    platform_posts row is no longer PENDING. See unassign_slot's
+    docstring."""
 
 
 def _raise_missing(lastrowid: int):

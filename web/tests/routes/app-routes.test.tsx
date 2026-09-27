@@ -46,15 +46,17 @@ describe("/app product routes", () => {
 
   it("renders /app/queue in its real empty state", () => {
     // Same dev-mock-session reasoning as /app/library above — no real
-    // accessToken means no real backend call, so this settles straight to
-    // "no cadence configured yet" (see components/app/QueueScheduling.tsx).
+    // accessToken means no real backend call, so both sections settle
+    // straight to their own empty states (see
+    // components/app/QueueScheduling.tsx and components/app/QueueBoard.tsx).
     render(
       <SessionProvider>
         <QueuePage />
       </SessionProvider>,
     );
     expect(screen.getByRole("heading", { level: 1, name: "Queue" })).toBeInTheDocument();
-    expect(screen.getByText("No upcoming posts scheduled yet.")).toBeInTheDocument();
+    expect(screen.getByText("No unscheduled videos — upload one in Library.")).toBeInTheDocument();
+    expect(screen.getByText("No slots in this window yet.")).toBeInTheDocument();
   });
 
   it("renders /app/settings with the current session's account details", () => {

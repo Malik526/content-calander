@@ -2,6 +2,78 @@
 
 ## 2026-09-27
 
+### Milestone 3.9 — Queue + Calendar Functionality
+
+Built the first real video-to-slot assignment/unassignment and a functional Queue/Calendar
+view on top of Milestone 3.8's cadence + slot generation and the pre-existing
+`assign_slot`/FIFO-matching primitives (previously reachable only from the CLI ingestion
+pipeline, `media/processing.py`). No schema migration — every column this milestone reads
+or writes already existed. See `docs/decisions/0013-queue-calendar-assignment-and-display-status.md`
+for the full reasoning behind each decision below.
+
+**Investigation before writing any code found a real gap between the schema and reality**:
+`content_slots.status` only ever holds `OPEN` or `ASSIGNED` in this codebase — no code path,
+including `scheduling/worker.py`, has ever written `PUBLISHED`/`FAILED` onto a slot (ADR-0005
+explicitly deferred a "Publishing-readiness state model"). The real outcome lives on
+`platform_posts.status`. **Decided: derive a separate `display_status` at the read boundary**
+(`OPEN`/`ASSIGNED`/`PUBLISHING`/`PUBLISHED`/`FAILED`, computed from the assigned video's
+`platform_posts` row) rather than starting to write those values onto `content_slots` —
+keeps `scheduling/`'s existing, already-validated publish/retry/reconciliation semantics
+completely untouched.
+
+**New backend surface:**
+- `ContentStoreProtocol.unassign_slot(slot_id)` (both backends) — the atomic reverse of
+  `assign_slot`: reopens the slot, clears the video's `assigned_slot_id`, and deletes the
+  video's `platform_posts` row *only if it's still `PENDING`* (pure intent, safe to reverse —
+  and necessary, since `insert_platform_post_if_missing` never overwrites an existing row, so
+  a stale one would silently break a future reassignment). Raises the new
+  `PlatformPostInProgressError`, without changing anything, if a real publish attempt already
+  exists (`PUBLISHING`/`PUBLISHED`/`FAILED`) — "preserve published/history records safely."
+  Narrower than the CLI's own `unassign_video_for_slot` (which resets a video to `CLASSIFIED`
+  for the local ingestion pipeline's state machine — not applicable here).
+- `scheduling/queue_assignment.py` (new module) — `assign_video_to_slot` (manual: a specific
+  slot) and `assign_video_to_next_open_slot` (automatic/FIFO: reuses
+  `scheduling.slot_matcher.select_slot_fifo` unchanged, not a second scheduler), both gluing
+  `assign_slot` + `platform_post_materializer.materialize_platform_posts_for_assignment`
+  together exactly like `media/processing.py`'s local-ingestion pipeline already does. Also
+  guards against double-booking: `VideoAlreadyScheduledError` if the video already has an
+  `assigned_slot_id` — `assign_slot` itself only checks the slot's own availability, so this
+  check was missing entirely before now.
+- `api/routes/queue.py` (new): `GET /api/queue/slots?from=&to=` (real content_slots + assigned
+  video + `display_status`/`platform_post_status`), `POST /api/queue/slots/{id}/assign`
+  (manual, `{video_id}`), `POST /api/queue/assign-next` (automatic/FIFO, `{video_id}`),
+  `POST /api/queue/slots/{id}/unassign` ("Remove from schedule"). Every route follows the
+  existing ownership convention (404 for "not yours" and "doesn't exist" alike).
+- `VideoResponse` (`GET /api/videos`) gained `assigned_slot_id` — the Queue's "Unscheduled
+  videos" list needs to know which of the caller's own videos are eligible for assignment.
+
+**Frontend (`/app/queue`):** a new "Queue" section beneath the existing "Posting rhythm"
+editor — `components/app/QueueBoard.tsx` (data/orchestration), `QueueList.tsx`/
+`QueueCalendarMonth.tsx` (the two view modes — a plain month grid with per-day status dots,
+no drag/drop), and `QueueSlotCard.tsx` (one slot's full detail + actions, reused as every
+List row and as Calendar mode's selected-slot panel, so assign/remove logic lives in exactly
+one place). An "Unscheduled videos" list offers automatic (FIFO) assignment per video; each
+`OPEN` slot offers manual assignment via its own video picker; an `ASSIGNED` slot (not yet
+published) offers "Remove from schedule" — a `PUBLISHED`/`FAILED`/`PUBLISHING` slot is
+read-only, matching the backend's own refusal. `components/app/UpcomingSchedulePreview.tsx`
+(Milestone 3.8.1) is deleted — `QueueScheduling.tsx` no longer fetches
+`GET /api/cadence/slots` itself, since `QueueBoard` now shows the real, richer picture of
+what occupies the cadence's generated capacity. `GET /api/cadence/slots` itself is untouched
+and still works, just no longer called from this page.
+
+Tests: backend 881 passed (853 baseline + 28 net new — 3 new `unassign_slot` SQLite tests,
+2 new real-Postgres `unassign_slot` tests, 6 new `scheduling/queue_assignment.py` unit tests,
+17 new `tests/test_api_queue.py` route tests covering tenant isolation, FIFO earliest-slot
+selection, double-assignment refusal, and the full assign→unassign→delete-video regression
+proof). Frontend: 107 passed (100 baseline − 2 retired upcoming-slots-preview tests in
+`queue-scheduling.test.tsx` [superseded by the new Queue section] + 9 new
+`tests/routes/queue-board.test.tsx` tests, plus 1 updated `app-routes.test.tsx` case for the
+real empty state); `npm run lint` and `npm run build` both clean.
+
+Deferred to a later milestone, per this milestone's own scope: full calendar/queue editing
+polish, drag/drop, manual one-off slot creation, rescheduling, a dedicated published-history
+browsing view, and any change to `scheduling/`'s existing FIFO/publish/retry contract.
+
 ### Milestone 3.8.1 — Scheduling UX Correction
 
 Frontend-only usability correction on top of Milestone 3.8 — no backend/schema/API

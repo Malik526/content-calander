@@ -83,6 +83,10 @@ export interface VideoResponse {
   status: string;
   file_size_bytes: number | null;
   created_at: string;
+  /** Milestone 3.9 (Queue + Calendar Functionality) — non-null means this
+   * video already occupies a content_slot; the Queue's "unscheduled
+   * videos" list filters on this rather than re-deriving it. */
+  assigned_slot_id: number | null;
 }
 
 export interface VideoListResponse {
@@ -132,4 +136,32 @@ export interface SlotResponse {
 
 export interface SlotListResponse {
   slots: SlotResponse[];
+}
+
+/**
+ * The real GET /api/queue/slots and assign/unassign response shapes
+ * (Milestone 3.9: Queue + Calendar Functionality) — see
+ * api/schemas/queue.py. Same snake_case-mirrors-the-wire convention as
+ * VideoResponse/SlotResponse above. Deliberately a separate shape from
+ * SlotResponse (Milestone 3.8's simpler cadence-preview slot) rather than
+ * widening it — this one carries the occupying video and a derived
+ * publish-state label that Milestone 3.8's cadence preview never needed.
+ */
+export interface QueueVideoSummary {
+  id: number;
+  original_filename: string;
+}
+
+export interface QueueSlotResponse {
+  id: number;
+  scheduled_at: string;
+  timezone: string | null;
+  status: string;
+  display_status: string;
+  assigned_video: QueueVideoSummary | null;
+  platform_post_status: string | null;
+}
+
+export interface QueueSlotListResponse {
+  slots: QueueSlotResponse[];
 }
