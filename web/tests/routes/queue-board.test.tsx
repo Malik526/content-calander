@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import QueuePage from "@/app/app/queue/page";
+import type { CaptionResponse } from "@/lib/api/types";
 
 /**
  * Queue's real "Queue" section (Milestone 3.9: Queue + Calendar
@@ -45,6 +46,20 @@ const videosApi = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api/videos", () => videosApi);
 
+const captionsApi = vi.hoisted(() => ({
+  getCaption: vi.fn(),
+  saveCaption: vi.fn(),
+  generateCaption: vi.fn(),
+}));
+vi.mock("@/lib/api/captions", () => captionsApi);
+
+function captionFor(videoId: number, text: string | null, overrides: Partial<CaptionResponse> = {}): CaptionResponse {
+  return {
+    video_id: videoId, caption_text: text, provenance: text ? "MANUAL" : "NONE",
+    can_generate: false, editable: true, ...overrides,
+  };
+}
+
 const OPEN_SLOT = {
   id: 1, scheduled_at: "2026-10-05T09:00:00", timezone: "America/New_York",
   status: "OPEN", display_status: "OPEN", assigned_video: null, platform_post_status: null,
@@ -53,13 +68,13 @@ const OPEN_SLOT = {
 const ASSIGNED_SLOT = {
   id: 2, scheduled_at: "2026-10-06T09:00:00", timezone: "America/New_York",
   status: "ASSIGNED", display_status: "ASSIGNED",
-  assigned_video: { id: 5, original_filename: "clip.mp4" }, platform_post_status: "PENDING",
+  assigned_video: { id: 5, original_filename: "clip.mp4", caption: captionFor(5, "Saved caption") }, platform_post_status: "PENDING",
 };
 
 const PUBLISHED_SLOT = {
   id: 3, scheduled_at: "2026-10-07T09:00:00", timezone: "America/New_York",
   status: "ASSIGNED", display_status: "PUBLISHED",
-  assigned_video: { id: 6, original_filename: "posted.mp4" }, platform_post_status: "PUBLISHED",
+  assigned_video: { id: 6, original_filename: "posted.mp4", caption: captionFor(6, "Posted caption", { editable: false }) }, platform_post_status: "PUBLISHED",
 };
 
 const UNASSIGNED_VIDEO = {
@@ -121,7 +136,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
   it("assigns the next available slot when clicked", async () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [OPEN_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [UNASSIGNED_VIDEO] });
-    queueApi.assignNextOpenSlot.mockResolvedValue({ ...OPEN_SLOT, status: "ASSIGNED", display_status: "ASSIGNED", assigned_video: { id: 10, original_filename: "raw.mp4" } });
+    queueApi.assignNextOpenSlot.mockResolvedValue({ ...OPEN_SLOT, status: "ASSIGNED", display_status: "ASSIGNED", assigned_video: { id: 10, original_filename: "raw.mp4", caption: captionFor(10, null) } });
 
     render(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Assign to next available slot" })).toBeInTheDocument());
@@ -184,6 +199,46 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     await user.click(dot);
 
     expect(screen.getByText("clip.mp4")).toBeInTheDocument();
+  });
+
+  it("shows an assigned video's saved caption", async () => {
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [ASSIGNED_SLOT] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+
+    render(<QueuePage />);
+
+    await waitFor(() => expect(screen.getByLabelText("Caption")).toHaveValue("Saved caption"));
+    expect(screen.getByText("Written by you")).toBeInTheDocument();
+  });
+
+  it("saves an edited caption and keeps the saved value", async () => {
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [ASSIGNED_SLOT] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+    captionsApi.saveCaption.mockResolvedValue(captionFor(5, "New caption #fyp"));
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByLabelText("Caption")).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.clear(screen.getByLabelText("Caption"));
+    await user.type(screen.getByLabelText("Caption"), "New caption #fyp");
+    await user.click(screen.getByRole("button", { name: "Save caption" }));
+
+    await waitFor(() => expect(captionsApi.saveCaption).toHaveBeenCalledWith("real-token", 5, "New caption #fyp"));
+    await waitFor(() => expect(screen.getByText(/Saved ·/)).toBeInTheDocument());
+    expect(screen.getByLabelText("Caption")).toHaveValue("New caption #fyp");
+    expect(screen.getByRole("button", { name: "Save caption" })).toBeDisabled();
+  });
+
+  it("shows a published video's caption read-only", async () => {
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [PUBLISHED_SLOT] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+
+    render(<QueuePage />);
+
+    await waitFor(() => expect(screen.getByLabelText("Caption")).toHaveValue("Posted caption"));
+    expect(screen.getByLabelText("Caption")).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: "Save caption" })).not.toBeInTheDocument();
   });
 
   it("shows an error state with retry when loading the queue fails", async () => {

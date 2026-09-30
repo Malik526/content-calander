@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { CaptionEditor } from "@/components/app/CaptionEditor";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import type { StatusTone } from "@/lib/status";
-import type { QueueSlotResponse, VideoResponse } from "@/lib/api/types";
+import type { CaptionResponse, QueueSlotResponse, VideoResponse } from "@/lib/api/types";
 
 const DISPLAY_STATUS_PRESENTATION: Record<string, { label: string; tone: StatusTone }> = {
   OPEN: { label: "Open", tone: "pending" },
@@ -44,74 +45,93 @@ function formatSlotDateTime(iso: string): string {
  *     which this UI mirrors by simply not offering the action once it
  *     would be refused anyway).
  *   busy — disables both actions while a request for this slot is in flight.
+ *   onSaveCaption(videoId, text) / onGenerateCaption(videoId, overwrite) —
+ *     Milestone 3.10: the assigned video's caption actions, rendered via
+ *     CaptionEditor below the slot row.
  */
 export function QueueSlotCard({
   slot,
   unassignedVideos,
   onAssign,
   onRemove,
+  onSaveCaption,
+  onGenerateCaption,
   busy = false,
 }: {
   slot: QueueSlotResponse;
   unassignedVideos: VideoResponse[];
   onAssign: (videoId: number) => void;
   onRemove: () => void;
+  onSaveCaption: (videoId: number, text: string) => Promise<CaptionResponse>;
+  onGenerateCaption: (videoId: number, overwrite: boolean) => Promise<CaptionResponse>;
   busy?: boolean;
 }) {
+  const assignedVideo = slot.assigned_video;
   const [pendingVideoId, setPendingVideoId] = useState<string>("");
   const presentation = DISPLAY_STATUS_PRESENTATION[slot.display_status] ?? { label: slot.display_status, tone: "pending" as StatusTone };
 
   return (
-    <Card className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-ink">{formatSlotDateTime(slot.scheduled_at)}</p>
-        {slot.assigned_video ? (
-          <p className="mt-0.5 truncate text-xs text-ink-muted">{slot.assigned_video.original_filename}</p>
-        ) : null}
+    <Card className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-ink">{formatSlotDateTime(slot.scheduled_at)}</p>
+          {slot.assigned_video ? (
+            <p className="mt-0.5 truncate text-xs text-ink-muted">{slot.assigned_video.original_filename}</p>
+          ) : null}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-3">
+          <Badge tone={presentation.tone}>{presentation.label}</Badge>
+
+          {slot.status === "OPEN" ? (
+            unassignedVideos.length === 0 ? (
+              <p className="text-xs text-ink-muted">No unscheduled videos</p>
+            ) : (
+              <div className="flex items-center gap-2">
+                <select
+                  value={pendingVideoId}
+                  onChange={(event) => setPendingVideoId(event.target.value)}
+                  aria-label={`Video to assign to ${formatSlotDateTime(slot.scheduled_at)}`}
+                  className="rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-ink"
+                >
+                  <option value="">Choose a video…</option>
+                  {unassignedVideos.map((video) => (
+                    <option key={video.id} value={video.id}>
+                      {video.original_filename}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!pendingVideoId || busy}
+                  onClick={() => onAssign(Number(pendingVideoId))}
+                  className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
+                >
+                  Assign
+                </button>
+              </div>
+            )
+          ) : slot.display_status === "ASSIGNED" ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onRemove}
+              className="text-xs font-medium text-ink-muted hover:text-status-danger disabled:opacity-60"
+            >
+              Remove from schedule
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-3">
-        <Badge tone={presentation.tone}>{presentation.label}</Badge>
-
-        {slot.status === "OPEN" ? (
-          unassignedVideos.length === 0 ? (
-            <p className="text-xs text-ink-muted">No unscheduled videos</p>
-          ) : (
-            <div className="flex items-center gap-2">
-              <select
-                value={pendingVideoId}
-                onChange={(event) => setPendingVideoId(event.target.value)}
-                aria-label={`Video to assign to ${formatSlotDateTime(slot.scheduled_at)}`}
-                className="rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-ink"
-              >
-                <option value="">Choose a video…</option>
-                {unassignedVideos.map((video) => (
-                  <option key={video.id} value={video.id}>
-                    {video.original_filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                disabled={!pendingVideoId || busy}
-                onClick={() => onAssign(Number(pendingVideoId))}
-                className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
-              >
-                Assign
-              </button>
-            </div>
-          )
-        ) : slot.display_status === "ASSIGNED" ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onRemove}
-            className="text-xs font-medium text-ink-muted hover:text-status-danger disabled:opacity-60"
-          >
-            Remove from schedule
-          </button>
-        ) : null}
-      </div>
+      {assignedVideo ? (
+        <CaptionEditor
+          key={assignedVideo.id}
+          caption={assignedVideo.caption}
+          onSave={(text) => onSaveCaption(assignedVideo.id, text)}
+          onGenerate={(overwrite) => onGenerateCaption(assignedVideo.id, overwrite)}
+        />
+      ) : null}
     </Card>
   );
 }

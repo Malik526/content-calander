@@ -150,6 +150,7 @@ export interface SlotListResponse {
 export interface QueueVideoSummary {
   id: number;
   original_filename: string;
+  caption: CaptionResponse;
 }
 
 export interface QueueSlotResponse {
@@ -164,4 +165,22 @@ export interface QueueSlotResponse {
 
 export interface QueueSlotListResponse {
   slots: QueueSlotResponse[];
+}
+
+/**
+ * The real GET/PUT /api/videos/{id}/caption and POST .../caption/generate
+ * response shape (Milestone 3.10: Caption Generation + Editing) — see
+ * api/schemas/captions.py. Also carried on every assigned
+ * QueueVideoSummary so the Queue needs no extra request per slot.
+ */
+export type CaptionProvenance = "NONE" | "MANUAL" | "GENERATED" | "GENERATED_EDITED";
+
+export interface CaptionResponse {
+  video_id: number;
+  caption_text: string | null;
+  provenance: CaptionProvenance;
+  /** A usable transcript exists, so generation can succeed. */
+  can_generate: boolean;
+  /** False once the video has been submitted to a platform. */
+  editable: boolean;
 }

@@ -8,9 +8,10 @@ import { Card } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Spinner } from "@/components/ui/Spinner";
 import { ApiError } from "@/lib/api/client";
+import { generateCaption, saveCaption } from "@/lib/api/captions";
 import { assignNextOpenSlot, assignVideoToSlot, listQueueSlots, unassignSlot } from "@/lib/api/queue";
 import { listVideos } from "@/lib/api/videos";
-import type { QueueSlotResponse, VideoResponse } from "@/lib/api/types";
+import type { CaptionResponse, QueueSlotResponse, VideoResponse } from "@/lib/api/types";
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
@@ -44,6 +45,11 @@ function monthWindow(monthCursor: Date): { from: string; to: string } {
  * (one slot's full detail + actions — used as every List row and as
  * Calendar mode's selected-slot detail panel, so assign/remove logic
  * lives in exactly one place).
+ *
+ * Milestone 3.10: each assigned slot also shows its video's caption
+ * (CaptionEditor, inside QueueSlotCard). Caption saves patch the one
+ * affected slot in place rather than reloading the whole board, so other
+ * slots' unsaved caption drafts survive.
  *
  * No drag/drop, no per-slot editing beyond assign/remove, no manual
  * one-off slot creation — all explicitly deferred to a later milestone
@@ -129,6 +135,26 @@ export function QueueBoard({ accessToken }: { accessToken: string | null }) {
     }
   }
 
+  // Caption errors propagate to CaptionEditor, which shows them inline.
+  function applyCaption(result: CaptionResponse): CaptionResponse {
+    setSlots((current) =>
+      current?.map((slot) =>
+        slot.assigned_video?.id === result.video_id
+          ? { ...slot, assigned_video: { ...slot.assigned_video, caption: result } }
+          : slot,
+      ) ?? current,
+    );
+    return result;
+  }
+
+  async function handleSaveCaption(videoId: number, text: string): Promise<CaptionResponse> {
+    return applyCaption(await saveCaption(accessToken, videoId, text));
+  }
+
+  async function handleGenerateCaption(videoId: number, overwrite: boolean): Promise<CaptionResponse> {
+    return applyCaption(await generateCaption(accessToken, videoId, overwrite));
+  }
+
   if (loadError) {
     return <ErrorState message={loadError} onRetry={load} />;
   }
@@ -200,6 +226,8 @@ export function QueueBoard({ accessToken }: { accessToken: string | null }) {
           busySlotId={busySlotId}
           onAssign={(slotId, videoId) => void handleAssign(slotId, videoId)}
           onRemove={(slotId) => void handleRemove(slotId)}
+          onSaveCaption={handleSaveCaption}
+          onGenerateCaption={handleGenerateCaption}
         />
       ) : (
         <div className="flex flex-col gap-4">
@@ -218,6 +246,8 @@ export function QueueBoard({ accessToken }: { accessToken: string | null }) {
               busy={busySlotId === selectedSlot.id}
               onAssign={(videoId) => void handleAssign(selectedSlot.id, videoId)}
               onRemove={() => void handleRemove(selectedSlot.id)}
+              onSaveCaption={handleSaveCaption}
+              onGenerateCaption={handleGenerateCaption}
             />
           ) : (
             <p className="text-sm text-ink-muted">Select a date&apos;s slot to see its details.</p>

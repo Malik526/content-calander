@@ -1,5 +1,41 @@
 # Content Automation — Changelog
 
+## 2026-09-30
+
+### Milestone 3.10 — Caption Generation + Editing
+
+Made each video's publishing caption durable, user-controllable product data that the TikTok
+publisher consumes. No schema migration. See
+`docs/decisions/0014-canonical-caption-ownership-and-provenance.md` and
+`docs/evaluations/productization/milestone-3.10-caption-generation-editing.md`.
+
+- **Source of truth:** the existing video-level `videos.caption_text` stays canonical (keyed
+  by `videos.id`, so identical-hash records are captioned independently). New
+  `publishing/caption_resolution.resolve_publish_caption(video, platform)` is now the one
+  caption lookup in `scheduling/publish_tiktok.py`. It is the seam for a future per-platform
+  override on `platform_posts`; behavior is unchanged today.
+- **Provenance:** `caption_source` gains `transcript_auto_edited` (generated text later
+  edited by the user). The API exposes only `NONE`/`MANUAL`/`GENERATED`/`GENERATED_EDITED`.
+- **Generation boundary:** new `media/caption_generation.py` contract
+  (transcript/metadata/platform/preferences → text + source + metadata) backed only by the
+  existing `transcript_auto` derivation. Hosted uploads have no transcript, so generation is
+  unavailable for them (`can_generate: false`). This is an intentional limitation; no
+  transcription pipeline was built.
+- **Editing rules** (`media/caption_editing.py`): regeneration over existing text requires
+  `overwrite=true` (409 otherwise). The caption locks (409) once a platform post is
+  `PUBLISHING`/`PUBLISHED` or has a `platform_post_id`. `PENDING` stays editable, and the
+  worker reads the saved caption at execution time.
+- **API:** `GET`/`PUT /api/videos/{id}/caption` and `POST /api/videos/{id}/caption/generate`
+  (authenticated; cross-user access is 404; no transcript exposed). `GET /api/queue/slots`
+  now includes `assigned_video.caption`. New `config.CAPTION_TEXT_MAX_CHARS` (10000) is a
+  sanity limit on the canonical caption only.
+- **Queue UI:** new `components/app/CaptionEditor.tsx` in every assigned `QueueSlotCard`
+  (textarea, Save, Generate/Regenerate with an explicit "Replace caption" confirm, read-only
+  once locked). `lib/api/captions.ts` added.
+- **Verification:** backend 922 passed (was 881), including the Postgres-backed tests;
+  frontend 115 passed (was 107); lint and production build clean. No live deployed-stack or
+  TikTok check.
+
 ## 2026-09-27
 
 ### Milestone 3.9 — Queue + Calendar Functionality

@@ -8,7 +8,7 @@ What it does:
   python3 publish_tiktok.py --video-id <id>
 
   load video from SQLite -> resolve its local processed MP4 -> load stored
-  caption -> verify media/file exists -> query TikTok creator/account
+  caption (publishing.caption_resolution — Milestone 3.10) -> verify media/file exists -> query TikTok creator/account
   capabilities -> initialize upload -> upload local MP4 -> publish
   privately -> obtain publish ID -> poll/check publish status -> persist
   outcome in platform_posts.
@@ -70,6 +70,7 @@ from content_automation.config import MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_MINUTES,
 from content_automation.media import inspection as media
 from content_automation.media.media_storage import materialize_canonical_media
 from content_automation.persistence.content_store import ContentStore, PlatformPostRecord, VideoRecord
+from content_automation.publishing.caption_resolution import resolve_publish_caption
 from content_automation.publishing.publisher import PublishError, Publisher, PublishStatusResult
 from content_automation.storage.protocol import StorageProtocol
 from content_automation.scheduling import retry_classification
@@ -100,7 +101,7 @@ def _validate_ready_to_publish(video: VideoRecord, media_path: Path) -> None:
     validates identically either way."""
     if not media_path.exists():
         raise PublishTikTokError(f"Local media file for video {video.id} not found ({media_path!r}).")
-    if not video.caption_text:
+    if not resolve_publish_caption(video, "tiktok"):
         raise PublishTikTokError(f"Video {video.id} has no stored caption_text — cannot publish without one.")
 
     info = media.MediaInfo(
@@ -252,7 +253,7 @@ def _validate_and_submit(
         raise
 
     try:
-        result = publisher.publish(media_path, video.caption_text)
+        result = publisher.publish(media_path, resolve_publish_caption(video, "tiktok"))
     except PublishError as exc:
         _schedule_retry_or_fail(store, record, exc)
         raise PublishTikTokError(f"Submission failed: {exc}") from exc

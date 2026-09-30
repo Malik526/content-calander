@@ -62,6 +62,8 @@ The default `process_content.py` pipeline is fully local and requires no API key
 
 No caption approval state machine (`DRAFT`/`APPROVED`/`AUTO`) yet — deliberately deferred, would not simplify anything without a UI. No `platform_posts` table yet either — video:post stays 1:1 until TikTok publishing actually exists; see ADR-0005 for the reasoning.
 
+**Milestone 3.10 (hosted caption editing):** the canonical `videos.caption_text` is now editable per video from the Queue (`GET`/`PUT /api/videos/{id}/caption`, `POST .../caption/generate`; `media/caption_editing.py`, `media/caption_generation.py`). `caption_source` gains `transcript_auto_edited` for generated-then-edited text. A user-cleared caption is stored as `NULL` + `manual`, so this pipeline's caption stage still never overwrites it. Regeneration needs explicit `overwrite`. The caption locks once a platform post is submitted. Publishers read it via `publishing/caption_resolution.resolve_publish_caption` (the per-platform override seam). Generation only works where a transcript exists, which today means CLI-ingested videos, not hosted uploads. See ADR-0014.
+
 ## Active Pillar Strategy (Provisional, `ROUTING_MODE=pillar` only)
 
 As of 2026-09-12, `config.CONTENT_TYPES` is a **provisional** engineering-focused pillar set, replacing the earlier agency-oriented one, to test classification/routing against the content actually being produced now:

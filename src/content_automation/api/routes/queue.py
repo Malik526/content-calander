@@ -53,6 +53,7 @@ from datetime import timezone as dt_timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from content_automation.api.dependencies.auth import get_current_user, get_store
+from content_automation.api.routes.captions import to_caption_response
 from content_automation.api.schemas.queue import (
     AssignNextRequest,
     AssignToSlotRequest,
@@ -90,7 +91,9 @@ def _to_queue_slot_response(store: ContentStoreProtocol, slot: SlotRecord) -> Qu
     if slot.assigned_video_id is not None:
         video = store.get_video(slot.assigned_video_id)
         if video is not None:
-            assigned_video = QueueVideoSummary(id=video.id, original_filename=video.original_filename)
+            assigned_video = QueueVideoSummary(
+                id=video.id, original_filename=video.original_filename, caption=to_caption_response(store, video),
+            )
 
         posts = store.list_platform_posts_for_video(slot.assigned_video_id)
         statuses = {p.status for p in posts}

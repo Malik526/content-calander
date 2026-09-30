@@ -199,6 +199,8 @@ Run tests with `python3 -m pytest`.
 
 - **`transcript_auto`** (default) — `caption.build_caption_from_transcript()` normalizes the transcript's whitespace and stores it as the caption candidate (no truncation — platform-specific length limits belong at the future per-platform publisher, not in the canonical stored caption). Falls back to `caption_source = "none"` if transcription never produced a transcript.
 - **`manual`** — reserved for a future editing UI; this pipeline never writes `caption_text` in this mode, only records `caption_source = "manual"` so the stage doesn't re-run. An existing manual caption is never overwritten.
+
+Captions are also editable per video from the hosted Queue (Milestone 3.10 — `GET`/`PUT /api/videos/{id}/caption`, `POST /api/videos/{id}/caption/generate`); see `docs/decisions/0014-canonical-caption-ownership-and-provenance.md`.
 - **`none`** — no caption is generated.
 
 ---

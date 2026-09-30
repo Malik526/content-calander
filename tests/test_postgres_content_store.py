@@ -300,6 +300,22 @@ def test_unassign_slot_preserves_a_published_platform_post_against_real_postgres
     assert store.get_platform_post(video.id, "tiktok").status == "PUBLISHED"
 
 
+def test_captions_are_independent_per_record_for_identical_hashes_against_real_postgres(store):
+    """Milestone 3.10: caption state follows videos.id, not file_hash."""
+    from content_automation.media.caption_editing import save_caption
+
+    user = _user(store)
+    video_a = _video(store, user, name="a", file_hash="same-bytes")
+    video_b = _video(store, user, name="b", file_hash="same-bytes")
+
+    save_caption(store, video_a, "caption for A")
+    save_caption(store, store.get_video(video_b.id), "a completely different caption")
+
+    assert store.get_video(video_a.id).caption_text == "caption for A"
+    assert store.get_video(video_b.id).caption_text == "a completely different caption"
+    assert store.get_video(video_a.id).caption_source == "manual"
+
+
 # --- Phase 13: atomic claiming under real Postgres concurrency ----------
 
 def test_two_real_connections_racing_to_claim_exactly_one_wins():

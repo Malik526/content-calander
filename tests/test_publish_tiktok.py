@@ -445,3 +445,43 @@ def test_poll_only_checks_status_without_submitting(store, processed_video):
 
     assert len(publisher.publish_calls) == 1  # unchanged
     assert len(publisher.status_calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# Milestone 3.10 — the saved caption is what gets published
+# ---------------------------------------------------------------------------
+
+def test_publish_uses_caption_saved_after_scheduling(store, processed_video):
+    """A caption edited after the PENDING row exists is the one sent —
+    the worker path re-reads the video at execution time."""
+    from content_automation.media.caption_editing import save_caption
+
+    store.insert_platform_post(processed_video.id, "tiktok", created_at="2026-01-01T00:00:00")
+    save_caption(store, processed_video, "edited before publish")
+    publisher = FakePublisher()
+
+    pt.publish_video(store, processed_video.id, publisher)
+
+    assert publisher.publish_calls[0][1] == "edited before publish"
+
+
+def test_publish_sends_each_identical_hash_records_own_caption(store, processed_video):
+    other = store.insert_video(processed_video.file_hash, "copy.mp4", "/incoming/copy.mp4", "2026-01-01T00:00:00")
+    store.update_video(
+        other.id,
+        canonical_media_path=processed_video.canonical_media_path,
+        container="mp4", video_codec="h264", audio_codec="aac",
+        width=576, height=1024, fps=30.0, duration_seconds=20.0, file_size_bytes=processed_video.file_size_bytes,
+        caption_text="a completely different caption", caption_source="manual", status="ASSIGNED",
+    )
+    publisher = FakePublisher()
+
+    pt.publish_video(store, other.id, publisher)
+
+    assert publisher.publish_calls[0][1] == "a completely different caption"
+
+
+def test_resolve_publish_caption_returns_canonical_caption(processed_video):
+    from content_automation.publishing.caption_resolution import resolve_publish_caption
+
+    assert resolve_publish_caption(processed_video, "tiktok") == "hello world"

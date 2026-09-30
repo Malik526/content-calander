@@ -1,5 +1,5 @@
 import { QueueSlotCard } from "@/components/app/QueueSlotCard";
-import type { QueueSlotResponse, VideoResponse } from "@/lib/api/types";
+import type { CaptionResponse, QueueSlotResponse, VideoResponse } from "@/lib/api/types";
 
 /**
  * QueueList — the "list toggle" alongside QueueCalendarMonth (Milestone
@@ -14,12 +14,16 @@ export function QueueList({
   busySlotId,
   onAssign,
   onRemove,
+  onSaveCaption,
+  onGenerateCaption,
 }: {
   slots: QueueSlotResponse[];
   unassignedVideos: VideoResponse[];
   busySlotId: number | null;
   onAssign: (slotId: number, videoId: number) => void;
   onRemove: (slotId: number) => void;
+  onSaveCaption: (videoId: number, text: string) => Promise<CaptionResponse>;
+  onGenerateCaption: (videoId: number, overwrite: boolean) => Promise<CaptionResponse>;
 }) {
   if (slots.length === 0) {
     return <p className="text-sm text-ink-muted">No slots in this window yet.</p>;
@@ -35,6 +39,8 @@ export function QueueList({
             busy={busySlotId === slot.id}
             onAssign={(videoId) => onAssign(slot.id, videoId)}
             onRemove={() => onRemove(slot.id)}
+            onSaveCaption={onSaveCaption}
+            onGenerateCaption={onGenerateCaption}
           />
         </li>
       ))}

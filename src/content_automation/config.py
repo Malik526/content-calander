@@ -147,6 +147,12 @@ ROUTING_MODE = os.getenv("CONTENT_CALENDAR_ROUTING_MODE", "fifo")
 # ---------------------------------------------------------------------------
 CAPTION_MODE = os.getenv("CONTENT_CALENDAR_CAPTION_MODE", "transcript_auto")
 
+# Upper bound on a user-saved canonical caption (Milestone 3.10, the
+# captions API). A sanity limit only, deliberately well above any single
+# platform's limit — platform limits (e.g. TIKTOK_MAX_CAPTION_UTF16_UNITS
+# below) are enforced at each publisher boundary, not on the canonical text.
+CAPTION_TEXT_MAX_CHARS = 10000
+
 # ---------------------------------------------------------------------------
 # Posting cadence and pillar allocation strategy
 # Replaces the old fixed WEEKLY_SCHEDULE / FIFTH_SUNDAY_CONTENT_TYPE mapping,

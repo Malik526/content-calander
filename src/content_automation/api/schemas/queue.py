@@ -4,6 +4,8 @@ dataclass" convention as schemas/videos.py/cadence.py."""
 
 from pydantic import BaseModel
 
+from content_automation.api.schemas.captions import CaptionResponse
+
 
 class QueueVideoSummary(BaseModel):
     """Just enough to identify the video occupying a slot — same
@@ -13,6 +15,10 @@ class QueueVideoSummary(BaseModel):
 
     id: int
     original_filename: str
+    # Milestone 3.10 — the video's canonical publishing caption, same shape
+    # as GET /api/videos/{id}/caption, so the Queue can show/edit it
+    # without a second request per slot.
+    caption: CaptionResponse
 
 
 class QueueSlotResponse(BaseModel):
