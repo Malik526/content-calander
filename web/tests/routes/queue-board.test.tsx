@@ -56,7 +56,7 @@ vi.mock("@/lib/api/captions", () => captionsApi);
 function captionFor(videoId: number, text: string | null, overrides: Partial<CaptionResponse> = {}): CaptionResponse {
   return {
     video_id: videoId, caption_text: text, provenance: text ? "MANUAL" : "NONE",
-    can_generate: false, editable: true, ...overrides,
+    can_generate: false, editable: true, hashtags: [], ...overrides,
   };
 }
 

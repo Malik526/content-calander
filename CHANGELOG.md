@@ -2,6 +2,34 @@
 
 ## 2026-09-30
 
+### Milestone 3.10.1 — Caption Hashtag Parsing + Structured Metadata
+
+Hashtags are now derived deterministically from the free-form caption and stored as
+structured internal metadata. The exact `videos.caption_text` string stays the publishing
+source of truth, and TikTok still receives it unchanged via `resolve_publish_caption`.
+
+- **Parser:** new `media/hashtags.py` `extract_hashtags()` — character scanning, no regex or
+  LLM. Tag characters are Unicode letters/numbers, `_` and combining marks (`#développement`,
+  `#東京`, `#हिंदी`). It ignores a bare `#`, mid-word `#` (`C#`, `page#section`) and all-digit
+  tags (`#1`). Chained tags split (`#coding#saas`). Output keeps caption order, exact casing
+  and duplicate occurrences (no dedup convention exists).
+- **Persistence:** new relational `video_hashtags` table (`video_id`, `position`, `hashtag`),
+  following this schema's no-JSON-columns convention. SQLite creates it on store open;
+  Postgres uses additive migration
+  `postgres_migrations/0008_add_video_hashtags.sql`, auto-applied when a
+  `PostgresContentStore` opens.
+- **Sync:** new `ContentStoreProtocol.set_video_caption(...)` (both backends) writes
+  `caption_text`/`caption_source` and replaces the video's hashtag rows in one transaction.
+  Every caption write goes through it: save, generate, regenerate, clear (rows removed),
+  and the CLI pipeline's `transcript_auto` step. `delete_video` removes the rows too.
+  Provenance behavior is unchanged.
+- **API:** caption responses (and `assigned_video.caption` on Queue slots) gain read-only
+  `hashtags`. Request bodies and the editor UI are unchanged.
+- **Not backfilled:** videos captioned before this change have no hashtag rows until their
+  caption is next written.
+- **Verification:** backend 956 passed (was 922), including Postgres-backed tests with
+  migration 0008; frontend 115 passed; lint and build clean.
+
 ### Milestone 3.10 — Caption Generation + Editing
 
 Made each video's publishing caption durable, user-controllable product data that the TikTok

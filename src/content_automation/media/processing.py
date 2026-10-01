@@ -77,6 +77,7 @@ from content_automation.config import (
     SUPPORTED_VIDEO_EXTENSIONS,
 )
 from content_automation.media import caption, classification
+from content_automation.media.hashtags import extract_hashtags
 from content_automation.media import inspection as media
 from content_automation.media import media_storage
 from content_automation.media import transcription
@@ -265,7 +266,8 @@ def process_one(
         if CAPTION_MODE == "transcript_auto":
             if video.transcript is not None:
                 text = caption.build_caption_from_transcript(video.transcript)
-                store.update_video(video.id, caption_text=text, caption_source="transcript_auto")
+                # set_video_caption keeps video_hashtags in sync (Milestone 3.10.1).
+                store.set_video_caption(video.id, text, "transcript_auto", extract_hashtags(text))
                 video = store.get_video_by_hash(file_hash)
             elif video.status == "TRANSCRIPTION_FAILED":
                 # Documented fallback: transcript permanently unavailable

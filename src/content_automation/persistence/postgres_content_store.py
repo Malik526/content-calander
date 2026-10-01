@@ -403,6 +403,30 @@ class PostgresContentStore:
         values = [*fields.values(), video_id]
         self._conn.execute(f"UPDATE videos SET {columns} WHERE id = %s", values)
 
+    def set_video_caption(
+        self, video_id: int, caption_text: str | None, caption_source: str | None, hashtags: list[str],
+    ) -> None:
+        """See ContentStore.set_video_caption — identical contract."""
+        with self._conn.transaction():
+            self._conn.execute(
+                "UPDATE videos SET caption_text = %s, caption_source = %s WHERE id = %s",
+                (caption_text, caption_source, video_id),
+            )
+            self._conn.execute("DELETE FROM video_hashtags WHERE video_id = %s", (video_id,))
+            if hashtags:
+                with self._conn.cursor() as cur:
+                    cur.executemany(
+                        "INSERT INTO video_hashtags (video_id, position, hashtag) VALUES (%s, %s, %s)",
+                        [(video_id, position, tag) for position, tag in enumerate(hashtags)],
+                    )
+
+    def list_video_hashtags(self, video_id: int) -> list[str]:
+        """See ContentStore.list_video_hashtags — identical contract."""
+        rows = self._conn.execute(
+            "SELECT hashtag FROM video_hashtags WHERE video_id = %s ORDER BY position", (video_id,)
+        ).fetchall()
+        return [row["hashtag"] for row in rows]
+
     def list_videos_for_user(self, user_id: int) -> list[VideoRecord]:
         """See ContentStore.list_videos_for_user — identical contract."""
         rows = self._conn.execute(
@@ -716,4 +740,5 @@ class PostgresContentStore:
         upload_attempts.video_id, then delete the videos row)."""
         with self._conn.transaction():
             self._conn.execute("UPDATE upload_attempts SET video_id = NULL WHERE video_id = %s", (video_id,))
+            self._conn.execute("DELETE FROM video_hashtags WHERE video_id = %s", (video_id,))
             self._conn.execute("DELETE FROM videos WHERE id = %s", (video_id,))

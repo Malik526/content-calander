@@ -316,6 +316,27 @@ def test_captions_are_independent_per_record_for_identical_hashes_against_real_p
     assert store.get_video(video_a.id).caption_source == "manual"
 
 
+def test_video_hashtags_sync_with_caption_against_real_postgres(store):
+    """Milestone 3.10.1: set_video_caption replaces derived hashtag rows
+    atomically; identical-hash records stay independent; delete cleans up."""
+    from content_automation.media.caption_editing import save_caption
+
+    user = _user(store)
+    video_a = _video(store, user, name="a", file_hash="same-bytes")
+    video_b = _video(store, user, name="b", file_hash="same-bytes")
+
+    save_caption(store, video_a, "first\n\n#coding #東京")
+    save_caption(store, video_b, "#other")
+    assert store.list_video_hashtags(video_a.id) == ["#coding", "#東京"]
+    assert store.list_video_hashtags(video_b.id) == ["#other"]
+
+    save_caption(store, store.get_video(video_a.id), "")
+    assert store.list_video_hashtags(video_a.id) == []
+
+    store.delete_video(video_b.id)
+    assert store.list_video_hashtags(video_b.id) == []
+
+
 # --- Phase 13: atomic claiming under real Postgres concurrency ----------
 
 def test_two_real_connections_racing_to_claim_exactly_one_wins():

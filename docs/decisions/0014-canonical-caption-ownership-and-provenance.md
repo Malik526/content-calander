@@ -78,3 +78,19 @@ transcript source for hosted media, in behind the same contract.
   add a scheduling-time gate.
 - Per-platform captions, caption approval states, version history, and smarter generation
   remain future scope (Milestone 5+).
+
+## Addendum — Milestone 3.10.1: derived hashtag metadata
+
+`videos.caption_text` stays the exact publishing truth. Hashtags are derived from it
+deterministically (`media/hashtags.py`) and **persisted**, not derived on read. Future
+analytics and creator-history work needs a queryable historical dataset, and a read-time
+parse would silently change past results whenever the parser changes.
+
+Storage is a relational `video_hashtags` table (`video_id`, `position`, `hashtag`), keeping
+the schema's existing "no JSON columns" convention (see the posting-cadence tables). It is not
+a column on `videos`. The only write path is `ContentStoreProtocol.set_video_caption`, which
+updates the caption and replaces its hashtag rows in one transaction, so derived data cannot
+drift from the text. Occurrences are kept in order with duplicates and original casing.
+Normalization (case folding, dedup) is left to consumers, because it can be applied later but
+not undone. Rows are not backfilled for captions written before 3.10.1. Hashtags are never
+sent to a platform separately; TikTok recognizes them inside the caption string.

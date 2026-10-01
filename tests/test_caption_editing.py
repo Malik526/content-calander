@@ -181,3 +181,51 @@ def test_submitted_platform_post_locks_caption(store, fields):
     with pytest.raises(ce.CaptionLockedError):
         ce.regenerate_caption(store, video, overwrite=True)
     assert store.get_video(video.id).caption_text == "sent"
+
+
+# --- derived hashtags (Milestone 3.10.1) --------------------------------------
+
+def test_saved_caption_persists_hashtags_and_exact_text(store):
+    caption = "I built this today.\n\n#coding  #saas\n#buildinpublic"
+    saved = ce.save_caption(store, _video(store), caption)
+    assert saved.caption_text == caption
+    assert store.list_video_hashtags(saved.id) == ["#coding", "#saas", "#buildinpublic"]
+
+
+def test_editing_caption_replaces_hashtags(store):
+    video = ce.save_caption(store, _video(store), "first #old #stale")
+    ce.save_caption(store, video, "second #new")
+    assert store.list_video_hashtags(video.id) == ["#new"]
+
+
+def test_clearing_caption_clears_hashtags(store):
+    video = ce.save_caption(store, _video(store), "text #tag")
+    ce.save_caption(store, video, "")
+    assert store.list_video_hashtags(video.id) == []
+
+
+def test_generated_and_regenerated_captions_sync_hashtags(store):
+    video = _video(store, transcript="talking about #python today")
+    generated = ce.regenerate_caption(store, video, overwrite=False)
+    assert store.list_video_hashtags(video.id) == ["#python"]
+
+    ce.save_caption(store, generated, "no tags now")
+    assert store.list_video_hashtags(video.id) == []
+
+    ce.regenerate_caption(store, store.get_video(video.id), overwrite=True)
+    assert store.list_video_hashtags(video.id) == ["#python"]
+
+
+def test_identical_hash_records_keep_independent_hashtags(store):
+    video_a = _video(store, "a", file_hash="xyz")
+    video_b = _video(store, "b", file_hash="xyz")
+    ce.save_caption(store, video_a, "#alpha")
+    ce.save_caption(store, video_b, "#beta #gamma")
+    assert store.list_video_hashtags(video_a.id) == ["#alpha"]
+    assert store.list_video_hashtags(video_b.id) == ["#beta", "#gamma"]
+
+
+def test_delete_video_removes_its_hashtags(store):
+    video = ce.save_caption(store, _video(store), "#gone")
+    store.delete_video(video.id)
+    assert store.list_video_hashtags(video.id) == []

@@ -20,6 +20,10 @@ class CaptionResponse(BaseModel):
     can_generate: bool
     # False once the video has been submitted to a platform.
     editable: bool
+    # Milestone 3.10.1 — read-only structured metadata derived from
+    # caption_text (media.hashtags), in caption order, duplicates kept.
+    # Never an input: hashtags are only ever edited as part of caption_text.
+    hashtags: list[str]
 
 
 class CaptionUpdateRequest(BaseModel):

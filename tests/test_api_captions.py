@@ -95,7 +95,7 @@ def test_get_caption_for_new_upload(client, users, db_path):
     _act_as(users[0])
     video_id = _video(db_path, users[0])
     body = client.get(f"/api/videos/{video_id}/caption").json()
-    assert body == {"video_id": video_id, "caption_text": None, "provenance": "NONE", "can_generate": False, "editable": True}
+    assert body == {"video_id": video_id, "caption_text": None, "provenance": "NONE", "can_generate": False, "editable": True, "hashtags": []}
 
 
 def test_manual_caption_persists_across_requests(client, users, db_path):
@@ -194,6 +194,22 @@ def test_caption_is_locked_after_submission(client, users, db_path):
     assert _stored(db_path, video_id).caption_text == "sent"
 
 
+# --- derived hashtags (Milestone 3.10.1) ---------------------------------------------
+
+def test_caption_api_exposes_persisted_hashtags_read_only(client, users, db_path):
+    _act_as(users[0])
+    video_id = _video(db_path, users[0])
+    caption = "Built today.\n\n#coding #saas"
+
+    saved = client.put(f"/api/videos/{video_id}/caption", json={"caption_text": caption, "hashtags": ["#ignored"]}).json()
+    assert saved["caption_text"] == caption
+    assert saved["hashtags"] == ["#coding", "#saas"]
+
+    assert client.get(f"/api/videos/{video_id}/caption").json()["hashtags"] == ["#coding", "#saas"]
+    cleared = client.put(f"/api/videos/{video_id}/caption", json={"caption_text": ""}).json()
+    assert cleared["hashtags"] == []
+
+
 # --- Queue exposure ----------------------------------------------------------------
 
 def test_assigned_queue_item_exposes_its_caption(client, users, db_path):
@@ -211,5 +227,5 @@ def test_assigned_queue_item_exposes_its_caption(client, users, db_path):
     caption = slots[0]["assigned_video"]["caption"]
     assert caption == {
         "video_id": video_id, "caption_text": "queued caption", "provenance": "MANUAL",
-        "can_generate": False, "editable": True,
+        "can_generate": False, "editable": True, "hashtags": [],
     }

@@ -12,7 +12,7 @@ import type { CaptionResponse } from "@/lib/api/types";
  */
 
 function caption(overrides: Partial<CaptionResponse> = {}): CaptionResponse {
-  return { video_id: 1, caption_text: null, provenance: "NONE", can_generate: true, editable: true, ...overrides };
+  return { video_id: 1, caption_text: null, provenance: "NONE", can_generate: true, editable: true, hashtags: [], ...overrides };
 }
 
 describe("CaptionEditor", () => {

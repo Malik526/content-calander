@@ -83,3 +83,34 @@ Per-platform caption overrides (seam in place), smarter/LLM generation, creator-
 learning, embeddings, content-pillar intelligence, performance-based recommendations,
 multi-platform caption optimization, hosted transcription, caption version history/approval
 states, and hosted scheduler/workers.
+
+## Addendum — Milestone 3.10.1: Caption Hashtag Parsing + Structured Metadata (2026-09-30)
+
+**Built**
+- `media/hashtags.py` `extract_hashtags()`: deterministic character scanning. The token rules
+  are in its module docstring.
+- `video_hashtags` table: SQLite on store open; Postgres via
+  `postgres_migrations/0008_add_video_hashtags.sql` (additive).
+- `set_video_caption()` / `list_video_hashtags()` on both stores and `ContentStoreProtocol`.
+- All caption writes routed through `set_video_caption()`: `caption_editing.save_caption`,
+  `regenerate_caption`, and `processing.process_one`'s `transcript_auto` step.
+  `delete_video` removes the rows too.
+- Caption API responses gain read-only `hashtags`. No request or UI change.
+
+**Verification**
+- Backend: **956 passed** (+34).
+  - `tests/test_hashtags.py` (25): one/many, order, line breaks, input unmodified, Unicode
+    (accented, CJK, Devanagari combining marks, NFD), bare `#`, all-digit, mid-word,
+    punctuation/emoji terminators, chained tags, and case/duplicate preservation.
+  - `tests/test_caption_editing.py` (+6): exact text plus hashtags persisted; edit replaces;
+    clear empties; generate/regenerate sync; identical-hash independence; delete cleanup.
+  - `tests/test_api_captions.py` (+1): read-only exposure, a client-sent `hashtags` field
+    ignored, and clear.
+  - `tests/test_publish_tiktok.py` (+1): TikTok receives the exact caption string (spacing,
+    line breaks, emoji).
+  - `tests/test_postgres_content_store.py` (+1): the same sync and cleanup against real
+    Postgres with migration 0008.
+- Frontend: 115 passed (type-only change); lint and build clean.
+- Not done: migration 0008 has not been applied to real production Postgres. It applies
+  automatically the next time the deployed API opens a `PostgresContentStore`. No backfill
+  of existing captions.

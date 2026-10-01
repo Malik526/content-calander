@@ -374,6 +374,22 @@ CREATE TABLE IF NOT EXISTS posting_cadence_times (
 );
 """
 
+# Milestone 3.10.1 (caption hashtag metadata). One row per hashtag
+# occurrence in a video's current caption_text, in caption order
+# (media.hashtags.extract_hashtags) — derived data, never the publishing
+# source of truth (caption_text is). Relational rather than a JSON column,
+# same preference as posting_cadence_times above. Rewritten only through
+# set_video_caption(), atomically with caption_text, so the two never drift.
+SCHEMA_VIDEO_HASHTAGS = """
+CREATE TABLE IF NOT EXISTS video_hashtags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id INTEGER NOT NULL REFERENCES videos(id),
+    position INTEGER NOT NULL,
+    hashtag TEXT NOT NULL,
+    UNIQUE(video_id, position)
+);
+"""
+
 
 def _migrate_upload_batches_rename_total_bytes(conn: sqlite3.Connection) -> None:
     """2026-09-27 upload-failure-semantics/telemetry-accuracy follow-up:
@@ -1054,6 +1070,8 @@ class ContentStore:
         # every other forward reference in this __init__.
         self._conn.executescript(SCHEMA_POSTING_CADENCES)
         self._conn.executescript(SCHEMA_POSTING_CADENCE_TIMES)
+        # Milestone 3.10.1: after videos, for its REFERENCES videos(id).
+        self._conn.executescript(SCHEMA_VIDEO_HASHTAGS)
 
     def close(self) -> None:
         self._conn.close()
@@ -1141,6 +1159,31 @@ class ContentStore:
         columns = ", ".join(f"{key} = ?" for key in fields)
         values = [*fields.values(), video_id]
         self._conn.execute(f"UPDATE videos SET {columns} WHERE id = ?", values)
+
+    def set_video_caption(
+        self, video_id: int, caption_text: str | None, caption_source: str | None, hashtags: list[str],
+    ) -> None:
+        """Write a video's caption and replace its derived video_hashtags
+        rows in one transaction (Milestone 3.10.1), so the structured
+        hashtags always describe the current caption_text. Callers derive
+        `hashtags` with media.hashtags.extract_hashtags(caption_text)."""
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE videos SET caption_text = ?, caption_source = ? WHERE id = ?",
+                (caption_text, caption_source, video_id),
+            )
+            conn.execute("DELETE FROM video_hashtags WHERE video_id = ?", (video_id,))
+            conn.executemany(
+                "INSERT INTO video_hashtags (video_id, position, hashtag) VALUES (?, ?, ?)",
+                [(video_id, position, tag) for position, tag in enumerate(hashtags)],
+            )
+
+    def list_video_hashtags(self, video_id: int) -> list[str]:
+        """The video's derived hashtags, in caption order (duplicates kept)."""
+        rows = self._conn.execute(
+            "SELECT hashtag FROM video_hashtags WHERE video_id = ? ORDER BY position", (video_id,)
+        ).fetchall()
+        return [row["hashtag"] for row in rows]
 
     def list_videos_for_user(self, user_id: int) -> list[VideoRecord]:
         """Every video owned by user_id, newest first — the Library API's
@@ -2103,6 +2146,8 @@ class ContentStore:
         calling this method at all, so there is nothing to null out."""
         with self.transaction() as conn:
             conn.execute("UPDATE upload_attempts SET video_id = NULL WHERE video_id = ?", (video_id,))
+            # Derived caption metadata (Milestone 3.10.1) goes with its video.
+            conn.execute("DELETE FROM video_hashtags WHERE video_id = ?", (video_id,))
             conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
 
 

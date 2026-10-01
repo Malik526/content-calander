@@ -29,12 +29,20 @@ What it does:
   reads the caption fresh at execution time, so the saved value is what
   gets published.
 
+  Hashtags (Milestone 3.10.1) — every write here goes through
+  ContentStoreProtocol.set_video_caption with
+  media.hashtags.extract_hashtags(text), so the derived video_hashtags
+  rows are replaced atomically with caption_text on every save, generate,
+  regenerate and clear. caption_text itself is stored exactly as entered
+  (apart from trimming surrounding whitespace, unchanged from 3.10).
+
   Caption state is keyed by videos.id only, never file_hash: two records
   with byte-identical content are captioned independently (see ADR-0009's
   re-upload addendum for why file_hash is not an identity).
 
 Dependencies:
-  persistence.protocol.ContentStoreProtocol, media.caption_generation.
+  persistence.protocol.ContentStoreProtocol, media.caption_generation,
+  media.hashtags.
 """
 
 from content_automation.media.caption_generation import (
@@ -42,6 +50,7 @@ from content_automation.media.caption_generation import (
     build_generation_request,
     generate_caption,
 )
+from content_automation.media.hashtags import extract_hashtags
 from content_automation.persistence.content_store import VideoRecord
 from content_automation.persistence.protocol import ContentStoreProtocol
 
@@ -112,7 +121,7 @@ def save_caption(store: ContentStoreProtocol, video: VideoRecord, text: str | No
     new_text = normalize_caption_text(text)
     new_source = source_after_manual_edit(video.caption_source, video.caption_text, new_text)
     if new_text != video.caption_text or new_source != video.caption_source:
-        store.update_video(video.id, caption_text=new_text, caption_source=new_source)
+        store.set_video_caption(video.id, new_text, new_source, extract_hashtags(new_text))
     return store.get_video(video.id)
 
 
@@ -130,5 +139,5 @@ def regenerate_caption(
             "This video already has a caption. Confirm replacing it to generate a new one."
         )
     generated = generate_caption(build_generation_request(video, platform))
-    store.update_video(video.id, caption_text=generated.text, caption_source=generated.source)
+    store.set_video_caption(video.id, generated.text, generated.source, extract_hashtags(generated.text))
     return store.get_video(video.id)

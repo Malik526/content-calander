@@ -183,4 +183,8 @@ export interface CaptionResponse {
   can_generate: boolean;
   /** False once the video has been submitted to a platform. */
   editable: boolean;
+  /** Milestone 3.10.1 — read-only hashtags derived from caption_text, in
+   * caption order. Not rendered or editable separately: the caption
+   * textarea stays the one place hashtags are written. */
+  hashtags: string[];
 }

@@ -22,6 +22,10 @@ What it does:
   a video not owned by the caller is a 404 indistinguishable from one that
   doesn't exist. The transcript is never returned.
 
+  Milestone 3.10.1: responses also carry `hashtags`, read from the
+  persisted video_hashtags rows (not re-parsed here) — read-only metadata;
+  the request bodies are unchanged.
+
 Dependencies:
   api.dependencies.auth, media.caption_editing, media.caption_generation.
 """
@@ -53,6 +57,7 @@ def to_caption_response(store: ContentStoreProtocol, video: VideoRecord) -> Capt
         provenance=caption_provenance(video),
         can_generate=can_generate_caption(video),
         editable=not is_caption_locked(store, video.id),
+        hashtags=store.list_video_hashtags(video.id),
     )
 
 

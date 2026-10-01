@@ -485,3 +485,17 @@ def test_resolve_publish_caption_returns_canonical_caption(processed_video):
     from content_automation.publishing.caption_resolution import resolve_publish_caption
 
     assert resolve_publish_caption(processed_video, "tiktok") == "hello world"
+
+
+def test_publish_sends_exact_caption_string_with_hashtags(store, processed_video):
+    """Milestone 3.10.1: hashtag parsing never reformats what TikTok gets."""
+    from content_automation.media.caption_editing import save_caption
+
+    caption = "I built this today.\n\n#coding  #saas\n#buildinpublic 🔥"
+    save_caption(store, processed_video, caption)
+    publisher = FakePublisher()
+
+    pt.publish_video(store, processed_video.id, publisher)
+
+    assert publisher.publish_calls[0][1] == caption
+    assert store.list_video_hashtags(processed_video.id) == ["#coding", "#saas", "#buildinpublic"]
