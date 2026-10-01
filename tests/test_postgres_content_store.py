@@ -337,6 +337,20 @@ def test_video_hashtags_sync_with_caption_against_real_postgres(store):
     assert store.list_video_hashtags(video_b.id) == []
 
 
+def test_platform_post_failure_code_roundtrips_against_real_postgres(store):
+    """Milestone 3.11: migration 0009's platform_posts.failure_code."""
+    user = _user(store)
+    video = _video(store, user)
+    post = store.insert_platform_post(video.id, "tiktok", created_at=NOW.isoformat(), user_id=user.id)
+    assert store.get_platform_post(video.id, "tiktok").failure_code is None
+
+    store.update_platform_post(
+        post.id, updated_at=NOW_UTC.isoformat(), status="FAILED",
+        failure_reason="raw internal text", failure_code="CAPTION_TOO_LONG",
+    )
+    assert store.get_platform_post(video.id, "tiktok").failure_code == "CAPTION_TOO_LONG"
+
+
 # --- Phase 13: atomic claiming under real Postgres concurrency ----------
 
 def test_two_real_connections_racing_to_claim_exactly_one_wins():

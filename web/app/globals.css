@@ -29,6 +29,10 @@
   --color-status-success-soft: #ecfdf3;
   --color-status-danger: #b42318;
   --color-status-danger-soft: #fef3f2;
+  /* Milestone 3.11: "Needs attention" — uncertain/contradictory publish
+     state, deliberately distinct from both in-progress and failed. */
+  --color-status-attention: #c11574;
+  --color-status-attention-soft: #fdf2fa;
 
   /* App shell content width (Milestone 3.5) — narrower than the
      marketing site's max-w-6xl (bg-hero/sections read better wide;
@@ -54,6 +58,8 @@
   --color-status-success-soft: var(--color-status-success-soft);
   --color-status-danger: var(--color-status-danger);
   --color-status-danger-soft: var(--color-status-danger-soft);
+  --color-status-attention: var(--color-status-attention);
+  --color-status-attention-soft: var(--color-status-attention-soft);
   --width-app-content: var(--width-app-content);
   --font-sans: var(--font-geist-sans);
 }

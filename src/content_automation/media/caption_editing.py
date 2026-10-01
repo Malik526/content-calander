@@ -51,7 +51,7 @@ from content_automation.media.caption_generation import (
     generate_caption,
 )
 from content_automation.media.hashtags import extract_hashtags
-from content_automation.persistence.content_store import VideoRecord
+from content_automation.persistence.content_store import PlatformPostRecord, VideoRecord
 from content_automation.persistence.protocol import ContentStoreProtocol
 
 GENERATED_SOURCES = frozenset({TRANSCRIPT_AUTO_SOURCE})
@@ -108,11 +108,15 @@ def source_after_manual_edit(previous_source: str | None, previous_text: str | N
     return f"{base}{EDITED_SUFFIX}" if base is not None else MANUAL_SOURCE
 
 
+def post_locks_caption(post: PlatformPostRecord) -> bool:
+    """True once this post's caption has been handed to its platform. Also
+    used by publishing/publish_status.py to suppress an "Edit caption" hint
+    the user could no longer act on (Milestone 3.11)."""
+    return post.status in _LOCKED_POST_STATUSES or post.platform_post_id is not None
+
+
 def is_caption_locked(store: ContentStoreProtocol, video_id: int) -> bool:
-    return any(
-        post.status in _LOCKED_POST_STATUSES or post.platform_post_id is not None
-        for post in store.list_platform_posts_for_video(video_id)
-    )
+    return any(post_locks_caption(post) for post in store.list_platform_posts_for_video(video_id))
 
 
 def save_caption(store: ContentStoreProtocol, video: VideoRecord, text: str | None) -> VideoRecord:

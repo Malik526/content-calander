@@ -548,3 +548,27 @@ def test_once_published_row_is_never_selected_again(store):
     )
 
     assert summary.discovered == 0
+
+
+# ---------------------------------------------------------------------------
+# Milestone 3.11 — terminal failures persist a structured failure_code
+# ---------------------------------------------------------------------------
+
+def test_terminal_status_check_error_persists_its_reason_code(store):
+    row = _publishing_row(store)
+    publisher = FakePublisher(status_result=PublishError("refresh token expired", reason_code="REAUTHORIZATION_REQUIRED"))
+
+    recon.reconcile_pending_status_checks_once(store, publisher, now=NOW)
+
+    final = store.get_platform_post(row.video_id, "tiktok")
+    assert final.status == "FAILED"
+    assert final.failure_code == "REAUTHORIZATION_REQUIRED"
+
+
+def test_platform_reported_failure_persists_its_fail_code(store):
+    row = _publishing_row(store)
+    publisher = FakePublisher(status_result=PublishStatusResult(status="FAILED", failure_reason="spam_risk_text"))
+
+    recon.reconcile_pending_status_checks_once(store, publisher, now=NOW)
+
+    assert store.get_platform_post(row.video_id, "tiktok").failure_code == "spam_risk_text"

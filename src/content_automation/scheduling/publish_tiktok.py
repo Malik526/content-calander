@@ -78,7 +78,15 @@ from content_automation.scheduling.slot_matcher import now_in_config_timezone
 
 
 class PublishTikTokError(Exception):
-    """User-facing failure — caught by main() and reported with exit(1)."""
+    """User-facing failure — caught by main() and reported with exit(1).
+
+    reason_code (Milestone 3.11) is persisted as platform_posts.failure_code
+    when this marks a row FAILED, so the hosted UI can explain the failure
+    (publishing/failure_taxonomy.py) without ever reading the message text."""
+
+    def __init__(self, message: str, reason_code: str = "PRECONDITION_FAILED"):
+        super().__init__(message)
+        self.reason_code = reason_code
 
 
 def _now_iso() -> str:
@@ -100,9 +108,13 @@ def _validate_ready_to_publish(video: VideoRecord, media_path: Path) -> None:
     which one applies; this function no longer decides that itself, so it
     validates identically either way."""
     if not media_path.exists():
-        raise PublishTikTokError(f"Local media file for video {video.id} not found ({media_path!r}).")
+        raise PublishTikTokError(
+            f"Local media file for video {video.id} not found ({media_path!r}).", reason_code="LOCAL_FILE_MISSING",
+        )
     if not resolve_publish_caption(video, "tiktok"):
-        raise PublishTikTokError(f"Video {video.id} has no stored caption_text — cannot publish without one.")
+        raise PublishTikTokError(
+            f"Video {video.id} has no stored caption_text — cannot publish without one.", reason_code="CAPTION_MISSING",
+        )
 
     info = media.MediaInfo(
         path=media_path, container=video.container, video_codec=video.video_codec,
@@ -111,7 +123,7 @@ def _validate_ready_to_publish(video: VideoRecord, media_path: Path) -> None:
     )
     compatible, reason = media.is_tiktok_compatible(info)
     if not compatible:
-        raise PublishTikTokError(f"Video {video.id} is not TikTok-compatible: {reason}")
+        raise PublishTikTokError(f"Video {video.id} is not TikTok-compatible: {reason}", reason_code="MEDIA_INCOMPATIBLE")
 
 
 def _schedule_retry_or_fail(store: ContentStore, record: PlatformPostRecord, error: PublishError) -> None:
@@ -140,11 +152,13 @@ def _schedule_retry_or_fail(store: ContentStore, record: PlatformPostRecord, err
         store.update_platform_post(
             record.id, updated_at=_now_iso(), status="PENDING",
             retry_count=record.retry_count + 1, next_retry_at=next_retry_at,
-            failure_reason=str(error),
+            failure_reason=str(error), failure_code=error.reason_code,
         )
         print(f"Retryable failure ({error.reason_code}) — retry {record.retry_count + 1}/{MAX_RETRY_ATTEMPTS} at {next_retry_at}.")
     else:
-        store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(error))
+        store.update_platform_post(
+            record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(error), failure_code=error.reason_code,
+        )
 
 
 def _next_status_check_at(status_check_count: int, now: datetime) -> str:
@@ -178,7 +192,13 @@ def _resolve_poll_outcome(status_result: PublishStatusResult) -> tuple[str, dict
     if status_result.status == "PUBLISH_COMPLETE":
         return "PUBLISHED", {"status": "PUBLISHED", "published_at": _now_iso()}
     if status_result.status == "FAILED":
-        return "FAILED", {"status": "FAILED", "failure_reason": status_result.failure_reason}
+        # failure_code (Milestone 3.11): the platform's own fail code when it
+        # reported one — a machine label, mapped to a user-facing category by
+        # publishing/failure_taxonomy.py, never shown raw.
+        return "FAILED", {
+            "status": "FAILED", "failure_reason": status_result.failure_reason,
+            "failure_code": status_result.failure_reason or "PLATFORM_REPORTED_FAILURE",
+        }
     return "PROCESSING", {}
 
 
@@ -229,7 +249,8 @@ def _resolved_media_path(store: ContentStore, video: VideoRecord, storage: Stora
         if storage is None:
             raise PublishTikTokError(
                 f"video {video.id} has storage_provider={video.storage_provider!r} but no storage backend "
-                "was supplied."
+                "was supplied.",
+                reason_code="STORAGE_UNAVAILABLE",
             )
         with materialize_canonical_media(store, storage, video.id, video.user_id) as media_path:
             yield media_path
@@ -249,7 +270,9 @@ def _validate_and_submit(
     try:
         _validate_ready_to_publish(video, media_path)
     except PublishTikTokError as exc:
-        store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc))
+        store.update_platform_post(
+            record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc), failure_code=exc.reason_code,
+        )
         raise
 
     try:
@@ -330,9 +353,12 @@ def execute_claimed_platform_post(
 
     if video.storage_provider and storage is None:
         exc = PublishTikTokError(
-            f"video {video_id} has storage_provider={video.storage_provider!r} but no storage backend was supplied."
+            f"video {video_id} has storage_provider={video.storage_provider!r} but no storage backend was supplied.",
+            reason_code="STORAGE_UNAVAILABLE",
         )
-        store.update_platform_post(record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc))
+        store.update_platform_post(
+            record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc), failure_code=exc.reason_code,
+        )
         raise exc
 
     with _resolved_media_path(store, video, storage) as media_path:

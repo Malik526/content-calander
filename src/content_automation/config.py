@@ -624,6 +624,13 @@ TARGET_PUBLISHING_PLATFORMS = [
 # ---------------------------------------------------------------------------
 PLATFORM_POST_STALE_MINUTES = int(os.getenv("CONTENT_CALENDAR_PLATFORM_POST_STALE_MINUTES", "30"))
 
+# Milestone 3.11 (user-facing publish states): how long after a slot's
+# scheduled_at a still-PENDING platform post (with no automatic retry
+# pending) is shown as NEEDS_ATTENTION / SCHEDULE_MISSED rather than
+# "Scheduled" — read-only display logic in publishing/publish_status.py;
+# nothing is retried or rescheduled because of it.
+PUBLISH_OVERDUE_GRACE_MINUTES = int(os.getenv("CONTENT_CALENDAR_PUBLISH_OVERDUE_GRACE_MINUTES", "30"))
+
 # ---------------------------------------------------------------------------
 # Retry classification and backoff (Milestone 2.1.6)
 # Deterministic exponential-ish backoff for a RETRYABLE publishing failure

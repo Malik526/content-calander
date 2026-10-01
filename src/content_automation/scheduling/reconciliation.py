@@ -153,7 +153,7 @@ def reconcile_pending_status_checks_once(
                 # schedule another check. No new lifecycle status.
                 updated = store.update_platform_post_if_unchanged(
                     record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), user_id=user_id,
-                    status="FAILED", failure_reason=str(exc),
+                    status="FAILED", failure_reason=str(exc), failure_code=exc.reason_code,
                 )
                 if updated:
                     summary.failed += 1

@@ -153,14 +153,35 @@ export interface QueueVideoSummary {
   caption: CaptionResponse;
 }
 
+/** One platform's resolved publish state (Milestone 3.11). */
+export interface PublicationStatus {
+  platform: string;
+  display_status: string;
+  platform_post_status: string;
+  published_at: string | null;
+  reason_code: string | null;
+  message: string | null;
+  action_hint: string | null;
+}
+
 export interface QueueSlotResponse {
   id: number;
   scheduled_at: string;
   timezone: string | null;
   status: string;
+  /** OPEN | SCHEDULED | PUBLISHING | PUBLISHED | FAILED | NEEDS_ATTENTION
+   * (Milestone 3.11 — resolved server-side; present via lib/status.ts). */
   display_status: string;
+  /** Sanitized, user-facing — never raw backend error text. */
+  reason_code: string | null;
+  message: string | null;
+  action_hint: string | null;
+  /** Aware UTC; set only when PUBLISHED. */
+  published_at: string | null;
+  can_unassign: boolean;
   assigned_video: QueueVideoSummary | null;
   platform_post_status: string | null;
+  publications: PublicationStatus[];
 }
 
 export interface QueueSlotListResponse {

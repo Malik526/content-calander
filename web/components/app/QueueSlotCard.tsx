@@ -4,16 +4,17 @@ import { useState } from "react";
 import { CaptionEditor } from "@/components/app/CaptionEditor";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
-import type { StatusTone } from "@/lib/status";
+import Link from "next/link";
+import { presentActionHint, presentQueueStatus } from "@/lib/status";
 import type { CaptionResponse, QueueSlotResponse, VideoResponse } from "@/lib/api/types";
 
-const DISPLAY_STATUS_PRESENTATION: Record<string, { label: string; tone: StatusTone }> = {
-  OPEN: { label: "Open", tone: "pending" },
-  ASSIGNED: { label: "Assigned", tone: "progress" },
-  PUBLISHING: { label: "Publishing", tone: "progress" },
-  PUBLISHED: { label: "Published", tone: "success" },
-  FAILED: { label: "Failed", tone: "danger" },
-};
+/** published_at is aware UTC — unlike scheduled_at, converting it to the
+ * viewer's local time is correct here. */
+function formatPublishedAt(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
 
 function formatSlotDateTime(iso: string): string {
   // scheduled_at is naive-local (see lib/api/types.ts's own QueueSlotResponse
@@ -39,11 +40,15 @@ function formatSlotDateTime(iso: string): string {
  *   unassignedVideos — the caller's own videos with no assigned_slot_id
  *     yet (Library videos eligible for manual assignment to an OPEN slot).
  *   onAssign(videoId) — manual assignment; only rendered for an OPEN slot.
- *   onRemove() — "Remove from schedule"; only rendered for a slot whose
- *     display_status is still "ASSIGNED" (nothing has actually published
- *     or failed yet — see PlatformPostInProgressError's backend guard,
- *     which this UI mirrors by simply not offering the action once it
- *     would be refused anyway).
+ *   onRemove() — "Remove from schedule"; only rendered when the backend
+ *     reports can_unassign (every platform post still PENDING — the same
+ *     guard as PlatformPostInProgressError, so the action is never offered
+ *     once it would be refused).
+ *
+ * Milestone 3.11: the badge comes from lib/status.ts's presentQueueStatus
+ * (shared with the calendar); slot.message (sanitized, server-written
+ * copy) is shown under the status, plus an advisory action hint and the
+ * publish time once published. No retry action (Milestone 3.13).
  *   busy — disables both actions while a request for this slot is in flight.
  *   onSaveCaption(videoId, text) / onGenerateCaption(videoId, overwrite) —
  *     Milestone 3.10: the assigned video's caption actions, rendered via
@@ -68,7 +73,8 @@ export function QueueSlotCard({
 }) {
   const assignedVideo = slot.assigned_video;
   const [pendingVideoId, setPendingVideoId] = useState<string>("");
-  const presentation = DISPLAY_STATUS_PRESENTATION[slot.display_status] ?? { label: slot.display_status, tone: "pending" as StatusTone };
+  const presentation = presentQueueStatus(slot.display_status);
+  const hint = presentActionHint(slot.action_hint);
 
   return (
     <Card className="flex flex-col gap-3">
@@ -77,6 +83,19 @@ export function QueueSlotCard({
           <p className="text-sm font-medium text-ink">{formatSlotDateTime(slot.scheduled_at)}</p>
           {slot.assigned_video ? (
             <p className="mt-0.5 truncate text-xs text-ink-muted">{slot.assigned_video.original_filename}</p>
+          ) : null}
+          {slot.published_at ? (
+            <p className="mt-0.5 text-xs text-ink-muted">Published {formatPublishedAt(slot.published_at)}</p>
+          ) : null}
+          {slot.message ? <p className="mt-1 text-xs text-ink">{slot.message}</p> : null}
+          {hint ? (
+            hint.href ? (
+              <Link href={hint.href} className="mt-0.5 inline-block text-xs font-medium text-accent hover:underline">
+                {hint.label}
+              </Link>
+            ) : (
+              <p className="mt-0.5 text-xs text-ink-muted">{hint.label}</p>
+            )
           ) : null}
         </div>
 
@@ -111,7 +130,7 @@ export function QueueSlotCard({
                 </button>
               </div>
             )
-          ) : slot.display_status === "ASSIGNED" ? (
+          ) : slot.status === "ASSIGNED" && slot.can_unassign ? (
             <button
               type="button"
               disabled={busy}

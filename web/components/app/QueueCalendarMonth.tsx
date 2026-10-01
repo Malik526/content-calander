@@ -1,14 +1,7 @@
 import type { QueueSlotResponse } from "@/lib/api/types";
+import { presentQueueStatus } from "@/lib/status";
 
 const WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-const DOT_TONE: Record<string, string> = {
-  OPEN: "bg-status-pending",
-  ASSIGNED: "bg-status-progress",
-  PUBLISHING: "bg-status-progress",
-  PUBLISHED: "bg-status-success",
-  FAILED: "bg-status-danger",
-};
 
 /** scheduled_at is naive-local (see QueueSlotCard's own note) — parsed as
  * local wall-clock time, so grouping by these date components groups by
@@ -110,9 +103,9 @@ export function QueueCalendarMonth({
                     key={slot.id}
                     type="button"
                     onClick={() => onSelectSlot(slot.id)}
-                    aria-label={`Slot on ${month.toLocaleString(undefined, { month: "long" })} ${cell.day}, ${slot.display_status.toLowerCase()}`}
+                    aria-label={`Slot on ${month.toLocaleString(undefined, { month: "long" })} ${cell.day}, ${presentQueueStatus(slot.display_status).label.toLowerCase()}`}
                     aria-pressed={selectedSlotId === slot.id}
-                    className={`h-2.5 w-2.5 rounded-full ${DOT_TONE[slot.display_status] ?? "bg-status-pending"} ${
+                    className={`h-2.5 w-2.5 rounded-full ${presentQueueStatus(slot.display_status).dotClass} ${
                       selectedSlotId === slot.id ? "ring-2 ring-offset-1 ring-accent" : ""
                     }`}
                   />

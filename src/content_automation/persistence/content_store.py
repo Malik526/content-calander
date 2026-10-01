@@ -486,6 +486,15 @@ _PLATFORM_POSTS_MIGRATION_COLUMNS = {
     "status_check_count": "INTEGER NOT NULL DEFAULT 0",
     # Milestone 3.2 (ownership) — see SCHEMA_USERS' docstring above.
     "user_id": "INTEGER REFERENCES users(id)",
+    # Milestone 3.11 (user-facing publish states): the structured
+    # reason_code behind failure_reason (PublishError.reason_code, a local
+    # precondition code, or the platform's own reported fail code).
+    # Revisits 2.1.6's "no error-code column" call above: failure_reason is
+    # raw exception text (sometimes embedding API response bodies) and
+    # must never be shown to a user or parsed, so the user-facing failure
+    # taxonomy (publishing/failure_taxonomy.py) keys off this instead.
+    # NULL for every row written before 3.11.
+    "failure_code": "TEXT",
 }
 
 
@@ -887,6 +896,7 @@ class PlatformPostRecord:
     next_status_check_at: str | None
     status_check_count: int
     user_id: int | None
+    failure_code: str | None
 
 
 @dataclass

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatScheduledAt, platformPostStatusPresentation } from "@/lib/status";
+import { formatScheduledAt, platformPostStatusPresentation, presentActionHint, presentQueueStatus } from "@/lib/status";
 import type { PlatformPostStatus } from "@/lib/api/types";
 
 describe("platformPostStatusPresentation", () => {
@@ -9,7 +9,7 @@ describe("platformPostStatusPresentation", () => {
       const presentation = platformPostStatusPresentation[status];
       expect(presentation.label).not.toBe(status);
       expect(presentation.label.length).toBeGreaterThan(0);
-      expect(["pending", "progress", "success", "danger"]).toContain(presentation.tone);
+      expect(["pending", "progress", "success", "danger", "attention"]).toContain(presentation.tone);
     }
   });
 });
@@ -27,5 +27,31 @@ describe("formatScheduledAt", () => {
     const formatted = formatScheduledAt("2026-09-22T13:00:00Z");
     expect(formatted).not.toBe("Not scheduled");
     expect(formatted).toMatch(/Sep/);
+  });
+});
+
+describe("presentQueueStatus (Milestone 3.11)", () => {
+  it("labels every resolved display status", () => {
+    expect(presentQueueStatus("OPEN").label).toBe("Open");
+    expect(presentQueueStatus("SCHEDULED").label).toBe("Scheduled");
+    expect(presentQueueStatus("PUBLISHING").label).toBe("Publishing");
+    expect(presentQueueStatus("PUBLISHED").label).toBe("Published");
+    expect(presentQueueStatus("FAILED").label).toBe("Failed");
+    expect(presentQueueStatus("NEEDS_ATTENTION").label).toBe("Needs attention");
+  });
+
+  it("falls back to Needs attention for anything unrecognized, never success", () => {
+    const fallback = presentQueueStatus("ASSIGNED");
+    expect(fallback.label).toBe("Needs attention");
+    expect(fallback.tone).toBe("attention");
+  });
+});
+
+describe("presentActionHint (Milestone 3.11)", () => {
+  it("maps hints to advisory actions and offers no retry", () => {
+    expect(presentActionHint("RECONNECT_ACCOUNT")).toEqual({ label: "Reconnect in Settings", href: "/app/settings" });
+    expect(presentActionHint("EDIT_CAPTION")?.label).toBe("Edit the caption below.");
+    expect(presentActionHint("TRY_AGAIN_LATER")).toBeNull();
+    expect(presentActionHint(null)).toBeNull();
   });
 });

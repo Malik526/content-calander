@@ -109,7 +109,10 @@ def test_list_queue_slots_only_shows_the_caller_own_slots(client, users, db_path
 def test_list_queue_slots_shows_the_assigned_video(client, users, db_path):
     user_a, _ = users
     _act_as(user_a)
-    slot_id = _open_slot(db_path, user_a, "2026-09-20T09:00:00")
+    # Future slot: since Milestone 3.11 a PENDING post whose time has
+    # already passed is NEEDS_ATTENTION (SCHEDULE_MISSED), not Scheduled —
+    # covered separately in tests/test_api_queue_publish_status.py.
+    slot_id = _open_slot(db_path, user_a, "2099-09-20T09:00:00")
     video_id = _video(db_path, user_a)
     client.post(f"/api/queue/slots/{slot_id}/assign", json={"video_id": video_id})
 
@@ -118,7 +121,7 @@ def test_list_queue_slots_shows_the_assigned_video(client, users, db_path):
 
     assert len(slots) == 1
     assert slots[0]["status"] == "ASSIGNED"
-    assert slots[0]["display_status"] == "ASSIGNED"
+    assert slots[0]["display_status"] == "SCHEDULED"  # 3.9's "ASSIGNED" display value, renamed in 3.11
     assert slots[0]["assigned_video"]["id"] == video_id
     assert slots[0]["assigned_video"]["original_filename"] == "v.mp4"
     assert slots[0]["platform_post_status"] == "PENDING"
@@ -133,7 +136,13 @@ def test_list_queue_slots_reflects_a_published_platform_post(client, users, db_p
 
     with ContentStore(db_path=db_path) as store:
         post = store.get_platform_post(video_id, "tiktok")
-        store.update_platform_post(post.id, updated_at="2026-09-15T00:00:00", status="PUBLISHED")
+        # A real PUBLISHED row always carries its platform post id (persisted
+        # before polling — publish_tiktok.py); 3.11 shows PUBLISHED without
+        # one as NEEDS_ATTENTION, tested in test_api_queue_publish_status.py.
+        store.update_platform_post(
+            post.id, updated_at="2026-09-15T00:00:00", status="PUBLISHED",
+            platform_post_id="pub_1", published_at="2026-09-20T13:00:05+00:00",
+        )
 
     response = client.get("/api/queue/slots", params=WIDE_WINDOW)
     slot = response.json()["slots"][0]
@@ -273,7 +282,13 @@ def test_unassign_refuses_to_destroy_a_published_platform_post(client, users, db
     client.post(f"/api/queue/slots/{slot_id}/assign", json={"video_id": video_id})
     with ContentStore(db_path=db_path) as store:
         post = store.get_platform_post(video_id, "tiktok")
-        store.update_platform_post(post.id, updated_at="2026-09-15T00:00:00", status="PUBLISHED")
+        # A real PUBLISHED row always carries its platform post id (persisted
+        # before polling — publish_tiktok.py); 3.11 shows PUBLISHED without
+        # one as NEEDS_ATTENTION, tested in test_api_queue_publish_status.py.
+        store.update_platform_post(
+            post.id, updated_at="2026-09-15T00:00:00", status="PUBLISHED",
+            platform_post_id="pub_1", published_at="2026-09-20T13:00:05+00:00",
+        )
 
     response = client.post(f"/api/queue/slots/{slot_id}/unassign")
 

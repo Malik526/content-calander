@@ -11,7 +11,7 @@
 
 import type { PlatformPostStatus } from "@/lib/api/types";
 
-export type StatusTone = "pending" | "progress" | "success" | "danger";
+export type StatusTone = "pending" | "progress" | "success" | "danger" | "attention";
 
 export const platformPostStatusPresentation: Record<PlatformPostStatus, { label: string; tone: StatusTone }> = {
   pending: { label: "Scheduled", tone: "pending" },
@@ -19,6 +19,41 @@ export const platformPostStatusPresentation: Record<PlatformPostStatus, { label:
   published: { label: "Published", tone: "success" },
   failed: { label: "Failed", tone: "danger" },
 };
+
+/**
+ * Queue/Calendar presentation of the backend's resolved display_status
+ * (Milestone 3.11 — src/content_automation/publishing/publish_status.py is
+ * the one resolver; this is the one presentation map, shared by
+ * QueueSlotCard and QueueCalendarMonth so list and calendar can never
+ * disagree). An unrecognized value is shown as "Needs attention" — never
+ * as its raw string, and never as success.
+ */
+const QUEUE_STATUS_PRESENTATION: Record<string, { label: string; tone: StatusTone; dotClass: string }> = {
+  OPEN: { label: "Open", tone: "pending", dotClass: "bg-status-pending" },
+  SCHEDULED: { label: "Scheduled", tone: "progress", dotClass: "bg-status-progress" },
+  PUBLISHING: { label: "Publishing", tone: "progress", dotClass: "bg-status-progress" },
+  PUBLISHED: { label: "Published", tone: "success", dotClass: "bg-status-success" },
+  FAILED: { label: "Failed", tone: "danger", dotClass: "bg-status-danger" },
+  NEEDS_ATTENTION: { label: "Needs attention", tone: "attention", dotClass: "bg-status-attention" },
+};
+
+export function presentQueueStatus(displayStatus: string): { label: string; tone: StatusTone; dotClass: string } {
+  return QUEUE_STATUS_PRESENTATION[displayStatus] ?? QUEUE_STATUS_PRESENTATION.NEEDS_ATTENTION;
+}
+
+/** Advisory next steps for a backend action_hint (Milestone 3.11). There is
+ * deliberately no retry action — that arrives with Milestone 3.13. */
+export function presentActionHint(actionHint: string | null): { label: string; href?: string } | null {
+  switch (actionHint) {
+    case "RECONNECT_ACCOUNT":
+      return { label: "Reconnect in Settings", href: "/app/settings" };
+    case "EDIT_CAPTION":
+      return { label: "Edit the caption below." };
+    default:
+      // TRY_AGAIN_LATER is already said by the message itself.
+      return null;
+  }
+}
 
 export function formatScheduledAt(iso: string | null): string {
   if (!iso) return "Not scheduled";

@@ -2,6 +2,37 @@
 
 ## 2026-09-30
 
+### Milestone 3.11 — User-Facing Publish States + Errors
+
+The Queue/Calendar now shows each slot as Open, Scheduled, Publishing, Published, Failed or
+Needs attention, with a sanitized explanation and an advisory next step. Raw backend text is
+never shown, and nothing is retried. See ADR-0013's 3.11 addendum and
+`docs/evaluations/productization/milestone-3.11-publish-states-errors.md`.
+
+- **New column `platform_posts.failure_code`** (SQLite on open; Postgres migration `0009`,
+  additive). It is now written at every publish/reconciliation failure site from the existing
+  `PublishError.reason_code`, new `PublishTikTokError.reason_code` precondition codes, or the
+  platform's `fail_reason`. `failure_reason` stays internal. Status, retry and claim behavior
+  is unchanged.
+- **New `publishing/failure_taxonomy.py`** (+ `publishing/tiktok/failure_codes.py`): code →
+  platform-neutral category → fixed copy + action hint. Unknown or pre-3.11 codes →
+  `UNKNOWN_ERROR`.
+- **New `publishing/publish_status.py`:** the one resolver from slot + platform posts to
+  display state. `NEEDS_ATTENTION` covers missed schedules (new
+  `config.PUBLISH_OVERDUE_GRACE_MINUTES`), stalled/unconfirmed publishing, contradictory rows,
+  and assigned videos with no platform post. `PUBLISHED` now requires a platform post ID.
+- **`GET /api/queue/slots`:**
+  - `display_status` value set changed: `ASSIGNED` → `SCHEDULED`, plus `NEEDS_ATTENTION`.
+  - Added `reason_code`, `message`, `action_hint`, `published_at`, `can_unassign` and
+    per-platform `publications`.
+- **Frontend:** shared `presentQueueStatus`/`presentActionHint` in `lib/status.ts` (list and
+  calendar now use one map). The slot card shows the message, a "Reconnect in Settings" link
+  and the publish time. Remove is gated on `can_unassign`. New `attention` badge tone. No
+  retry button.
+- **Verification:** backend 1024 passed (was 956), including Postgres; frontend 123 passed
+  (was 115); lint and build clean. Three `test_api_queue.py` tests and one calendar test were
+  updated for the intended rename and new rules (explained in the evaluation record).
+
 ### Milestone 3.10.1 — Caption Hashtag Parsing + Structured Metadata
 
 Hashtags are now derived deterministically from the free-form caption and stored as

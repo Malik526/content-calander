@@ -5,6 +5,7 @@ const toneClasses: Record<StatusTone, string> = {
   progress: "bg-status-progress-soft text-status-progress",
   success: "bg-status-success-soft text-status-success",
   danger: "bg-status-danger-soft text-status-danger",
+  attention: "bg-status-attention-soft text-status-attention",
 };
 
 export function Badge({ tone, children }: { tone: StatusTone; children: string }) {

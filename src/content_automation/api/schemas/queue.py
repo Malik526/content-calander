@@ -21,18 +21,41 @@ class QueueVideoSummary(BaseModel):
     caption: CaptionResponse
 
 
+class PublicationStatusResponse(BaseModel):
+    """One platform's publish state for the slot's video (Milestone 3.11).
+    Platform-neutral: a second platform is just a second entry."""
+
+    platform: str
+    display_status: str
+    platform_post_status: str
+    published_at: str | None
+    reason_code: str | None
+    message: str | None
+    action_hint: str | None
+
+
 class QueueSlotResponse(BaseModel):
     id: int
     scheduled_at: str
     timezone: str | None
     status: str  # raw content_slots.status — only ever "OPEN" or "ASSIGNED"
-    # OPEN | ASSIGNED | PUBLISHING | PUBLISHED | FAILED — computed at read
-    # time from the assigned video's platform_posts row(s), since
-    # content_slots.status itself is never written past ASSIGNED by any
-    # code path (see api/routes/queue.py's module docstring).
+    # Milestone 3.11: OPEN | SCHEDULED | PUBLISHING | PUBLISHED | FAILED |
+    # NEEDS_ATTENTION, from publishing.publish_status (the one resolver —
+    # see its docstring for every NEEDS_ATTENTION trigger). Replaces 3.9's
+    # ASSIGNED display value with SCHEDULED.
     display_status: str
+    # A failure category (publishing.failure_taxonomy) or an attention code;
+    # message is fixed, sanitized copy — never failure_reason/exception text.
+    reason_code: str | None
+    message: str | None
+    # RECONNECT_ACCOUNT | EDIT_CAPTION | TRY_AGAIN_LATER | null — advisory
+    # only; no retry endpoint exists (Milestone 3.13).
+    action_hint: str | None
+    published_at: str | None  # aware UTC, set only when PUBLISHED
+    can_unassign: bool  # mirrors unassign_slot's guard (every post still PENDING)
     assigned_video: QueueVideoSummary | None
     platform_post_status: str | None
+    publications: list[PublicationStatusResponse]
 
 
 class QueueSlotListResponse(BaseModel):

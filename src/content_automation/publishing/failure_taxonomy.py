@@ -1,0 +1,111 @@
+"""
+failure_taxonomy.py — turns a stored failure code into a safe, user-facing
+explanation (Milestone 3.11: User-Facing Publish States + Errors).
+
+What it does:
+  describe_failure(platform, failure_code) maps platform_posts.failure_code
+  (never the free-text failure_reason) onto one of a small, stable set of
+  platform-neutral categories, each with fixed copy and an optional action
+  hint. The output only ever contains text written in this module — no
+  exception strings, raw API responses, request IDs or token data can pass
+  through, because the input code is used purely as a lookup key.
+
+  Lookup order: codes this codebase raises itself (shared by every
+  platform — _SHARED_CODE_CATEGORIES), then the platform's own code table
+  (e.g. publishing/tiktok/failure_codes.py), then UNKNOWN_ERROR. A NULL
+  code (every row failed before 3.11) is UNKNOWN_ERROR; failure_reason's
+  text is never parsed to guess better.
+
+  Adding Instagram/YouTube (Milestone 4) means adding a label to
+  PLATFORM_LABELS and a code table to _PLATFORM_CODE_TABLES — categories,
+  copy and the Queue API shape stay the same.
+
+Dependencies:
+  publishing.tiktok.failure_codes.
+"""
+
+from dataclasses import dataclass
+
+from content_automation.publishing.tiktok.failure_codes import TIKTOK_FAILURE_CATEGORIES
+
+PLATFORM_LABELS = {"tiktok": "TikTok"}
+
+# Action hints are stable codes; the frontend owns their button/link text.
+RECONNECT_ACCOUNT = "RECONNECT_ACCOUNT"
+EDIT_CAPTION = "EDIT_CAPTION"
+TRY_AGAIN_LATER = "TRY_AGAIN_LATER"
+
+# Codes raised by this codebase itself (publishing/publisher.py,
+# publishing/tiktok/{publisher,auth}.py, scheduling/publish_tiktok.py).
+_SHARED_CODE_CATEGORIES: dict[str, str] = {
+    "REAUTHORIZATION_REQUIRED": "AUTH_REQUIRED",
+    "AUTH_ERROR": "AUTH_REQUIRED",
+    # A token-endpoint failure that was NOT a 4xx rejection (those are
+    # upgraded to REAUTHORIZATION_REQUIRED in publishing/tiktok/auth.py).
+    "AUTH_HTTP_ERROR": "TEMPORARY_PLATFORM_ERROR",
+    "CAPTION_TOO_LONG": "CAPTION_INVALID",
+    "CAPTION_MISSING": "CAPTION_INVALID",
+    "CORRUPT_MEDIA": "MEDIA_INVALID",
+    "VIDEO_TOO_LONG": "MEDIA_INVALID",
+    "MEDIA_INCOMPATIBLE": "MEDIA_INVALID",
+    "LOCAL_FILE_MISSING": "MEDIA_UNAVAILABLE",
+    "STORAGE_UNAVAILABLE": "MEDIA_UNAVAILABLE",
+    "SELF_ONLY_UNAVAILABLE": "PLATFORM_REJECTED",
+    "UNSUPPORTED_PRIVACY_LEVEL": "PLATFORM_REJECTED",
+    "UNAUDITED_CLIENT_PRIVACY_RESTRICTION": "PLATFORM_REJECTED",
+    "PLATFORM_REPORTED_FAILURE": "PLATFORM_REJECTED",
+    "NETWORK_ERROR": "NETWORK_ERROR",
+    "UPLOAD_NETWORK_ERROR": "NETWORK_ERROR",
+    "MALFORMED_RESPONSE": "TEMPORARY_PLATFORM_ERROR",
+    "UPLOAD_FAILED": "TEMPORARY_PLATFORM_ERROR",
+    # HTTP_ERROR / PUBLISH_FAILED / TIKTOK_API_ERROR / PRECONDITION_FAILED
+    # are deliberately unlisted: without the HTTP status (not persisted)
+    # they could be anything, so they fall through to UNKNOWN_ERROR.
+}
+
+_PLATFORM_CODE_TABLES: dict[str, dict[str, str]] = {"tiktok": TIKTOK_FAILURE_CATEGORIES}
+
+# category -> (message template, action hint). {platform} is the platform label.
+_CATEGORY_COPY: dict[str, tuple[str, str | None]] = {
+    "AUTH_REQUIRED": ("{platform} connection needs to be renewed. Reconnect your account in Settings.", RECONNECT_ACCOUNT),
+    "CAPTION_INVALID": ("{platform} didn't accept this caption.", EDIT_CAPTION),
+    "MEDIA_INVALID": ("{platform} couldn't process this video file (format, length or resolution).", None),
+    "MEDIA_UNAVAILABLE": ("The video file couldn't be loaded for publishing.", None),
+    "PLATFORM_REJECTED": ("{platform} declined to publish this post.", None),
+    "RATE_LIMITED": ("{platform} is limiting how often this account can post right now. Try again later.", TRY_AGAIN_LATER),
+    "TEMPORARY_PLATFORM_ERROR": ("{platform} had a temporary problem. Try again later.", TRY_AGAIN_LATER),
+    "NETWORK_ERROR": ("Couldn't reach {platform}. Try again later.", TRY_AGAIN_LATER),
+    "UNKNOWN_ERROR": ("Publishing to {platform} failed for an unexpected reason.", None),
+}
+
+# A few codes deserve a more specific sentence than their category's.
+_CODE_MESSAGE_OVERRIDES: dict[str, str] = {
+    "CAPTION_TOO_LONG": "Caption is too long for {platform}.",
+    "CAPTION_MISSING": "This video has no caption yet.",
+}
+
+
+@dataclass(frozen=True)
+class FailureDescription:
+    category: str
+    message: str
+    action_hint: str | None
+
+
+def platform_label(platform: str) -> str:
+    return PLATFORM_LABELS.get(platform, platform.title())
+
+
+def categorize_failure(platform: str, failure_code: str | None) -> str:
+    if failure_code is None:
+        return "UNKNOWN_ERROR"
+    if failure_code in _SHARED_CODE_CATEGORIES:
+        return _SHARED_CODE_CATEGORIES[failure_code]
+    return _PLATFORM_CODE_TABLES.get(platform, {}).get(failure_code, "UNKNOWN_ERROR")
+
+
+def describe_failure(platform: str, failure_code: str | None) -> FailureDescription:
+    category = categorize_failure(platform, failure_code)
+    template, hint = _CATEGORY_COPY[category]
+    template = _CODE_MESSAGE_OVERRIDES.get(failure_code or "", template)
+    return FailureDescription(category=category, message=template.format(platform=platform_label(platform)), action_hint=hint)

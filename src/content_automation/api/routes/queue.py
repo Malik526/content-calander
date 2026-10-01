@@ -16,6 +16,12 @@ What it does:
                                               {video_id}.
   POST /api/queue/slots/{slot_id}/unassign — "Remove from schedule."
 
+  Milestone 3.11: display_status (and the sanitized reason/message/
+  action_hint/published_at/can_unassign/publications fields) now comes from
+  publishing.publish_status.resolve_slot_publish_status — the one
+  platform-neutral resolver; this route only shapes its output. The 3.9
+  notes below still describe why it is derived rather than stored.
+
   display_status vs. status: content_slots.status only ever holds OPEN or
   ASSIGNED in this codebase — no code path has ever written PUBLISHED or
   FAILED onto a content_slot (confirmed directly: the only two
@@ -56,6 +62,7 @@ from content_automation.api.dependencies.auth import get_current_user, get_store
 from content_automation.api.routes.captions import to_caption_response
 from content_automation.api.schemas.queue import (
     AssignNextRequest,
+    PublicationStatusResponse,
     AssignToSlotRequest,
     QueueSlotListResponse,
     QueueSlotResponse,
@@ -69,6 +76,7 @@ from content_automation.persistence.content_store import (
     UserRecord,
 )
 from content_automation.persistence.protocol import ContentStoreProtocol
+from content_automation.publishing.publish_status import resolve_slot_publish_status
 from content_automation.scheduling.queue_assignment import (
     NoOpenSlotAvailableError,
     VideoAlreadyScheduledError,
@@ -85,8 +93,7 @@ def _now_iso() -> str:
 
 def _to_queue_slot_response(store: ContentStoreProtocol, slot: SlotRecord) -> QueueSlotResponse:
     assigned_video: QueueVideoSummary | None = None
-    platform_post_status: str | None = None
-    display_status = slot.status
+    posts = []
 
     if slot.assigned_video_id is not None:
         video = store.get_video(slot.assigned_video_id)
@@ -94,27 +101,20 @@ def _to_queue_slot_response(store: ContentStoreProtocol, slot: SlotRecord) -> Qu
             assigned_video = QueueVideoSummary(
                 id=video.id, original_filename=video.original_filename, caption=to_caption_response(store, video),
             )
-
         posts = store.list_platform_posts_for_video(slot.assigned_video_id)
-        statuses = {p.status for p in posts}
-        if "PUBLISHED" in statuses:
-            display_status = "PUBLISHED"
-        elif "FAILED" in statuses:
-            display_status = "FAILED"
-        elif "PUBLISHING" in statuses:
-            display_status = "PUBLISHING"
-        # else every post is still PENDING (or none exists yet) —
-        # display_status stays "ASSIGNED", slot.status's own value.
-        if posts:
-            # Single-platform in practice today (config.TARGET_PUBLISHING_PLATFORMS
-            # defaults to just "tiktok") — this is the slot-detail field, not
-            # the calendar/list badge, so one representative status is enough.
-            platform_post_status = next(iter(posts)).status
+
+    publish = resolve_slot_publish_status(slot, posts)
 
     return QueueSlotResponse(
         id=slot.id, scheduled_at=slot.scheduled_at, timezone=slot.timezone,
-        status=slot.status, display_status=display_status,
-        assigned_video=assigned_video, platform_post_status=platform_post_status,
+        status=slot.status, display_status=publish.display_status,
+        reason_code=publish.reason_code, message=publish.message, action_hint=publish.action_hint,
+        published_at=publish.published_at, can_unassign=publish.can_unassign,
+        assigned_video=assigned_video,
+        # Single-platform in practice today (config.TARGET_PUBLISHING_PLATFORMS
+        # defaults to just "tiktok"); publications carries every platform.
+        platform_post_status=posts[0].status if posts else None,
+        publications=[PublicationStatusResponse(**vars(p)) for p in publish.publications],
     )
 
 

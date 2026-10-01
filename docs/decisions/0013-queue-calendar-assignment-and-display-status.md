@@ -97,3 +97,42 @@ implementation of "what happens after a slot is claimed."
   `display_status`'s derivation redundant, not wrong, but should update this ADR if it happens.
 - No calendar/queue editing beyond assign/manual-assign/remove — no drag/drop, no manual
   one-off slot creation, no rescheduling, no published-history browsing UI. Still future scope.
+
+## Addendum — Milestone 3.11: one publish-status resolver, sanitized failures, NEEDS_ATTENTION
+
+Decision 1 still holds: `content_slots.status` is never written past `ASSIGNED`, and display
+state is derived at read time. 3.11 moves that derivation out of `api/routes/queue.py` into
+`publishing/publish_status.py`, the one platform-neutral resolver, and widens it:
+
+- **Values:** `OPEN`/`SCHEDULED`/`PUBLISHING`/`PUBLISHED`/`FAILED`/`NEEDS_ATTENTION`.
+  `SCHEDULED` replaces 3.9's `ASSIGNED` display value.
+- **`PUBLISHED` requires a platform post ID.** The real publish path always persists it before
+  polling, so a `PUBLISHED` row without one is contradictory.
+- **`NEEDS_ATTENTION` replaces any guess.** It applies to a missed schedule (PENDING past
+  `scheduled_at` plus `PUBLISH_OVERDUE_GRACE_MINUTES`, with no future retry pending), a stalled
+  claim, an unconfirmed submission (staleness uses crash recovery's
+  `PLATFORM_POST_STALE_MINUTES`), contradictory rows, and an assigned video with no
+  `platform_posts` row. The resolver's docstring lists every trigger.
+- **Multiple platforms:** each post resolves on its own (`publications`). The slot shows the
+  most urgent state, and `PUBLISHED` only when every post is published.
+
+**Failure explanations come from a new `platform_posts.failure_code` column, never
+`failure_reason`.** `failure_reason` is raw exception text, sometimes embedding API response
+bodies. It stays internal and is no longer appropriate to surface or parse. This revisits
+Milestone 2.1.6's "no error-code column" decision (made when nothing user-facing existed).
+
+Every failure write site now also stores the structured `reason_code` it already had:
+
+- `PublishError.reason_code`
+- new `PublishTikTokError.reason_code` values for local preconditions
+- the platform's own `fail_reason` code
+- reconciliation's terminal errors
+
+`publishing/failure_taxonomy.py` maps codes to fixed categories, copy and action hints, using
+`publishing/tiktok/failure_codes.py` for TikTok-only codes. Unknown and pre-3.11 (NULL) codes
+are `UNKNOWN_ERROR`. Postgres migration `0009` adds the column (additive); SQLite adds it on
+store open.
+
+Action hints are advisory only (`RECONNECT_ACCOUNT`, `EDIT_CAPTION` (dropped once the caption is
+locked), `TRY_AGAIN_LATER`). No retry endpoint or automatic recovery was added; that is
+Milestone 3.13.

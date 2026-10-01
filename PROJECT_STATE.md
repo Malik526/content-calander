@@ -97,6 +97,8 @@ This corpus is for media/transcription/FIFO testing only — **not** pillar-clas
 
 ## TikTok Publishing (Milestone 2.0)
 
+**Milestone 3.11 (current):** every failure write also stores a structured `platform_posts.failure_code`. The hosted Queue's publish state and failure copy come from `publishing/publish_status.py` + `publishing/failure_taxonomy.py`. `failure_reason` remains internal diagnostic text only. See ADR-0013's 3.11 addendum.
+
 Proves `one known local MP4 → connected TikTok test account → TikTok API → private post → poll/check result → persist publishing result` for exactly one manually-chosen video — a standalone manual CLI (`publish_tiktok.py`), deliberately **not** wired into `process_content.py`, a scheduler, or any background process yet. See `docs/decisions/0006-tiktok-publisher-foundation.md` for the full architecture and rationale; this section is current-state only.
 
 - **New table `platform_posts`** (`content_store.py`): one row per `(video_id, platform)`, `UNIQUE(video_id, platform)` enforced by the schema — the idempotency guarantee, not just caller discipline. Statuses: `PENDING`/`PUBLISHING`/`PUBLISHED`/`FAILED`. Preserves the three-way separation from ADR-0005: `videos` = canonical content/media metadata, `content_slots` = scheduling assignment, `platform_posts` = external publishing state/result — nothing TikTok-specific was added to `videos`.

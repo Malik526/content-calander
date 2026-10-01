@@ -60,21 +60,41 @@ function captionFor(videoId: number, text: string | null, overrides: Partial<Cap
   };
 }
 
+// Milestone 3.11 publish-state fields, defaulted for slots that don't care.
+const NO_PUBLISH_DETAIL = {
+  reason_code: null, message: null, action_hint: null, published_at: null, can_unassign: false, publications: [],
+};
+
 const OPEN_SLOT = {
   id: 1, scheduled_at: "2026-10-05T09:00:00", timezone: "America/New_York",
-  status: "OPEN", display_status: "OPEN", assigned_video: null, platform_post_status: null,
+  status: "OPEN", display_status: "OPEN", assigned_video: null, platform_post_status: null, ...NO_PUBLISH_DETAIL,
 };
 
 const ASSIGNED_SLOT = {
   id: 2, scheduled_at: "2026-10-06T09:00:00", timezone: "America/New_York",
-  status: "ASSIGNED", display_status: "ASSIGNED",
+  status: "ASSIGNED", display_status: "SCHEDULED", ...NO_PUBLISH_DETAIL, can_unassign: true,
   assigned_video: { id: 5, original_filename: "clip.mp4", caption: captionFor(5, "Saved caption") }, platform_post_status: "PENDING",
 };
 
 const PUBLISHED_SLOT = {
   id: 3, scheduled_at: "2026-10-07T09:00:00", timezone: "America/New_York",
-  status: "ASSIGNED", display_status: "PUBLISHED",
+  status: "ASSIGNED", display_status: "PUBLISHED", ...NO_PUBLISH_DETAIL, published_at: "2026-10-07T13:00:05+00:00",
   assigned_video: { id: 6, original_filename: "posted.mp4", caption: captionFor(6, "Posted caption", { editable: false }) }, platform_post_status: "PUBLISHED",
+};
+
+const FAILED_SLOT = {
+  id: 4, scheduled_at: "2026-10-08T09:00:00", timezone: "America/New_York",
+  status: "ASSIGNED", display_status: "FAILED", ...NO_PUBLISH_DETAIL,
+  reason_code: "AUTH_REQUIRED", message: "TikTok connection needs to be renewed. Reconnect your account in Settings.",
+  action_hint: "RECONNECT_ACCOUNT",
+  assigned_video: { id: 7, original_filename: "failed.mp4", caption: captionFor(7, "Caption") }, platform_post_status: "FAILED",
+};
+
+const ATTENTION_SLOT = {
+  id: 5, scheduled_at: "2026-10-09T09:00:00", timezone: "America/New_York",
+  status: "ASSIGNED", display_status: "NEEDS_ATTENTION", ...NO_PUBLISH_DETAIL,
+  reason_code: "PUBLISH_UNCONFIRMED", message: "Publishing status could not be confirmed.",
+  assigned_video: { id: 8, original_filename: "unsure.mp4", caption: captionFor(8, "Caption", { editable: false }) }, platform_post_status: "PUBLISHING",
 };
 
 const UNASSIGNED_VIDEO = {
@@ -108,7 +128,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     render(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
-    expect(screen.getByText("Assigned")).toBeInTheDocument();
+    expect(screen.getByText("Scheduled")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove from schedule" })).toBeInTheDocument();
   });
 
@@ -136,7 +156,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
   it("assigns the next available slot when clicked", async () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [OPEN_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [UNASSIGNED_VIDEO] });
-    queueApi.assignNextOpenSlot.mockResolvedValue({ ...OPEN_SLOT, status: "ASSIGNED", display_status: "ASSIGNED", assigned_video: { id: 10, original_filename: "raw.mp4", caption: captionFor(10, null) } });
+    queueApi.assignNextOpenSlot.mockResolvedValue({ ...OPEN_SLOT, status: "ASSIGNED", display_status: "SCHEDULED", assigned_video: { id: 10, original_filename: "raw.mp4", caption: captionFor(10, null) } });
 
     render(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Assign to next available slot" })).toBeInTheDocument());
@@ -195,7 +215,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
 
     expect(screen.getByText("Select a date's slot to see its details.")).toBeInTheDocument();
 
-    const dot = screen.getByRole("button", { name: /assigned/i, pressed: false });
+    const dot = screen.getByRole("button", { name: /scheduled/i, pressed: false });  // 3.11: "assigned" renamed
     await user.click(dot);
 
     expect(screen.getByText("clip.mp4")).toBeInTheDocument();
@@ -239,6 +259,67 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     await waitFor(() => expect(screen.getByLabelText("Caption")).toHaveValue("Posted caption"));
     expect(screen.getByLabelText("Caption")).toHaveAttribute("readonly");
     expect(screen.queryByRole("button", { name: "Save caption" })).not.toBeInTheDocument();
+  });
+
+  it("explains a failed slot with sanitized copy and a reconnect link, without offering removal", async () => {
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [FAILED_SLOT] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+
+    render(<QueuePage />);
+
+    await waitFor(() => expect(screen.getByText("Failed")).toBeInTheDocument());
+    expect(screen.getByText("TikTok connection needs to be renewed. Reconnect your account in Settings.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Reconnect in Settings" })).toHaveAttribute("href", "/app/settings");
+    expect(screen.queryByRole("button", { name: "Remove from schedule" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+  });
+
+  it("shows Needs attention with its explanation", async () => {
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [ATTENTION_SLOT] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+
+    render(<QueuePage />);
+
+    await waitFor(() => expect(screen.getByText("Needs attention")).toBeInTheDocument());
+    expect(screen.getByText("Publishing status could not be confirmed.")).toBeInTheDocument();
+  });
+
+  it("shows when a published slot was published", async () => {
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [PUBLISHED_SLOT] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+
+    render(<QueuePage />);
+
+    await waitFor(() => expect(screen.getByText(/^Published .+/)).toBeInTheDocument());
+  });
+
+  it("never shows an unrecognized status as its raw value or as success", async () => {
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [{ ...ATTENTION_SLOT, display_status: "SOMETHING_NEW", message: null }] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+
+    render(<QueuePage />);
+
+    await waitFor(() => expect(screen.getByText("Needs attention")).toBeInTheDocument());
+    expect(screen.queryByText("SOMETHING_NEW")).not.toBeInTheDocument();
+  });
+
+  it("shows the same status in list and calendar views", async () => {
+    const now = new Date();
+    const inCurrentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-15T09:00:00`;
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [{ ...FAILED_SLOT, scheduled_at: inCurrentMonth }] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByText("Failed")).toBeInTheDocument());
+    const listMessage = screen.getByText(FAILED_SLOT.message).textContent;
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Calendar" }));
+    const dot = screen.getByRole("button", { name: /, failed$/ });
+    await user.click(dot);
+
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText(FAILED_SLOT.message).textContent).toBe(listMessage);
   });
 
   it("shows an error state with retry when loading the queue fails", async () => {

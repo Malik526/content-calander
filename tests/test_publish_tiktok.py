@@ -499,3 +499,59 @@ def test_publish_sends_exact_caption_string_with_hashtags(store, processed_video
 
     assert publisher.publish_calls[0][1] == caption
     assert store.list_video_hashtags(processed_video.id) == ["#coding", "#saas", "#buildinpublic"]
+
+
+# ---------------------------------------------------------------------------
+# Milestone 3.11 — every failure path persists a structured failure_code
+# ---------------------------------------------------------------------------
+
+def test_submission_failure_persists_its_reason_code(store, processed_video):
+    publisher = FakePublisher(publish_result=PublishError("caption way too long", reason_code="CAPTION_TOO_LONG"))
+    with pytest.raises(pt.PublishTikTokError):
+        pt.publish_video(store, processed_video.id, publisher)
+    record = store.get_platform_post(processed_video.id, "tiktok")
+    assert record.status == "FAILED"
+    assert record.failure_code == "CAPTION_TOO_LONG"
+
+
+def test_retryable_failure_keeps_its_reason_code_while_pending_retry(store, processed_video):
+    publisher = FakePublisher(publish_result=PublishError("connection reset", reason_code="NETWORK_ERROR"))
+    with pytest.raises(pt.PublishTikTokError):
+        pt.publish_video(store, processed_video.id, publisher)
+    record = store.get_platform_post(processed_video.id, "tiktok")
+    assert record.status == "PENDING"
+    assert record.retry_count == 1
+    assert record.failure_code == "NETWORK_ERROR"
+
+
+@pytest.mark.parametrize(
+    "fields, expected_code",
+    [
+        ({"canonical_media_path": "/does/not/exist.mp4", "caption_text": "hi"}, "LOCAL_FILE_MISSING"),
+        ({"caption_text": None}, "CAPTION_MISSING"),
+        ({"container": "avi", "caption_text": "hi"}, "MEDIA_INCOMPATIBLE"),
+    ],
+)
+def test_precondition_failure_on_claimed_row_persists_its_code(store, processed_video, fields, expected_code):
+    store.update_video(processed_video.id, **fields)
+    record = store.insert_platform_post(processed_video.id, "tiktok", created_at="2026-01-01T00:00:00")
+    store.claim_platform_post(record.id, updated_at="2026-01-01T00:00:00")
+
+    with pytest.raises(pt.PublishTikTokError):
+        pt.execute_claimed_platform_post(store, processed_video.id, "tiktok", FakePublisher())
+
+    final = store.get_platform_post(processed_video.id, "tiktok")
+    assert final.status == "FAILED"
+    assert final.failure_code == expected_code
+
+
+def test_platform_reported_failure_persists_platform_fail_code(store, processed_video):
+    publisher = FakePublisher(status_result=PublishStatusResult(status="FAILED", failure_reason="duration_check_failed"))
+    pt.publish_video(store, processed_video.id, publisher)
+    assert store.get_platform_post(processed_video.id, "tiktok").failure_code == "duration_check_failed"
+
+
+def test_platform_reported_failure_without_a_reason_gets_a_generic_code(store, processed_video):
+    publisher = FakePublisher(status_result=PublishStatusResult(status="FAILED", failure_reason=None))
+    pt.publish_video(store, processed_video.id, publisher)
+    assert store.get_platform_post(processed_video.id, "tiktok").failure_code == "PLATFORM_REPORTED_FAILURE"
