@@ -2,6 +2,40 @@
 
 ## 2026-09-30
 
+### Milestone 3.12 — Hosted Scheduler + Worker Execution
+
+Hosted scheduled posts now execute automatically through a separate worker process that
+reuses the existing local state machine (atomic claim, publish path, retry/backoff, crash
+recovery, reconciliation). No new publishing engine and no schema change. See ADR-0015 and
+`docs/evaluations/productization/milestone-3.12-hosted-scheduler-worker.md`.
+
+- **Worker:** `cli/run_worker.py` → `scheduling/hosted_worker.py`.
+  - Each cycle runs crash recovery → reconciliation → due posts, per hosted user, with that
+    user's own TikTok credential.
+  - Fresh store per cycle; per-user error isolation; quiet when idle.
+  - SIGTERM/SIGINT finish the current cycle.
+  - `--dry-run` / `--once`; `CONTENT_CALENDAR_WORKER_POLL_INTERVAL_SECONDS` (default 60).
+  - Refuses to start without Postgres, Supabase storage, the encryption key, or ffprobe.
+- **Hosted gaps fixed:**
+  - Per-user token provider (`publishing/tiktok/hosted_publisher.py`,
+    `TikTokPublisher(access_token_provider=)`).
+  - Timezone-exact due selection (`scheduling/hosted_due_selection.py`;
+    `run_due_posts_once(due_posts=)`).
+  - ffprobe inspection of never-inspected hosted uploads at publish time.
+  - Storage materialization failures now end in the existing retry/FAILED path instead of a
+    stuck PUBLISHING row.
+- **Hosted eligibility:** only users with a hosted login (`auth_identities`). The legacy CLI
+  identity's rows stay with the CLI worker.
+- **Deployment:** `railway.worker.json` (worker service), `nixpacks.toml` (ffmpeg).
+- **Observability:** structured `event=...` lines for startup, cycles, claim, publish
+  start/success/failure, retry and reconciliation scheduling, and shutdown. IDs and codes only,
+  never tokens or raw error text.
+- **Verification:**
+  - Backend 1063 passed (was 1027), including real-Postgres concurrency tests (4 workers →
+    one publish; concurrent startup migration-safe).
+  - `run_worker.py --dry-run --once` ran read-only against the real stack.
+  - No deploy, no real publish.
+
 ### Fix — Concurrent Postgres migration race (production 500s)
 
 **Symptom:** after the 3.10.1/3.11 deploy, API routes returned 500 with `duplicate key value

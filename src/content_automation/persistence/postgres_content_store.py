@@ -692,6 +692,20 @@ class PostgresContentStore:
         )
         return cur.rowcount > 0
 
+    def list_hosted_user_ids_with_platform_work(self, platform: str) -> list[int]:
+        """User ids (ascending) that have PENDING or PUBLISHING platform_posts
+        for `platform` AND a real hosted login (an auth_identities row) —
+        the hosted worker's per-cycle work list (Milestone 3.12). The local
+        CLI bootstrap identity has no auth identity, so its rows stay owned
+        by the CLI worker and are never touched by the hosted one."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT p.user_id FROM platform_posts p WHERE p.platform = %s "
+            "AND p.status IN ('PENDING', 'PUBLISHING') AND p.user_id IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM auth_identities a WHERE a.user_id = p.user_id) ORDER BY p.user_id",
+            (platform,),
+        ).fetchall()
+        return [row["user_id"] for row in rows]
+
     def get_due_platform_posts(
         self, platform: str, now_iso: str, eligible_statuses: list[str], user_id: int
     ) -> list[PlatformPostRecord]:

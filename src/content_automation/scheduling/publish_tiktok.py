@@ -62,17 +62,19 @@ Dependencies:
 """
 
 import sys
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from content_automation.config import MAX_RETRY_ATTEMPTS, RETRY_BACKOFF_MINUTES, STATUS_CHECK_BACKOFF_SECONDS
 from content_automation.media import inspection as media
-from content_automation.media.media_storage import materialize_canonical_media
+from content_automation.media.media_storage import MediaNotUploadedError, MediaOwnershipError, materialize_canonical_media
 from content_automation.persistence.content_store import ContentStore, PlatformPostRecord, VideoRecord
 from content_automation.publishing.caption_resolution import resolve_publish_caption
 from content_automation.publishing.publisher import PublishError, Publisher, PublishStatusResult
+from content_automation.storage.local import StorageObjectNotFoundError
 from content_automation.storage.protocol import StorageProtocol
+from content_automation.storage.supabase_storage import StorageError
 from content_automation.scheduling import retry_classification
 from content_automation.scheduling.slot_matcher import now_in_config_timezone
 
@@ -116,11 +118,23 @@ def _validate_ready_to_publish(video: VideoRecord, media_path: Path) -> None:
             f"Video {video.id} has no stored caption_text — cannot publish without one.", reason_code="CAPTION_MISSING",
         )
 
-    info = media.MediaInfo(
-        path=media_path, container=video.container, video_codec=video.video_codec,
-        audio_codec=video.audio_codec, width=video.width, height=video.height, fps=video.fps,
-        duration_seconds=video.duration_seconds, file_size_bytes=video.file_size_bytes,
-    )
+    if video.container is None:
+        # Milestone 3.12: a hosted upload was never inspected (3.7 stores
+        # bytes only — see api/routes/videos.py), so probe the materialized
+        # file itself. Read-only ffprobe; the file is never altered. A
+        # locally ingested video keeps using its stored inspection result.
+        try:
+            info = media.inspect_media(media_path)
+        except media.MediaError as exc:
+            raise PublishTikTokError(
+                f"Video {video.id} failed media inspection: {exc}", reason_code=exc.reason_code,
+            ) from exc
+    else:
+        info = media.MediaInfo(
+            path=media_path, container=video.container, video_codec=video.video_codec,
+            audio_codec=video.audio_codec, width=video.width, height=video.height, fps=video.fps,
+            duration_seconds=video.duration_seconds, file_size_bytes=video.file_size_bytes,
+        )
     compatible, reason = media.is_tiktok_compatible(info)
     if not compatible:
         raise PublishTikTokError(f"Video {video.id} is not TikTok-compatible: {reason}", reason_code="MEDIA_INCOMPATIBLE")
@@ -361,8 +375,39 @@ def execute_claimed_platform_post(
         )
         raise exc
 
-    with _resolved_media_path(store, video, storage) as media_path:
+    with ExitStack() as stack:
+        try:
+            media_path = stack.enter_context(_resolved_media_path(store, video, storage))
+        except _MATERIALIZATION_ERRORS as exc:
+            # Milestone 3.12: fetching hosted media is part of executing a
+            # claimed post — a failure here must end in the same retry/
+            # FAILED state as any other pre-submission failure, never
+            # escape and leave the row PUBLISHING. Nothing was submitted,
+            # so _schedule_retry_or_fail's pre-submission contract holds.
+            error = _materialization_publish_error(exc)
+            _schedule_retry_or_fail(store, record, error)
+            raise PublishTikTokError(f"Could not load media for video {video_id}: {error}") from exc
         _validate_and_submit(store, video, record, media_path, publisher)
+
+
+_MATERIALIZATION_ERRORS = (StorageError, StorageObjectNotFoundError, MediaNotUploadedError, MediaOwnershipError)
+
+
+def _materialization_publish_error(exc: Exception) -> PublishError:
+    """Translate a media-materialization failure into the PublishError
+    shape retry_classification understands. Only storage transport
+    failures can be transient (STORAGE_NETWORK_ERROR always; STORAGE_HTTP_ERROR
+    by http_status — 5xx retryable, 4xx terminal); a missing object or an
+    ownership mismatch never fixes itself."""
+    if isinstance(exc, StorageError):
+        if exc.reason_code == "NETWORK_ERROR":
+            return PublishError(str(exc), reason_code="STORAGE_NETWORK_ERROR")
+        if exc.reason_code == "HTTP_ERROR":
+            return PublishError(str(exc), reason_code="STORAGE_HTTP_ERROR", http_status=exc.http_status)
+        return PublishError(str(exc), reason_code="STORAGE_UNAVAILABLE")
+    if isinstance(exc, MediaOwnershipError):
+        return PublishError(str(exc), reason_code="MEDIA_OWNERSHIP_MISMATCH")
+    return PublishError(str(exc), reason_code="STORAGE_OBJECT_MISSING")
 
 
 def publish_video(

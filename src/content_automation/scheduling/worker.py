@@ -39,18 +39,29 @@ Dependencies:
   content_automation.publishing.tiktok.publisher, config.py.
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from content_automation.persistence.content_store import ContentStore
+from content_automation.persistence.content_store import ContentStore, PlatformPostRecord
 from content_automation.publishing.publisher import Publisher
 from content_automation.scheduling import due_post_selector
 from content_automation.scheduling.publish_tiktok import PublishTikTokError, execute_claimed_platform_post
 from content_automation.storage.protocol import StorageProtocol
 
 
+logger = logging.getLogger(__name__)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def log_event(event: str, **fields) -> None:
+    """One structured key=value line (Milestone 3.12). Callers pass ids,
+    statuses and codes only — never tokens, credentials or raw exception
+    text (which can embed platform response bodies)."""
+    logger.info(" ".join([f"event={event}", *(f"{key}={value}" for key, value in fields.items())]))
 
 
 @dataclass
@@ -79,6 +90,7 @@ class WorkerRunSummary:
 def run_due_posts_once(
     store: ContentStore, publisher: Publisher, *, platform: str = "tiktok", now: datetime | None = None,
     user_id: int | None = None, storage: StorageProtocol | None = None,
+    due_posts: list[PlatformPostRecord] | None = None,
 ) -> WorkerRunSummary:
     """Discover due PENDING platform_posts rows for `platform`, attempt to
     atomically claim each one, and execute the proven publish flow for
@@ -105,18 +117,31 @@ def run_due_posts_once(
     video with storage_provider set; every video without one (every
     pre-3.4 video, and every existing test) is completely unaffected by
     whether this is supplied.
+
+    due_posts (Milestone 3.12) lets a caller supply its own already-selected
+    due rows instead of due_post_selector.get_due_posts — the hosted worker
+    does, because hosted slots are scheduled in each user's own timezone
+    (scheduling/hosted_due_selection.py). Claiming and execution below are
+    identical either way; only discovery differs.
     """
     summary = WorkerRunSummary()
 
-    due_posts = due_post_selector.get_due_posts(store, platform, now=now, user_id=user_id)
+    if due_posts is None:
+        due_posts = due_post_selector.get_due_posts(store, platform, now=now, user_id=user_id)
     summary.discovered = len(due_posts)
 
     for post in due_posts:
         claimed = store.claim_platform_post(post.id, updated_at=_now_iso(), user_id=user_id)
         if not claimed:
             summary.skipped += 1
+            log_event("claim_skipped", platform_post_row_id=post.id, video_id=post.video_id, platform=post.platform)
             continue
         summary.claimed += 1
+        log_event(
+            "post_claimed", platform_post_row_id=post.id, video_id=post.video_id, platform=post.platform,
+            scheduled_at=post.scheduled_at, user_id=post.user_id, retry_count=post.retry_count,
+        )
+        log_event("publish_started", platform_post_row_id=post.id, video_id=post.video_id, platform=post.platform)
 
         try:
             execute_claimed_platform_post(store, post.video_id, post.platform, publisher, storage=storage)
@@ -124,15 +149,29 @@ def run_due_posts_once(
             summary.errors.append(str(exc))
 
         final = store.get_platform_post(post.video_id, post.platform)
+        outcome = {"platform_post_row_id": post.id, "video_id": post.video_id, "platform": post.platform}
         if final is not None and final.status == "PUBLISHED":
             summary.published += 1
+            log_event("publish_succeeded", **outcome, status=final.status)
         elif final is not None and final.status == "FAILED":
             summary.failed += 1
+            log_event("publish_failed", **outcome, status=final.status, failure_code=final.failure_code)
         elif final is not None and final.status == "PENDING" and final.next_retry_at is not None:
             # A row this pass claimed and executed can only be back at
             # PENDING because a retryable failure scheduled a retry —
             # never a plain never-attempted PENDING (this pass already
             # claimed it, so it can't still be in that state).
             summary.retry_scheduled += 1
+            log_event(
+                "retry_scheduled", **outcome, status=final.status, failure_code=final.failure_code,
+                retry_count=final.retry_count, next_retry_at=final.next_retry_at,
+            )
+        elif final is not None and final.status == "PUBLISHING" and final.platform_post_id is not None:
+            # Accepted by the platform, final outcome asynchronous —
+            # reconciliation.py picks it up at next_status_check_at.
+            log_event(
+                "reconciliation_scheduled", **outcome, status=final.status,
+                next_status_check_at=final.next_status_check_at,
+            )
 
     return summary

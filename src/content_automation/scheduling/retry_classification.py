@@ -46,6 +46,11 @@ Dependencies:
 _RETRYABLE_REASON_CODES = frozenset({
     "NETWORK_ERROR",         # requests.RequestException reaching creator_info/init/status
     "UPLOAD_NETWORK_ERROR",  # requests.RequestException during the upload PUT itself
+    # Milestone 3.12: Supabase Storage unreachable while materializing hosted
+    # media (publish_tiktok._materialization_publish_error). Same transport
+    # class as NETWORK_ERROR; STORAGE_HTTP_ERROR is left to the http_status
+    # fallback below, like HTTP_ERROR.
+    "STORAGE_NETWORK_ERROR",
 })
 
 # Always terminal regardless of http_status — local validation, account/

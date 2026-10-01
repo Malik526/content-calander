@@ -175,3 +175,18 @@ class ContentStoreProtocol(Protocol):
     ) -> CadenceRecord: ...
 
     def list_content_slots_for_user(self, user_id: int, from_iso: str, to_iso: str) -> list[SlotRecord]: ...
+
+    # -- Milestone 3.12 (hosted scheduler + worker) — scheduling/hosted_worker.py
+    # consumes these through the Protocol. The due/stale/reconcilable
+    # selectors and claim/update primitives below already existed on both
+    # backends (Milestones 2.1.x/3.3); only the worker's work list is new.
+
+    def list_hosted_user_ids_with_platform_work(self, platform: str) -> list[int]: ...
+
+    def get_due_platform_posts(
+        self, platform: str, now_iso: str, eligible_statuses: list[str], user_id: int
+    ) -> list[PlatformPostRecord]: ...
+
+    # user_id is required on Postgres (optional only on SQLite — ADR-0008);
+    # the hosted worker always passes it.
+    def claim_platform_post(self, post_id: int, updated_at: str, user_id: int) -> bool: ...

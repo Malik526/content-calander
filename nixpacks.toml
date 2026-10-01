@@ -1,0 +1,7 @@
+# Milestone 3.12: ffmpeg (ffprobe) is required by the hosted worker —
+# TikTokPublisher inspects media before every submission, and hosted uploads
+# are first inspected at publish time. "..." keeps Nixpacks' default
+# packages. Applies to both Railway services (API and worker) since they
+# build from this repo; the API simply doesn't use it.
+[phases.setup]
+nixPkgs = ["...", "ffmpeg"]

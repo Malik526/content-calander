@@ -45,6 +45,7 @@ Dependencies:
   tokens. config.py for API base/default privacy level/caption limit.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 import requests
@@ -119,9 +120,20 @@ class TikTokPublisher(Publisher):
     level must appear in privacy_level_options" check instead.
     """
 
-    def __init__(self, privacy_level: str = TIKTOK_DEFAULT_PRIVACY_LEVEL, unaudited: bool = True):
+    def __init__(
+        self, privacy_level: str = TIKTOK_DEFAULT_PRIVACY_LEVEL, unaudited: bool = True,
+        access_token_provider: Callable[[], str] | None = None,
+    ):
         self.privacy_level = privacy_level
         self.unaudited = unaudited
+        # Milestone 3.12: None keeps the local CLI's single token file
+        # (auth.get_access_token). The hosted worker passes a per-user
+        # provider backed by publishing/tiktok/credential_store.py instead
+        # (publishing/tiktok/hosted_publisher.py) — same publisher, same
+        # wire protocol, different credential source. A provider must raise
+        # TikTokAuthError (with a reason_code) on failure, like
+        # get_access_token does.
+        self._access_token_provider = access_token_provider
 
     def _headers(self) -> dict:
         """Milestone 2.1.8: propagates the underlying TikTokAuthError's own
@@ -134,7 +146,7 @@ class TikTokPublisher(Publisher):
         (already reason_code="REAUTHORIZATION_REQUIRED") stays
         unconditionally terminal — see retry_classification.py."""
         try:
-            token = get_access_token()
+            token = self._access_token_provider() if self._access_token_provider else get_access_token()
         except TikTokAuthError as exc:
             raise PublishError(str(exc), reason_code=exc.reason_code, http_status=exc.http_status) from exc
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=UTF-8"}

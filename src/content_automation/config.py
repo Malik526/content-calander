@@ -631,6 +631,12 @@ PLATFORM_POST_STALE_MINUTES = int(os.getenv("CONTENT_CALENDAR_PLATFORM_POST_STAL
 # nothing is retried or rescheduled because of it.
 PUBLISH_OVERDUE_GRACE_MINUTES = int(os.getenv("CONTENT_CALENDAR_PUBLISH_OVERDUE_GRACE_MINUTES", "30"))
 
+# Milestone 3.12 (hosted worker): seconds between hosted scheduler cycles
+# (cli/run_worker.py / scheduling/hosted_worker.py). Posts are scheduled to
+# the minute, so 60s keeps publishing within about a minute of its time
+# without hammering Postgres; each idle cycle is a handful of indexed reads.
+WORKER_POLL_INTERVAL_SECONDS = float(os.getenv("CONTENT_CALENDAR_WORKER_POLL_INTERVAL_SECONDS", "60"))
+
 # ---------------------------------------------------------------------------
 # Retry classification and backoff (Milestone 2.1.6)
 # Deterministic exponential-ish backoff for a RETRYABLE publishing failure
