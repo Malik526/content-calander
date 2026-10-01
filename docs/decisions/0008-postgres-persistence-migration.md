@@ -255,3 +255,17 @@ under this milestone's own time/risk budget.
   Milestone 3.2 approximated under SQLite; any future SQLite-side cleanup should not attempt to
   "catch up" to `NOT NULL` there — SQLite's nullable columns are documented (ADR-0007) as a
   deliberate transitional compromise, not a lagging implementation.
+
+## Addendum (2026-09-30) — migrations must be safe under concurrent appliers
+
+`PostgresContentStore.__init__` applies pending migrations, and the API constructs one store
+per request, so a deploy that adds a migration has many concurrent appliers. Plain
+`IF NOT EXISTS` DDL is not race-safe in Postgres. This surfaced as production 500s on
+migration 0008 (see `CHANGELOG.md`'s 2026-09-30 fix entry).
+
+`postgres_migrate` now serializes appliers with a per-schema, transaction-scoped advisory
+lock (`pg_advisory_xact_lock`) and re-checks `schema_migrations` under it. Migration files need
+no special concurrency handling as a result.
+
+A possible later improvement: apply migrations once at process startup instead of per request.
+That would change application behavior, so it was not done as part of this fix.

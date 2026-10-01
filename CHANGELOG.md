@@ -2,6 +2,40 @@
 
 ## 2026-09-30
 
+### Fix — Concurrent Postgres migration race (production 500s)
+
+**Symptom:** after the 3.10.1/3.11 deploy, API routes returned 500 with `duplicate key value
+violates unique constraint "pg_class_relname_nsp_index" ... (video_hashtags_id_seq, 2200)`,
+raised from `postgres_migrate.apply_migrations()` while applying `0008_add_video_hashtags.sql`.
+
+**Cause:** not a broken or partially committed migration. Every request constructs a
+`PostgresContentStore`, which applies pending migrations with no lock. Several requests raced
+to run the same `CREATE TABLE IF NOT EXISTS`, which is not concurrency-safe in Postgres: the
+losers fail on the system catalog's unique index. A read-only check of production found it
+consistent:
+- `0008` and `0009` are both recorded in `schema_migrations`.
+- `video_hashtags` exists with its indexes and an identity sequence owned by the table
+  (0 rows).
+- `platform_posts.failure_code` exists.
+
+No data was lost and no repair was needed. Because DDL is transactional, a half-applied
+`0008` can't occur.
+
+**Fix (`persistence/postgres_migrate.py` only):** each migration, and the `schema_migrations`
+bootstrap, now runs under a transaction-scoped advisory lock keyed to the current schema, and
+re-checks `schema_migrations` after acquiring it. Concurrent appliers queue behind the first
+and skip what it applied. Transaction-scoped so it stays correct behind Supabase's
+transaction-pooling pooler. Migration files and application behavior are unchanged.
+
+**Verification:** new `tests/test_postgres_migrate.py` (3, real Postgres, throwaway schema):
+- a deterministic reproduction of the production interleaving
+- 6 concurrent appliers over the real migrations
+- re-applying `0008`/`0009` over existing objects preserves `video_hashtags` rows and still
+  applies `0009`
+
+The two concurrency tests fail with the same catalog unique violation against the pre-fix
+runner. Backend 1027 passed (was 1024).
+
 ### Milestone 3.11 — User-Facing Publish States + Errors
 
 The Queue/Calendar now shows each slot as Open, Scheduled, Publishing, Published, Failed or
