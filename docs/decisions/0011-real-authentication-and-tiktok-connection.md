@@ -248,3 +248,8 @@ the same backend.
 > **Milestone 3.13 update:** the residual concurrent-refresh limitation documented above is closed:
 > hosted refreshes now run under a per-connection Postgres advisory lock (one refresh per expiry;
 > waiters reuse it). See `publishing/tiktok/credential_store.py` and ADR-0016.
+
+> **Milestone 3.14 follow-up:** the status response now carries the connected account's real identity
+> (`creator_username`/`creator_nickname`, and `account_label` = `@username`) from TikTok's `creator_info`
+> under the already-granted `video.publish` scope — still never the `open_id`. Best-effort: a failed
+> lookup leaves `connected` unchanged. See `publishing/tiktok/creator_identity.py`.

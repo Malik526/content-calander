@@ -56,6 +56,43 @@ describe("SettingsPage — TikTok connection", () => {
     expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
   });
 
+  // Milestone 3.14 follow-up — which TikTok account is connected.
+  it("shows Connected as @username", async () => {
+    platformsApi.getTikTokConnection.mockResolvedValue({
+      platform: "tiktok", connected: true, status: "ACTIVE", account_label: "@pickle.creator",
+      creator_username: "pickle.creator", creator_nickname: "Pickle Creator", creator_avatar_url: null,
+    });
+
+    render(<SettingsPage />);
+
+    await waitFor(() => expect(screen.getByTestId("tiktok-connected-as")).toHaveTextContent("Connected as @pickle.creator"));
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("shows the nickname when TikTok gave no username", async () => {
+    platformsApi.getTikTokConnection.mockResolvedValue({
+      platform: "tiktok", connected: true, status: "ACTIVE", account_label: "Pickle Creator",
+      creator_username: null, creator_nickname: "Pickle Creator", creator_avatar_url: null,
+    });
+
+    render(<SettingsPage />);
+
+    await waitFor(() => expect(screen.getByTestId("tiktok-connected-as")).toHaveTextContent("Connected as Pickle Creator"));
+  });
+
+  it("shows just Connected when the account identity is unknown", async () => {
+    platformsApi.getTikTokConnection.mockResolvedValue({
+      platform: "tiktok", connected: true, status: "ACTIVE", account_label: null,
+      creator_username: null, creator_nickname: null, creator_avatar_url: null,
+    });
+
+    render(<SettingsPage />);
+
+    await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
+    expect(screen.queryByTestId("tiktok-connected-as")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+  });
+
   it("shows an error state with retry when loading the status fails", async () => {
     const { ApiError } = await import("@/lib/api/client");
     platformsApi.getTikTokConnection.mockRejectedValueOnce(new ApiError("Could not reach the server."));

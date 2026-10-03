@@ -69,6 +69,11 @@ export interface TikTokConnectionStatus {
   connected: boolean;
   status: string;
   account_label: string | null;
+  /** Milestone 3.14 follow-up — from TikTok's creator_info; null when
+   * unknown. Optional so older API responses still type-check. */
+  creator_username?: string | null;
+  creator_nickname?: string | null;
+  creator_avatar_url?: string | null;
 }
 
 /**

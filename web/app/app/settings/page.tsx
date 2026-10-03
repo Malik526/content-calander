@@ -11,6 +11,7 @@ import { connectTikTok, disconnectTikTok, getTikTokConnection } from "@/lib/api/
 import { ApiError } from "@/lib/api/client";
 import type { TikTokConnectionStatus } from "@/lib/api/types";
 import { useSession } from "@/lib/session";
+import { connectedAccountName } from "@/lib/tiktokAccount";
 
 /**
  * /app/settings (Milestone 3.6). Account section reflects the real
@@ -110,6 +111,9 @@ export default function SettingsPage() {
     }
   }
 
+  // Milestone 3.14 follow-up: which TikTok account is connected (null → plain "Connected").
+  const accountName = connection ? connectedAccountName(connection) : null;
+
   return (
     <>
       <PageHeader title="Settings" description="Your account and connected platforms." />
@@ -151,10 +155,12 @@ export default function SettingsPage() {
             </Card>
           ) : (
             <Card className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col gap-0.5">
                 <p className="text-sm font-medium capitalize text-ink">{connection.platform}</p>
-                {connection.account_label ? (
-                  <span className="text-xs text-ink-muted">{connection.account_label}</span>
+                {accountName ? (
+                  <p className="text-xs text-ink-muted" data-testid="tiktok-connected-as">
+                    Connected as <span className="font-medium text-ink">{accountName}</span>
+                  </p>
                 ) : null}
               </div>
               <div className="flex items-center gap-3">

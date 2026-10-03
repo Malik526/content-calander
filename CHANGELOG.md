@@ -1,5 +1,31 @@
 # Content Automation — Changelog
 
+## 2026-10-03
+
+### Milestone 3.14 follow-up — Show the connected TikTok account
+
+Settings showed only "TikTok: Connected", so during live validation it was impossible to tell
+which TikTok account had authorized the app (and so received the published posts).
+
+- **Backend:** `GET /api/platforms/tiktok/status` now asks TikTok's `creator_info` endpoint,
+  using the user's own stored credential, which account is connected
+  (`publishing/tiktok/creator_identity.py`). This is the same call the publisher already
+  makes before every post, under the `video.publish` scope, so no new scope is needed.
+  - New response fields: `creator_username`, `creator_nickname`, `creator_avatar_url`.
+  - `account_label` is now `@username`, else the nickname.
+  - The lookup is best-effort with a 5s timeout. On failure the identity fields are null,
+    `connected` is unchanged, and the failure is logged as
+    `event=tiktok_creator_info_failed` with a code only.
+  - The `open_id` and tokens are still never returned.
+  - `TikTokPublisher.query_creator_info` takes an optional `timeout`.
+- **Frontend:** Settings shows "Connected as @username" (or the nickname, or just
+  "Connected" when unknown), via `lib/tiktokAccount.connectedAccountName`.
+- **Tests:**
+  - Backend 1127 passed (+8): username, nickname-only, no identity, three failure modes that
+    leave the connection ACTIVE, no `open_id`/token leakage, and no lookup when
+    disconnected. Existing status tests stub the lookup, so they never reach TikTok.
+  - `web/` 133 passed (+3); lint and build clean.
+
 ## 2026-10-02
 
 ### Milestone 3.14 — Queue refresh fix + Retry UI (live validation in progress)

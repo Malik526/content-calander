@@ -55,6 +55,21 @@ steps.
   passes (placeholder Supabase env).
 - Backend unchanged by 3.14 code.
 
+### Follow-up: connected TikTok account identity (2026-10-03)
+
+- **Why:** live validation could not tell which TikTok account had received the posts the
+  worker resolved as PUBLISHED. Settings said only "Connected", and `account_label` was always
+  null (3.6 rightly refused to show the opaque `open_id`).
+- **Change:**
+  - The status endpoint calls TikTok `creator_info` with the user's stored credential
+    (`publishing/tiktok/creator_identity.py`) and returns `creator_username`,
+    `creator_nickname` and `creator_avatar_url`.
+  - Settings shows "Connected as @username".
+  - A failed lookup leaves the connection reported as connected with null identity.
+- **Next live step:** once deployed, Settings for `user_id=2` shows the actual handle. If it
+  isn't the account being checked, that explains where the posts went. If it is, investigate
+  TikTok's private-post (SELF_ONLY) visibility and status next.
+
 ## Live Validation — Done (read-only, 2026-10-02)
 
 | Check | Result |

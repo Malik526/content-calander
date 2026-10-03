@@ -158,13 +158,15 @@ class TikTokPublisher(Publisher):
             raise PublishError(str(exc), reason_code=exc.reason_code, http_status=exc.http_status) from exc
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=UTF-8"}
 
-    def query_creator_info(self) -> dict:
+    def query_creator_info(self, timeout: float = _REQUEST_TIMEOUT_SECONDS) -> dict:
         """Query the authenticated account's publishing capabilities
         (available privacy_level_options, duration/size limits, duet/
-        stitch/comment defaults). Required before every publish() call —
+        stitch/comment defaults) and identity (creator_username/
+        creator_nickname/creator_avatar_url — Milestone 3.14 follow-up,
+        creator_identity.py). Required before every publish() call —
         never assume a hard-coded privacy level is actually offered."""
         try:
-            response = requests.post(CREATOR_INFO_URL, headers=self._headers(), timeout=_REQUEST_TIMEOUT_SECONDS)
+            response = requests.post(CREATOR_INFO_URL, headers=self._headers(), timeout=timeout)
         except requests.RequestException as exc:
             raise PublishError(f"Could not reach TikTok creator_info endpoint: {exc}", reason_code="NETWORK_ERROR") from exc
         return _parse_response(response)

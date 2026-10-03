@@ -42,6 +42,7 @@ from content_automation.persistence.content_store import UserRecord
 from content_automation.persistence.protocol import ContentStoreProtocol
 from content_automation.publishing.tiktok import auth as tiktok_auth
 from content_automation.publishing.tiktok import credential_store
+from content_automation.publishing.tiktok.creator_identity import fetch_creator_identity
 
 router = APIRouter()
 
@@ -89,13 +90,22 @@ def get_tiktok_status(
         return TikTokConnectionStatus(connected=False, status="DISCONNECTED")
     # account_label is deliberately not connection.external_account_id:
     # that field holds TikTok's open_id, an opaque per-app platform
-    # identifier with no user-recognizable meaning (not a handle/username,
-    # not something the current OAuth scope even exposes) — see Milestone
-    # 3.6 security review. It stays in persistence (needed for account
-    # association) but is never a real "label," so it's not surfaced here.
-    # account_label remains None until a real display name/username is
-    # available through an approved additional TikTok scope.
-    return TikTokConnectionStatus(connected=True, status=connection.status)
+    # identifier with no user-recognizable meaning — see Milestone 3.6
+    # security review. It stays in persistence (needed for account
+    # association) but is never surfaced.
+    # Milestone 3.14 follow-up: the real display identity comes from
+    # TikTok's creator_info (video.publish scope, already granted). Best-
+    # effort: a failed lookup leaves the identity fields None and the
+    # connection reported exactly as before.
+    identity = fetch_creator_identity(store, user.id)
+    if identity is None:
+        return TikTokConnectionStatus(connected=True, status=connection.status)
+    label = f"@{identity.username}" if identity.username else identity.nickname
+    return TikTokConnectionStatus(
+        connected=True, status=connection.status, account_label=label,
+        creator_username=identity.username, creator_nickname=identity.nickname,
+        creator_avatar_url=identity.avatar_url,
+    )
 
 
 @router.post("/platforms/tiktok/connect", response_model=TikTokConnectStartResponse)

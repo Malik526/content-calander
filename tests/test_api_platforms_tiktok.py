@@ -81,6 +81,15 @@ def tiktok_web_redirect_uri(monkeypatch):
     monkeypatch.setattr(platforms_tiktok, "TIKTOK_WEB_REDIRECT_URI", FAKE_WEB_REDIRECT_URI)
 
 
+@pytest.fixture(autouse=True)
+def no_live_creator_lookup(monkeypatch):
+    """Milestone 3.14 follow-up: the status route now asks TikTok which
+    account is connected. Tests never reach TikTok — by default the lookup
+    finds nothing (the pre-follow-up behavior); the creator-identity tests
+    at the bottom of this file run the real lookup with HTTP mocked."""
+    monkeypatch.setattr(platforms_tiktok, "fetch_creator_identity", lambda store, user_id: None)
+
+
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
@@ -479,3 +488,142 @@ def test_disconnect_removes_the_stored_credential(client, users, monkeypatch, db
         connection = verify_store.get_platform_connection(user_a.id, "tiktok")
         assert connection.status == "DISCONNECTED"
         assert verify_store.get_platform_credential(connection.id) is None
+
+
+# ---------------------------------------------------------------------------
+# Milestone 3.14 follow-up — connected account identity (creator_info)
+# ---------------------------------------------------------------------------
+
+class _CreatorInfoResponse:
+    def __init__(self, data, status_code=200, error_code="ok"):
+        self._data, self.status_code, self._error_code = data, status_code, error_code
+
+    def json(self):
+        return {"data": self._data, "error": {"code": self._error_code, "message": ""}}
+
+
+def _connect_directly(db_path, user):
+    """An ACTIVE connection with a valid stored credential, as after a real callback."""
+    from content_automation.publishing.tiktok import credential_store as cs
+
+    with ContentStore(db_path=db_path) as store:
+        connection = store.get_or_create_platform_connection(user.id, "tiktok", external_account_id="open_id_secret")
+        cs.save_hosted_tiktok_token(store, connection.id, _fake_token())
+
+
+@pytest.fixture
+def creator_info(monkeypatch):
+    """Run the real creator-identity lookup, with TikTok's HTTP mocked.
+    Set .response (or .error) before requesting status; .calls records
+    the Authorization headers TikTok would have seen."""
+    from content_automation.publishing.tiktok import creator_identity
+    from content_automation.publishing.tiktok import publisher as tp
+
+    monkeypatch.setattr(platforms_tiktok, "fetch_creator_identity", creator_identity.fetch_creator_identity)
+
+    class Fake:
+        response = None
+        error = None
+        calls = []
+
+    def fake_post(url, headers=None, timeout=None, **_kwargs):
+        assert url == tp.CREATOR_INFO_URL
+        Fake.calls.append((headers or {}).get("Authorization"))
+        if Fake.error is not None:
+            raise Fake.error
+        return Fake.response
+
+    monkeypatch.setattr(tp.requests, "post", fake_post)
+    return Fake
+
+
+def test_status_shows_connected_username(client, users, db_path, creator_info):
+    user_a, _ = users
+    _connect_directly(db_path, user_a)
+    creator_info.response = _CreatorInfoResponse({
+        "creator_username": "pickle.creator", "creator_nickname": "Pickle Creator",
+        "creator_avatar_url": "https://p16.tiktokcdn.com/avatar.jpeg", "privacy_level_options": ["SELF_ONLY"],
+    })
+    _act_as(user_a)
+
+    body = client.get("/api/platforms/tiktok/status").json()
+
+    assert body["connected"] is True
+    assert body["creator_username"] == "pickle.creator"
+    assert body["creator_nickname"] == "Pickle Creator"
+    assert body["creator_avatar_url"] == "https://p16.tiktokcdn.com/avatar.jpeg"
+    assert body["account_label"] == "@pickle.creator"
+    assert creator_info.calls == ["Bearer access_abc"]  # that user's own stored token
+
+
+def test_status_falls_back_to_nickname(client, users, db_path, creator_info):
+    user_a, _ = users
+    _connect_directly(db_path, user_a)
+    creator_info.response = _CreatorInfoResponse({"creator_username": "", "creator_nickname": "Pickle Creator"})
+    _act_as(user_a)
+
+    body = client.get("/api/platforms/tiktok/status").json()
+
+    assert (body["connected"], body["creator_username"], body["account_label"]) == (True, None, "Pickle Creator")
+
+
+def test_status_connected_without_identity_fields(client, users, db_path, creator_info):
+    user_a, _ = users
+    _connect_directly(db_path, user_a)
+    creator_info.response = _CreatorInfoResponse({"privacy_level_options": ["SELF_ONLY"]})
+    _act_as(user_a)
+
+    body = client.get("/api/platforms/tiktok/status").json()
+
+    assert body["connected"] is True and body["status"] == "ACTIVE"
+    assert body["account_label"] is None and body["creator_username"] is None and body["creator_nickname"] is None
+
+
+@pytest.mark.parametrize("failure", ["network", "api_error", "http_500"])
+def test_creator_info_failure_keeps_connection_connected(client, users, db_path, creator_info, caplog, failure):
+    import requests
+
+    user_a, _ = users
+    _connect_directly(db_path, user_a)
+    if failure == "network":
+        creator_info.error = requests.ConnectionError("tiktok unreachable")
+    elif failure == "api_error":
+        creator_info.response = _CreatorInfoResponse({}, status_code=401, error_code="access_token_invalid")
+    else:
+        creator_info.response = _CreatorInfoResponse({}, status_code=500, error_code="internal_error")
+    _act_as(user_a)
+
+    with caplog.at_level("INFO"):
+        response = client.get("/api/platforms/tiktok/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["connected"], body["status"], body["account_label"]) == (True, "ACTIVE", None)
+    with ContentStore(db_path=db_path) as store:
+        connection = store.get_platform_connection(user_a.id, "tiktok")
+        assert connection.status == "ACTIVE"
+        assert store.get_platform_credential(connection.id) is not None
+    assert "event=tiktok_creator_info_failed" in caplog.text
+    assert "access_abc" not in caplog.text and "refresh_xyz" not in caplog.text
+
+
+def test_status_never_exposes_open_id_or_tokens(client, users, db_path, creator_info):
+    user_a, _ = users
+    _connect_directly(db_path, user_a)
+    creator_info.response = _CreatorInfoResponse({"creator_username": "pickle.creator"})
+    _act_as(user_a)
+
+    text = client.get("/api/platforms/tiktok/status").text
+
+    for secret in ("open_id_secret", "access_abc", "refresh_xyz"):
+        assert secret not in text
+
+
+def test_identity_is_not_fetched_when_not_connected(client, users, creator_info):
+    user_a, _ = users
+    _act_as(user_a)
+
+    body = client.get("/api/platforms/tiktok/status").json()
+
+    assert body["connected"] is False and body["creator_username"] is None
+    assert creator_info.calls == []
