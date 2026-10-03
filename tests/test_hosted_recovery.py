@@ -785,3 +785,28 @@ def test_concurrent_manual_retries_apply_exactly_once(_pg_schema, storage, video
     assert sorted(results) == ["CONCURRENT_UPDATE"] * 4 + ["ok"]
     with _pg_store() as check:
         assert _row(check, post).status == "PENDING"
+
+
+# --- Milestone 3.14 follow-up: optional caption ---------------------------------
+
+def test_captionless_post_publishes_and_old_caption_missing_failure_recovers_with_retry(
+    store, storage, video_file, tmp_path,
+):
+    """A post that FAILED with CAPTION_MISSING before captions became optional
+    goes through the normal Retry -> PENDING -> claim path and publishes
+    without a caption. Retry/idempotency rules are unchanged."""
+    user = _hosted_user(store)
+    post = _scheduled_post(store, storage, user, video_file, tmp_path)
+    save_caption(store, store.get_video(post.video_id), "")  # user cleared it
+    store.update_platform_post(post.id, updated_at=_iso_now(), status="FAILED", failure_code="CAPTION_MISSING",
+                               failure_reason="no stored caption_text")
+
+    retried = retry_platform_post(store, _row(store, post), user_id=user.id)
+    assert retried.status == "PENDING"
+
+    publisher = CheckpointPublisher()
+    _cycle(store, storage, publisher, now_utc=_after_backoff())
+
+    assert publisher.publish_calls == [None]  # submitted, with no caption
+    row = _row(store, post)
+    assert (row.status, row.platform_post_id) == ("PUBLISHED", "pub_1")

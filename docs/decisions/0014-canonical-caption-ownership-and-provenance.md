@@ -94,3 +94,24 @@ drift from the text. Occurrences are kept in order with duplicates and original 
 Normalization (case folding, dedup) is left to consumers, because it can be applied later but
 not undone. Rows are not backfilled for captions written before 3.10.1. Hashtags are never
 sent to a platform separately; TikTok recognizes them inside the caption string.
+
+## Addendum — Milestone 3.14 follow-up: captions are optional
+
+The "missing caption precondition is unchanged" consequence above no longer holds.
+
+- **What production showed:** a scheduled, otherwise valid post failed with
+  `CAPTION_MISSING`.
+- **Why that was wrong:** TikTok's Direct Post `post_info.title` is optional ("If not
+  specified, the post will not have any captions").
+- **The model now:** a canonical video plus an optional caption.
+  - `resolve_publish_caption` returns `None` for a missing, empty or whitespace-only caption.
+  - The worker no longer checks for a caption.
+  - `TikTokPublisher` omits `title` entirely when there is none, and still enforces the
+    length limit when there is one.
+  - Nothing ever substitutes a placeholder.
+- **Old rows:** `CAPTION_MISSING` is no longer raised. Rows that failed with it recover
+  through Retry.
+- **Future direction (deferred, not built):** manual, review (AI pre-fills, user edits) and
+  auto (generated per platform from transcript, creator style, topic and performance)
+  caption modes. These would fill this optional value. A caption becomes mandatory only for
+  a platform that genuinely requires one.

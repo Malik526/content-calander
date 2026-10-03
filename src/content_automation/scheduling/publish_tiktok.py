@@ -8,7 +8,8 @@ What it does:
   python3 publish_tiktok.py --video-id <id>
 
   load video from SQLite -> resolve its local processed MP4 -> load stored
-  caption (publishing.caption_resolution — Milestone 3.10) -> verify media/file exists -> query TikTok creator/account
+  caption, if any (publishing.caption_resolution — Milestone 3.10; optional
+  since 3.14) -> verify media/file exists -> query TikTok creator/account
   capabilities -> initialize upload -> upload local MP4 -> publish
   privately -> obtain publish ID -> poll/check publish status -> persist
   outcome in platform_posts.
@@ -154,10 +155,9 @@ def _validate_ready_to_publish(store: ContentStore, video: VideoRecord, media_pa
         raise PublishTikTokError(
             f"Local media file for video {video.id} not found ({media_path!r}).", reason_code="LOCAL_FILE_MISSING",
         )
-    if not resolve_publish_caption(video, "tiktok"):
-        raise PublishTikTokError(
-            f"Video {video.id} has no stored caption_text — cannot publish without one.", reason_code="CAPTION_MISSING",
-        )
+    # No caption check (Milestone 3.14 follow-up): captions are optional —
+    # TikTok's Direct Post `title` is optional, and a captionless video
+    # publishes without one. CAPTION_MISSING is no longer raised anywhere.
 
     if video.container is None:
         # Milestone 3.12: a hosted upload was never inspected (3.7 stores

@@ -172,13 +172,20 @@ class TikTokPublisher(Publisher):
         return _parse_response(response)
 
     def publish(
-        self, video_path: Path, caption: str, on_platform_post_id: Callable[[str], None] | None = None,
+        self, video_path: Path, caption: str | None, on_platform_post_id: Callable[[str], None] | None = None,
     ) -> PublishResult:
         video_path = Path(video_path)
         if not video_path.exists():
             raise PublishError(f"Local video not found: {video_path}", reason_code="LOCAL_FILE_MISSING")
 
-        caption_length = _utf16_length(caption)
+        # Milestone 3.14 follow-up: the caption is optional. TikTok's
+        # post_info.title is optional ("If not specified, the post will not
+        # have any captions" — Direct Post API reference), so a missing or
+        # blank caption omits title entirely: no placeholder, no whitespace.
+        if caption is not None and not caption.strip():
+            caption = None
+
+        caption_length = _utf16_length(caption) if caption is not None else 0
         if caption_length > TIKTOK_MAX_CAPTION_UTF16_UNITS:
             raise PublishError(
                 f"Caption is {caption_length} UTF-16 code units, exceeding TikTok's "
@@ -236,14 +243,16 @@ class TikTokPublisher(Publisher):
             )
 
         video_size = video_path.stat().st_size
+        post_info = {
+            "privacy_level": self.privacy_level,
+            "disable_duet": False,
+            "disable_comment": False,
+            "disable_stitch": False,
+        }
+        if caption is not None:
+            post_info["title"] = caption
         init_body = {
-            "post_info": {
-                "title": caption,
-                "privacy_level": self.privacy_level,
-                "disable_duet": False,
-                "disable_comment": False,
-                "disable_stitch": False,
-            },
+            "post_info": post_info,
             "source_info": {
                 "source": "FILE_UPLOAD",
                 "video_size": video_size,

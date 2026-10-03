@@ -44,6 +44,9 @@ _SHARED_CODE_CATEGORIES: dict[str, str] = {
     # upgraded to REAUTHORIZATION_REQUIRED in publishing/tiktok/auth.py).
     "AUTH_HTTP_ERROR": "TEMPORARY_PLATFORM_ERROR",
     "CAPTION_TOO_LONG": "CAPTION_INVALID",
+    # No longer raised since the Milestone 3.14 follow-up (captions are
+    # optional); kept so rows that failed with it before still explain
+    # themselves. Such a row recovers with Retry.
     "CAPTION_MISSING": "CAPTION_INVALID",
     "CORRUPT_MEDIA": "MEDIA_INVALID",
     "VIDEO_TOO_LONG": "MEDIA_INVALID",

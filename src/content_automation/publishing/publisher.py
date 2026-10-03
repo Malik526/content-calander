@@ -86,9 +86,12 @@ class Publisher(ABC):
 
     @abstractmethod
     def publish(
-        self, video_path: Path, caption: str, on_platform_post_id: Callable[[str], None] | None = None,
+        self, video_path: Path, caption: str | None, on_platform_post_id: Callable[[str], None] | None = None,
     ) -> PublishResult:
         """Upload video_path and submit it for publishing with caption.
+        caption is optional (Milestone 3.14 follow-up): None means publish
+        without one, which every implementation must support unless its
+        platform genuinely requires a caption.
         Raises PublishError on any failure — missing file, auth, upload,
         or a malformed/error platform response. Must not silently retry an
         ambiguous result as a brand-new submission; that policy lives in

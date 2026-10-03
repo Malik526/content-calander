@@ -2,6 +2,34 @@
 
 ## 2026-10-03
 
+### Milestone 3.14 follow-up — Captions are optional (fix `CAPTION_MISSING`)
+
+- **Production discovery:** a valid scheduled post was claimed, then FAILED with
+  `CAPTION_MISSING`. The pre-publish check required a caption, but TikTok's Direct Post
+  `title` is optional.
+- **Fix:**
+  - `resolve_publish_caption` returns `None` for a missing, empty or whitespace-only
+    caption.
+  - The `CAPTION_MISSING` check is removed from `_validate_ready_to_publish`.
+  - `TikTokPublisher` omits `post_info.title` when there is no caption (no `null`, no
+    placeholder) and sends a present caption unchanged, still enforcing `CAPTION_TOO_LONG`.
+  - `Publisher.publish(caption: str | None)` documents optional captions for every
+    platform.
+- **Recovery:** old `CAPTION_MISSING` rows recover with Retry and publish without a caption.
+  The taxonomy keeps the code for display.
+- **Frontend:** unchanged; clearing a caption was already allowed.
+- **Docs:** ADR-0014 addendum (captions optional; future AI/auto captions fill the optional
+  value), 3.14 evaluation, AGENTS.md, PROJECT_STATE.md.
+- **Tests:**
+  - Backend 1171 passed (was 1159). New: no-caption, empty and whitespace publish with
+    `title` omitted; a present caption sent unchanged; the length limit still enforced; a
+    claimed captionless post submitted; Retry of a `CAPTION_MISSING` row publishes.
+  - The two tests that asserted the old caption-required behavior were rewritten to assert
+    the new one.
+  - Note: `test_media_storage_postgres.py` failed once intermittently in an earlier full
+    run (stale object read from the shared Supabase test bucket). That is pre-existing and
+    unrelated; it passed 3/3 in isolation and in the final full run.
+
 ### Milestone 3.14 follow-up — Build secret hardening, overdue telemetry, confirmed live publish
 
 See `docs/evaluations/productization/milestone-3.14-hosted-e2e-validation.md` ("Live Run",

@@ -72,6 +72,44 @@
   isn't the account being checked, that explains where the posts went. If it is, investigate
   TikTok's private-post (SELF_ONLY) visibility and status next.
 
+### Follow-up: captions are optional (2026-10-03)
+
+- **Production discovery:**
+  - A scheduled post was claimed, `publish_started` was logged, and it then went FAILED
+    with `failure_code=CAPTION_MISSING`.
+  - The video itself was valid; it just had no caption.
+- **Root cause:** a Pickle Batch rule, not a TikTok one.
+  - `scheduling/publish_tiktok._validate_ready_to_publish` raised `CAPTION_MISSING`
+    whenever `resolve_publish_caption()` returned nothing. That rule was carried over from
+    the local CLI (Milestone 2.0) and kept unchanged by ADR-0014.
+  - `TikTokPublisher` also always sent `post_info.title`, which would have been `null`.
+  - TikTok's Direct Post reference marks `title` **optional** ("If not specified, the post
+    will not have any captions"). Only `privacy_level` is required.
+- **Correction:** captions are optional.
+  - `resolve_publish_caption` treats `None`, `""` and whitespace-only as no caption. A real
+    caption is returned exactly as stored.
+  - The worker's caption check is removed.
+  - `TikTokPublisher` **omits `title`** when there is no caption: no `null`, no empty
+    string, no placeholder. With a caption it sends it unchanged as `title`, and the
+    2200-UTF-16-unit `CAPTION_TOO_LONG` check still applies.
+  - No other validation changed.
+- **Frontend:** no change needed. The caption editor already allows clearing a caption
+  (saved as NULL; whitespace-only is normalized to NULL server-side).
+- **Retry:** existing `FAILED`/`CAPTION_MISSING` rows (no `platform_post_id`) recover through
+  Retry → PENDING → claim → submitted with no caption. No migration; all
+  retry/idempotency/UNKNOWN protections are unchanged. Tested in
+  `test_hosted_recovery.py`. `CAPTION_MISSING` stays in the failure taxonomy only so those
+  old rows still display.
+- **Future (deferred to the intelligence milestone):** Manual / Review (AI pre-fill + user
+  edit) / Auto (platform-specific generation from transcript, creator style, topic,
+  performance). These fill the *optional* caption; they never make it mandatory unless a
+  platform requires one. ADR-0014's addendum records this.
+- **Production acceptance (pending deploy):**
+  - Leave a caption blank, schedule the post, and expect `publish_started` → `publish_id`
+    → PUBLISHING → `reconciliation_resolved` PUBLISHED.
+  - Check on TikTok that the post exists with no caption.
+  - Retry the earlier `CAPTION_MISSING` row and expect the same outcome.
+
 ## Live Validation — Done (read-only, 2026-10-02)
 
 | Check | Result |

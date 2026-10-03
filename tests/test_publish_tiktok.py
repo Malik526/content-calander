@@ -159,14 +159,20 @@ def test_publish_video_raises_when_missing_local_file(store):
         pt.publish_video(store, video.id, FakePublisher())
 
 
-def test_publish_video_raises_when_missing_caption(store, tmp_path):
+def test_missing_caption_is_not_a_precondition_failure(store, tmp_path):
+    """Milestone 3.14 follow-up: this used to raise for caption_text=None.
+    Captions are optional now, so validation moves on to the next real
+    precondition — here, the unreadable media file."""
     video_path = tmp_path / "v.mp4"
     video_path.write_bytes(b"data")
     video = store.insert_video("h1", "v.mp4", "/incoming/v.mp4", "2026-01-01T00:00:00")
     store.update_video(video.id, canonical_media_path=str(video_path), caption_text=None)
 
-    with pytest.raises(pt.PublishTikTokError, match="caption_text"):
+    with pytest.raises(pt.PublishTikTokError) as exc_info:
         pt.publish_video(store, video.id, FakePublisher())
+
+    assert exc_info.value.reason_code == "CORRUPT_MEDIA"
+    assert "caption_text" not in str(exc_info.value)
 
 
 def test_publish_video_raises_when_not_tiktok_compatible(store, tmp_path):
@@ -528,7 +534,6 @@ def test_retryable_failure_keeps_its_reason_code_while_pending_retry(store, proc
     "fields, expected_code",
     [
         ({"canonical_media_path": "/does/not/exist.mp4", "caption_text": "hi"}, "LOCAL_FILE_MISSING"),
-        ({"caption_text": None}, "CAPTION_MISSING"),
         ({"container": "avi", "caption_text": "hi"}, "MEDIA_INCOMPATIBLE"),
     ],
 )
@@ -543,6 +548,40 @@ def test_precondition_failure_on_claimed_row_persists_its_code(store, processed_
     final = store.get_platform_post(processed_video.id, "tiktok")
     assert final.status == "FAILED"
     assert final.failure_code == expected_code
+
+
+# Milestone 3.14 follow-up: captions are optional. A video with no caption
+# (or a blank/whitespace-only one) publishes without one — never
+# CAPTION_MISSING, never a placeholder.
+@pytest.mark.parametrize("stored", [None, "", "   \n\t "])
+def test_video_without_a_caption_publishes_without_one(store, processed_video, stored):
+    store.update_video(processed_video.id, caption_text=stored)
+    publisher = FakePublisher()
+
+    pt.publish_video(store, processed_video.id, publisher)
+
+    assert publisher.publish_calls == [(Path(processed_video.canonical_media_path), None)]
+    record = store.get_platform_post(processed_video.id, "tiktok")
+    assert (record.status, record.failure_code) == ("PUBLISHED", None)
+
+
+def test_claimed_captionless_post_is_submitted_not_failed(store, processed_video):
+    store.update_video(processed_video.id, caption_text=None)
+    record = store.insert_platform_post(processed_video.id, "tiktok", created_at="2026-01-01T00:00:00")
+    store.claim_platform_post(record.id, updated_at="2026-01-01T00:00:00")
+    publisher = FakePublisher()
+
+    pt.execute_claimed_platform_post(store, processed_video.id, "tiktok", publisher)
+
+    assert [call[1] for call in publisher.publish_calls] == [None]
+    assert store.get_platform_post(processed_video.id, "tiktok").status == "PUBLISHED"
+
+
+def test_present_caption_is_published_exactly_as_stored(store, processed_video):
+    store.update_video(processed_video.id, caption_text="  Built today.\n\n#coding  ")
+    publisher = FakePublisher()
+    pt.publish_video(store, processed_video.id, publisher)
+    assert publisher.publish_calls[0][1] == "  Built today.\n\n#coding  "
 
 
 def test_platform_reported_failure_persists_platform_fail_code(store, processed_video):

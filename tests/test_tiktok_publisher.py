@@ -541,3 +541,49 @@ def test_response_missing_data_object_is_malformed(monkeypatch):
     with pytest.raises(PublishError) as exc_info:
         publisher.get_status("pub_123")
     assert exc_info.value.reason_code == "MALFORMED_RESPONSE"
+
+
+# --- Milestone 3.14 follow-up: optional caption ---------------------------------
+
+def _capture_init(monkeypatch):
+    bodies = []
+
+    def fake_post(url, **kwargs):
+        if url == tp.CREATOR_INFO_URL:
+            return _FakeResponse(_SELF_ONLY_CREATOR_INFO)
+        if url == tp.INIT_URL:
+            bodies.append(kwargs["json"])
+            return _FakeResponse(_ok_body({"publish_id": "pub_123", "upload_url": "https://upload.example.com/x"}))
+        raise AssertionError(f"unexpected POST to {url}")
+
+    monkeypatch.setattr(tp.requests, "post", fake_post)
+    monkeypatch.setattr(tp.requests, "put", lambda *a, **k: _FakeResponse(status_code=201))
+    return bodies
+
+
+@pytest.mark.parametrize("caption", [None, "", "   ", "\n\t"])
+def test_publish_without_a_caption_omits_title(monkeypatch, video_file, caption):
+    """TikTok's post_info.title is optional; with no caption it is left out
+    entirely — not null, not empty, not a placeholder."""
+    bodies = _capture_init(monkeypatch)
+
+    result = tp.TikTokPublisher().publish(video_file, caption)
+
+    assert result.platform_post_id == "pub_123"
+    [body] = bodies
+    assert "title" not in body["post_info"]
+    assert body["post_info"]["privacy_level"] == "SELF_ONLY"
+
+
+def test_publish_with_a_caption_sends_it_as_title_unchanged(monkeypatch, video_file):
+    bodies = _capture_init(monkeypatch)
+    tp.TikTokPublisher().publish(video_file, "Built today.\n\n#coding @friend")
+    assert bodies[0]["post_info"]["title"] == "Built today.\n\n#coding @friend"
+
+
+def test_caption_length_limit_still_applies_when_present(monkeypatch, video_file):
+    bodies = _capture_init(monkeypatch)
+    with pytest.raises(PublishError) as exc_info:
+        tp.TikTokPublisher().publish(video_file, "x" * (tp.TIKTOK_MAX_CAPTION_UTF16_UNITS + 1))
+    assert exc_info.value.reason_code == "CAPTION_TOO_LONG"
+    assert bodies == []  # rejected before any init request
