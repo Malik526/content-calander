@@ -39,6 +39,14 @@ function formatTimeLabel(time: string): string {
  * posting_cadence_times has a real UNIQUE(cadence_id, weekday,
  * posting_time) constraint on the backend, and this is simpler than
  * surfacing that as a save-time error for a case the UI can just prevent.
+ *
+ * Milestone 3.14 UX cleanup: the always-visible draft time input + "Add
+ * time" button (which caused confusion between persisted times and a
+ * phantom default value of 09:00) are replaced by an explicit
+ * "+ Add posting time" per-day trigger. Clicking it shows a time picker
+ * and a confirm button inline; the value is committed only on confirm.
+ * Persisted times appear as chips; nothing looks draft unless the user
+ * deliberately opened the add form.
  */
 export function WeeklyRhythmEditor({
   postingTimes,
@@ -47,7 +55,8 @@ export function WeeklyRhythmEditor({
   postingTimes: PostingTime[];
   onChange: (next: PostingTime[]) => void;
 }) {
-  const [pendingTime, setPendingTime] = useState<Record<string, string>>({});
+  const [addingForDay, setAddingForDay] = useState<string | null>(null);
+  const [draftTime, setDraftTime] = useState(DEFAULT_NEW_TIME);
 
   function timesFor(weekday: string): PostingTime[] {
     return postingTimes
@@ -60,15 +69,29 @@ export function WeeklyRhythmEditor({
     if (enabled) {
       onChange([...postingTimes, { weekday, posting_time: DEFAULT_NEW_TIME }]);
     } else {
+      // Close any open add form for this day before removing its times.
+      setAddingForDay((current) => (current === weekday ? null : current));
       onChange(postingTimes.filter((entry) => entry.weekday !== weekday));
     }
   }
 
-  function handleAddTime(weekday: string) {
-    const time = pendingTime[weekday] ?? DEFAULT_NEW_TIME;
-    const alreadyExists = postingTimes.some((entry) => entry.weekday === weekday && entry.posting_time === time);
-    if (alreadyExists) return;
-    onChange([...postingTimes, { weekday, posting_time: time }]);
+  function handleStartAdding(weekday: string) {
+    setAddingForDay(weekday);
+    setDraftTime(DEFAULT_NEW_TIME);
+  }
+
+  function handleConfirmAdd(weekday: string) {
+    const alreadyExists = postingTimes.some(
+      (entry) => entry.weekday === weekday && entry.posting_time === draftTime,
+    );
+    if (!alreadyExists) {
+      onChange([...postingTimes, { weekday, posting_time: draftTime }]);
+    }
+    setAddingForDay(null);
+  }
+
+  function handleCancelAdd() {
+    setAddingForDay(null);
   }
 
   function handleRemoveTime(weekday: string, time: string) {
@@ -80,8 +103,10 @@ export function WeeklyRhythmEditor({
       {WEEKDAYS.map(({ key, label }) => {
         const times = timesFor(key);
         const isActive = times.length > 0;
+        const isAddingHere = addingForDay === key;
+
         return (
-          <div key={key} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:gap-4">
+          <div key={key} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:gap-4">
             <label className="flex w-32 shrink-0 items-center gap-2 text-sm font-medium text-ink">
               <input
                 type="checkbox"
@@ -92,38 +117,64 @@ export function WeeklyRhythmEditor({
             </label>
 
             {isActive ? (
-              <div className="flex flex-1 flex-wrap items-center gap-2">
-                {times.map((entry) => (
-                  <span
-                    key={`${entry.weekday}-${entry.posting_time}`}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-ink"
-                  >
-                    <span>{formatTimeLabel(entry.posting_time)}</span>
+              <div className="flex flex-1 flex-col gap-2">
+                {/* Committed time chips — these are the real saved times. */}
+                <div className="flex flex-wrap gap-2">
+                  {times.map((entry) => (
+                    <span
+                      key={`${entry.weekday}-${entry.posting_time}`}
+                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-ink"
+                    >
+                      <span>{formatTimeLabel(entry.posting_time)}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveTime(key, entry.posting_time)}
+                        aria-label={`Remove ${label} ${formatTimeLabel(entry.posting_time)}`}
+                        className="text-xs text-ink-muted hover:text-accent"
+                      >
+                        Remove
+                      </button>
+                    </span>
+                  ))}
+                </div>
+
+                {/* Draft add form — only visible after clicking "+ Add posting time". */}
+                {isAddingHere ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="time"
+                      value={draftTime}
+                      onChange={(event) => setDraftTime(event.target.value)}
+                      aria-label={`New time for ${label}`}
+                      className="rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-ink"
+                    />
                     <button
                       type="button"
-                      onClick={() => handleRemoveTime(key, entry.posting_time)}
-                      aria-label={`Remove ${label} ${formatTimeLabel(entry.posting_time)}`}
-                      className="text-xs text-ink-muted hover:text-accent"
+                      onClick={() => handleConfirmAdd(key)}
+                      aria-label={`Add time to ${label}`}
+                      className="inline-flex items-center justify-center rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
                     >
-                      Remove
+                      Add
                     </button>
-                  </span>
-                ))}
-                <input
-                  type="time"
-                  value={pendingTime[key] ?? DEFAULT_NEW_TIME}
-                  onChange={(event) => setPendingTime((current) => ({ ...current, [key]: event.target.value }))}
-                  aria-label={`New time for ${label}`}
-                  className="rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-ink"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleAddTime(key)}
-                  aria-label={`Add time to ${label}`}
-                  className="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:border-accent/40 hover:text-accent"
-                >
-                  + Add time
-                </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelAdd}
+                      aria-label={`Cancel adding time to ${label}`}
+                      className="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink-muted transition-colors hover:text-ink"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleStartAdding(key)}
+                    aria-label={`Add posting time for ${label}`}
+                    className="self-start text-sm font-medium text-accent hover:underline"
+                  >
+                    + Add posting time
+                  </button>
+                )}
               </div>
             ) : (
               <p className="flex-1 text-sm text-ink-muted">Not posting</p>

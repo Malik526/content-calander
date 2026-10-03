@@ -8,14 +8,19 @@
    below — never a hardcoded hex value in a component.
    --------------------------------------------------------------------- */
 :root {
-  --color-background: #fafafa; /* page background — neutral, light */
+  /* Pickle Batch brand baseline (Milestone 3.14 UX cleanup).
+     Swapped indigo → pickle green; background warm-tinted off-white.
+     Contrast: #2c7a51 on white = 5.2:1 (passes AA 4.5:1).
+     Status colors below are semantic — unchanged. */
+  --color-background: #f4f9f4; /* warm near-white with faint green tint */
   --color-surface: #ffffff; /* card/section surfaces */
   --color-ink: #101828; /* primary text */
   --color-ink-muted: #475467; /* secondary text */
-  --color-border: #e4e7ec; /* hairline borders */
-  --color-accent: #4338ca; /* the one restrained accent color */
-  --color-accent-hover: #362da6;
-  --color-accent-soft: #eef2ff; /* accent tint for subtle backgrounds/badges */
+  --color-border: #dce8dd; /* hairline borders — faintly green-tinted */
+  --color-accent: #2c7a51; /* pickle green — primary interactive */
+  --color-accent-hover: #226040;
+  --color-accent-soft: #e6f4ec; /* pale green tint for subtle backgrounds/badges */
+  --color-brand-secondary: #1a3d2b; /* deep dark green — logo, brand accents */
 
   /* Status colors (Milestone 3.5) — presentation only, for Badge/status
      labels backed by lib/status.ts. Deliberately generic names (success/
@@ -50,6 +55,7 @@
   --color-accent: var(--color-accent);
   --color-accent-hover: var(--color-accent-hover);
   --color-accent-soft: var(--color-accent-soft);
+  --color-brand-secondary: var(--color-brand-secondary);
   --color-status-pending: var(--color-status-pending);
   --color-status-pending-soft: var(--color-status-pending-soft);
   --color-status-progress: var(--color-status-progress);

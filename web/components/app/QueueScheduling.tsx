@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
@@ -13,6 +13,8 @@ import type { CadenceResponse, PostingTime } from "@/lib/api/types";
 // A short curated list, not a full IANA database — Milestone 3.8 kept this
 // minimal per its own brief ("keep styling minimal"); any real IANA name
 // the backend accepts would work, this is just what the <select> offers.
+// Milestone 3.14: the browser-detected timezone is appended dynamically if
+// not already present so a new user's default is never missing from the list.
 const TIMEZONE_OPTIONS = [
   "America/New_York",
   "America/Chicago",
@@ -22,6 +24,16 @@ const TIMEZONE_OPTIONS = [
   "Pacific/Honolulu",
   "UTC",
 ];
+
+/** Returns the browser's own IANA timezone, falling back to the first
+ * option in the curated list when unavailable (SSR, unusual environment). */
+function getDetectedTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || TIMEZONE_OPTIONS[0];
+  } catch {
+    return TIMEZONE_OPTIONS[0];
+  }
+}
 
 /**
  * QueueScheduling — Queue's "Posting rhythm" section: view/edit the
@@ -41,6 +53,12 @@ const TIMEZONE_OPTIONS = [
  * config and regenerates the slot horizon atomically
  * (api/routes/cadence.py). Milestone 3.14: onSaved then fires so the page
  * can reload QueueBoard, which shows those regenerated slots.
+ *
+ * Milestone 3.14 UX cleanup:
+ *   "Active" checkbox label → "Posting schedule enabled" with supporting
+ *   copy, so the control's purpose is unambiguous.
+ *   Timezone default → browser-detected IANA timezone for new users (no
+ *   saved timezone); an existing saved timezone always takes priority.
  *
  * Props:
  *   accessToken — threaded through exactly like every other lib/api/*
@@ -64,12 +82,23 @@ export function QueueScheduling({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Always include the current timezone value in the select options — if the
+  // browser-detected or previously-saved timezone isn't in the curated list
+  // (e.g. "Europe/Berlin"), add it rather than showing a broken select.
+  const timezoneOptions = useMemo(() => {
+    if (TIMEZONE_OPTIONS.includes(timezone)) return TIMEZONE_OPTIONS;
+    return [...TIMEZONE_OPTIONS, timezone];
+  }, [timezone]);
+
   async function load() {
     setLoadError(null);
     try {
       const result = await getCadence(accessToken);
       setCadence(result);
-      setTimezone(result.timezone ?? TIMEZONE_OPTIONS[0]);
+      // Use the saved timezone when present; fall back to the browser-detected
+      // IANA timezone so a new user sees a sensible default without having to
+      // know the right string. An existing saved value is never overwritten.
+      setTimezone(result.timezone ?? getDetectedTimezone());
       setIsActive(result.configured ? result.is_active : true);
       setPostingTimes(result.posting_times);
     } catch (error) {
@@ -124,7 +153,7 @@ export function QueueScheduling({
     <Card className="flex flex-col gap-4">
       {saveError ? <ErrorState message={saveError} /> : null}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex flex-col gap-1">
           <label htmlFor="cadence-timezone" className="text-sm font-medium text-ink">
             Timezone
@@ -135,7 +164,7 @@ export function QueueScheduling({
             onChange={(event) => setTimezone(event.target.value)}
             className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink"
           >
-            {TIMEZONE_OPTIONS.map((tz) => (
+            {timezoneOptions.map((tz) => (
               <option key={tz} value={tz}>
                 {tz}
               </option>
@@ -143,10 +172,15 @@ export function QueueScheduling({
           </select>
         </div>
 
-        <label className="flex items-center gap-2 text-sm text-ink">
-          <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
-          Active
-        </label>
+        <div className="flex flex-col gap-1">
+          <label className="flex items-center gap-2 text-sm font-medium text-ink">
+            <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+            Posting schedule enabled
+          </label>
+          <p className="ml-5 text-xs text-ink-muted">
+            When enabled, Pickle Batch creates future posting slots from this schedule.
+          </p>
+        </div>
       </div>
 
       <WeeklyRhythmEditor postingTimes={postingTimes} onChange={setPostingTimes} />

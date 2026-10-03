@@ -18,9 +18,19 @@ import { UploadProvider } from "@/lib/uploads";
  */
 
 describe("/app product routes", () => {
-  it("renders /app (Home) with links to the other three sections", () => {
-    render(<AppHomePage />);
+  it("renders /app (Home) with links to the other sections", () => {
+    // AppHomePage is now a client component using useSession() — requires
+    // SessionProvider. In the test environment (no Supabase configured) the
+    // provider supplies the DEV_MOCK_SESSION with accessToken=null, so the
+    // home page settles to the quick-link fallback state without making any
+    // API calls, which is the correct terminal behaviour for that case.
+    render(
+      <SessionProvider>
+        <AppHomePage />
+      </SessionProvider>,
+    );
     expect(screen.getByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
+    // fallback quick-links shown when no real session data is available
     expect(screen.getByRole("link", { name: /library/i })).toHaveAttribute("href", "/app/library");
     expect(screen.getByRole("link", { name: /queue/i })).toHaveAttribute("href", "/app/queue");
     expect(screen.getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/app/settings");

@@ -2,6 +2,74 @@
 
 ## 2026-10-03
 
+### Milestone 3.14 Product Cleanup Follow-up — Activation Flow, Cadence UX + Pickle Batch Brand Baseline
+
+Frontend-only pass: no backend/API/schema changes. This is a usability baseline and
+brand starting point, not the final UI/UX redesign — a larger professional redesign
+informed by real user feedback and usage data is future scope.
+
+**Cadence time-entry interaction fixed**
+- Root cause: `WeeklyRhythmEditor` always rendered a `<input type="time">` showing
+  the default value (`09:00`) alongside any already-persisted chip — making it
+  impossible to tell what was saved vs. still a draft.
+- Fix: replaced the always-visible draft input with an explicit `+ Add posting time`
+  trigger per day. The time picker only appears after the user deliberately clicks
+  the trigger; it is confirmed by a separate "Add" button. Persisted times show only
+  as chips. Cancelling dismisses without committing.
+- Tests: new "does not show a draft time input until trigger is clicked" and
+  "cancels without committing"; "adds a second time" updated to click the trigger
+  first.
+
+**Cadence control copy clarified**
+- `Active` checkbox → `Posting schedule enabled` with supporting copy:
+  "When enabled, Pickle Batch creates future posting slots from this schedule."
+
+**Timezone browser-detected default for new users**
+- When a user's saved timezone is `null` (not yet configured), the timezone select
+  pre-fills with `Intl.DateTimeFormat().resolvedOptions().timeZone` instead of
+  hard-coding "America/New_York". An existing saved timezone always wins.
+- The options list includes the current timezone even if it falls outside the curated
+  short list (e.g. "Europe/Berlin" is appended dynamically).
+- Saved timezone is never silently overwritten.
+
+**Activation/status home (`/app`)**
+- Replaced the Milestone 3.5 quick-link grid with a real setup checklist using
+  data from existing APIs (TikTok connection, cadence, video list — no new endpoints).
+- Four steps: Connect TikTok, Set up posting schedule, Upload videos, Add to Queue.
+  Done items show their current detail (account name, timezone, counts); not-done
+  items show a direct link to the relevant section.
+- All configured: heading changes to "Your posting pipeline is active."
+- Graceful degradation: API error or dev-mock session (null accessToken) falls back
+  to the original quick-link grid.
+- Tests: new `tests/routes/app-home.test.tsx` covering unconfigured, partial, and
+  fully-configured states; the `app-routes.test.tsx` home test updated with
+  `SessionProvider` wrapper and updated assertion.
+
+**Library filter tabs**
+- Added All / Unscheduled / Scheduled filter bar (client-local, no API change).
+- Filter logic: `assigned_slot_id !== null` → Scheduled; otherwise Unscheduled.
+- Each video card shows a "Scheduled" badge when `assigned_slot_id` is set.
+- File size moved to `hidden sm:block` (visible on desktop, hidden on mobile to
+  reduce row crowding).
+- Empty-state copy for each filter ("All your videos are already in the queue" /
+  "Head to Queue to schedule a video").
+- Tests: 5 new filter tests in `library.test.tsx`; existing fixtures updated to
+  include `assigned_slot_id: null`.
+
+**Pickle Batch brand baseline**
+- `globals.css`: replaced indigo accent (`#4338ca`) with pickle green (`#2c7a51`,
+  contrast 5.2:1 on white — passes WCAG AA). Updated related tokens:
+  `--color-accent-hover`, `--color-accent-soft`, `--color-background` (warm faint-
+  green off-white), `--color-border` (green-tinted). Added `--color-brand-secondary`
+  (`#1a3d2b`) for deep-green logo/branding use.
+- `AppHeader`: "Pickle Batch" logo text uses `text-accent` (pickle green), giving
+  immediate brand recognition. All other interactive elements (buttons, active nav
+  states, active tab states) automatically updated via the token change.
+- Status colors (semantic: success/danger/progress/attention) are unchanged.
+
+**Frontend tests:** 147 passed (was 133 — 14 new). Lint clean. Build clean.
+**Backend tests:** 1171 passed. No backend changes in this task.
+
 ### Milestone 3.14 follow-up — Captions are optional (fix `CAPTION_MISSING`)
 
 - **Production discovery:** a valid scheduled post was claimed, then FAILED with

@@ -62,8 +62,8 @@ describe("LibraryPage", () => {
   it("shows the account's own videos once loaded", async () => {
     videosApi.listVideos.mockResolvedValue({
       videos: [
-        { id: 1, original_filename: "clip-a.mp4", status: "DISCOVERED", file_size_bytes: 2_000_000, created_at: "2026-09-01T00:00:00Z" },
-        { id: 2, original_filename: "clip-b.mp4", status: "DISCOVERED", file_size_bytes: null, created_at: "2026-09-02T00:00:00Z" },
+        { id: 1, original_filename: "clip-a.mp4", status: "DISCOVERED", file_size_bytes: 2_000_000, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null },
+        { id: 2, original_filename: "clip-b.mp4", status: "DISCOVERED", file_size_bytes: null, created_at: "2026-09-02T00:00:00Z", assigned_slot_id: null },
       ],
     });
 
@@ -92,7 +92,7 @@ describe("LibraryPage", () => {
     videosApi.listVideos.mockResolvedValue({ videos: [] });
     videosApi.uploadVideos.mockResolvedValue({
       results: [
-        { filename: "good.mp4", success: true, video: { id: 3, original_filename: "good.mp4", status: "DISCOVERED", file_size_bytes: 10, created_at: "2026-09-03T00:00:00Z" }, error: null },
+        { filename: "good.mp4", success: true, video: { id: 3, original_filename: "good.mp4", status: "DISCOVERED", file_size_bytes: 10, created_at: "2026-09-03T00:00:00Z", assigned_slot_id: null }, error: null },
         { filename: "bad.txt", success: false, video: null, error: "Unsupported file type." },
       ],
     });
@@ -172,12 +172,12 @@ describe("LibraryPage", () => {
 
     // The upload finishes while the user is elsewhere in the app.
     resolveUpload!({
-      results: [{ filename: "clip.mp4", success: true, video: { id: 9, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 5, created_at: "2026-09-04T00:00:00Z" }, error: null }],
+      results: [{ filename: "clip.mp4", success: true, video: { id: 9, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 5, created_at: "2026-09-04T00:00:00Z", assigned_slot_id: null }, error: null }],
     });
 
     // Navigate back to Library.
     videosApi.listVideos.mockResolvedValue({
-      videos: [{ id: 9, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 5, created_at: "2026-09-04T00:00:00Z" }],
+      videos: [{ id: 9, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 5, created_at: "2026-09-04T00:00:00Z", assigned_slot_id: null }],
     });
     rerender(
       <UploadProvider>
@@ -192,10 +192,78 @@ describe("LibraryPage", () => {
     await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
   });
 
+  // Milestone 3.14 UX cleanup: filter tabs (All / Unscheduled / Scheduled).
+  describe("Library filter tabs", () => {
+    function withMixedVideos() {
+      videosApi.listVideos.mockResolvedValue({
+        videos: [
+          { id: 1, original_filename: "unscheduled.mp4", status: "DISCOVERED", file_size_bytes: 1000, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null },
+          { id: 2, original_filename: "scheduled.mp4", status: "ASSIGNED", file_size_bytes: 2000, created_at: "2026-09-02T00:00:00Z", assigned_slot_id: 5 },
+        ],
+      });
+    }
+
+    it("shows all videos in the default All tab", async () => {
+      withMixedVideos();
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("unscheduled.mp4")).toBeInTheDocument());
+      expect(screen.getByText("scheduled.mp4")).toBeInTheDocument();
+    });
+
+    it("shows a Scheduled badge on videos that are in a queue slot", async () => {
+      withMixedVideos();
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("scheduled.mp4")).toBeInTheDocument());
+      // The badge is a <span role="status"/"presentation"> (via Badge component);
+      // the filter tab also says "Scheduled" — use getAllByText and confirm
+      // at least one occurrence is the badge (not just the tab).
+      const scheduledEls = screen.getAllByText(/^Scheduled$/);
+      expect(scheduledEls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("Unscheduled tab shows only videos without a slot", async () => {
+      withMixedVideos();
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("unscheduled.mp4")).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("tab", { name: /unscheduled/i }));
+
+      expect(screen.getByText("unscheduled.mp4")).toBeInTheDocument();
+      expect(screen.queryByText("scheduled.mp4")).not.toBeInTheDocument();
+    });
+
+    it("Scheduled tab shows only videos assigned to a slot", async () => {
+      withMixedVideos();
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("scheduled.mp4")).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("tab", { name: /^scheduled/i }));
+
+      expect(screen.queryByText("unscheduled.mp4")).not.toBeInTheDocument();
+      expect(screen.getByText("scheduled.mp4")).toBeInTheDocument();
+    });
+
+    it("shows an empty state when no videos match the active filter", async () => {
+      videosApi.listVideos.mockResolvedValue({
+        videos: [{ id: 1, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 1000, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null }],
+      });
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("tab", { name: /^scheduled/i }));
+
+      expect(screen.getByText("No scheduled videos")).toBeInTheDocument();
+      expect(screen.queryByText("clip.mp4")).not.toBeInTheDocument();
+    });
+  });
+
   describe("Delete Video (Milestone 3.7 follow-up)", () => {
     function withOneVideo() {
       videosApi.listVideos.mockResolvedValue({
-        videos: [{ id: 7, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 10, created_at: "2026-09-01T00:00:00Z" }],
+        videos: [{ id: 7, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 10, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null }],
       });
     }
 

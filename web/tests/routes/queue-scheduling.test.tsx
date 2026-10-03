@@ -101,6 +101,22 @@ describe("QueuePage — posting rhythm", () => {
     expect(screen.queryByText("6:00 PM")).not.toBeInTheDocument();
   });
 
+  // Milestone 3.14 UX fix: the draft time input only appears after the user
+  // explicitly clicks "+ Add posting time" — no phantom default value visible
+  // alongside already-configured times.
+  it("does not show a draft time input for already-configured days until Add posting time is clicked", async () => {
+    cadenceApi.getCadence.mockResolvedValue({
+      configured: true, timezone: "America/New_York", is_active: true,
+      posting_times: [{ weekday: "monday", posting_time: "09:00" }],
+    });
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByText("9:00 AM")).toBeInTheDocument());
+
+    // Draft input must NOT be visible until the user clicks "+ Add posting time".
+    expect(screen.queryByLabelText("New time for Monday")).not.toBeInTheDocument();
+  });
+
   it("adds a second time to an already-active day", async () => {
     cadenceApi.getCadence.mockResolvedValue({
       configured: true, timezone: "America/New_York", is_active: true,
@@ -111,6 +127,9 @@ describe("QueuePage — posting rhythm", () => {
     await waitFor(() => expect(screen.getByText("9:00 AM")).toBeInTheDocument());
 
     const user = userEvent.setup();
+    // First open the draft form by clicking the trigger; the input is only
+    // visible after this explicit action (Milestone 3.14 UX fix).
+    await user.click(screen.getByRole("button", { name: "Add posting time for Monday" }));
     const newTimeInput = screen.getByLabelText("New time for Monday");
     await user.clear(newTimeInput);
     await user.type(newTimeInput, "18:00");
@@ -118,6 +137,24 @@ describe("QueuePage — posting rhythm", () => {
 
     expect(screen.getByText("9:00 AM")).toBeInTheDocument();
     expect(screen.getByText("6:00 PM")).toBeInTheDocument();
+  });
+
+  it("cancels an in-progress add without committing the time", async () => {
+    cadenceApi.getCadence.mockResolvedValue({
+      configured: true, timezone: "America/New_York", is_active: true,
+      posting_times: [{ weekday: "monday", posting_time: "09:00" }],
+    });
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByText("9:00 AM")).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Add posting time for Monday" }));
+    expect(screen.getByLabelText("New time for Monday")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Cancel adding time to Monday" }));
+    expect(screen.queryByLabelText("New time for Monday")).not.toBeInTheDocument();
+    expect(screen.getAllByText("9:00 AM")).toHaveLength(1); // no phantom duplicate
   });
 
   it("removes an individual time from a day with multiple times", async () => {

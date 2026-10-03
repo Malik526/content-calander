@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
@@ -12,6 +13,8 @@ import { deleteVideo, listVideos } from "@/lib/api/videos";
 import type { VideoResponse } from "@/lib/api/types";
 import { useSession } from "@/lib/session";
 import { useUploadManager } from "@/lib/uploads";
+
+type LibraryFilter = "all" | "unscheduled" | "scheduled";
 
 /**
  * /app/library (Milestone 3.7). Real batch upload + real, backend-verified
@@ -41,11 +44,18 @@ import { useUploadManager } from "@/lib/uploads";
  * platform post; that error surfaces here as plain text exactly as the
  * backend phrased it, telling the user to cancel/remove those entries
  * first rather than this page attempting to do that for them.
+ *
+ * Milestone 3.14 UX cleanup: filter tabs (All / Unscheduled / Scheduled)
+ * derived from videos.assigned_slot_id — no backend change needed. A
+ * "Scheduled" badge on each row shows at a glance which videos are already
+ * in the queue. Filter state is client-local; the full list is always
+ * fetched from the server.
  */
 export default function LibraryPage() {
   const { accessToken } = useSession();
   const { uploading } = useUploadManager();
   const [videos, setVideos] = useState<VideoResponse[] | null>(null);
+  const [filter, setFilter] = useState<LibraryFilter>("all");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -54,8 +64,8 @@ export default function LibraryPage() {
   async function loadVideos() {
     setLoadError(null);
     try {
-      const { videos } = await listVideos(accessToken);
-      setVideos(videos);
+      const { videos: loaded } = await listVideos(accessToken);
+      setVideos(loaded);
     } catch (error) {
       setLoadError(error instanceof ApiError ? error.message : "Could not load your videos.");
     }
@@ -108,6 +118,24 @@ export default function LibraryPage() {
     }
   }
 
+  // Derive counts from the full list for filter tab labels; apply filter for display.
+  const counts = {
+    all: videos?.length ?? 0,
+    unscheduled: videos?.filter((v) => (v.assigned_slot_id ?? null) === null).length ?? 0,
+    scheduled: videos?.filter((v) => v.assigned_slot_id !== null).length ?? 0,
+  };
+
+  const filteredVideos =
+    videos === null
+      ? null
+      : videos.filter((video) => {
+          switch (filter) {
+            case "unscheduled": return (video.assigned_slot_id ?? null) === null;
+            case "scheduled": return video.assigned_slot_id !== null;
+            default: return true;
+          }
+        });
+
   return (
     <>
       <PageHeader title="Library" description="Videos you've batched and processed." />
@@ -123,51 +151,87 @@ export default function LibraryPage() {
             <Spinner label="Loading your videos…" />
           </Card>
         ) : videos.length === 0 ? (
-          <EmptyState
-            title="No videos yet"
-            description="Upload a video above to see it here."
-          />
+          <EmptyState title="No videos yet" description="Upload a video above to see it here." />
         ) : (
-          <ul className="flex flex-col gap-3">
-            {videos.map((video) => (
-              <li key={video.id}>
-                <Card className="flex items-center justify-between gap-4">
-                  <p className="truncate text-sm font-medium text-ink">{video.original_filename}</p>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <p className="text-xs text-ink-muted">{formatFileSize(video.file_size_bytes)}</p>
-                    {confirmingDeleteId === video.id ? (
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void handleDelete(video.id)}
-                          disabled={deletingId === video.id}
-                          className="text-xs font-medium text-status-danger hover:underline disabled:opacity-60"
-                        >
-                          {deletingId === video.id ? "Deleting…" : "Confirm delete"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmingDeleteId(null)}
-                          disabled={deletingId === video.id}
-                          className="text-xs font-medium text-ink-muted hover:text-ink disabled:opacity-60"
-                        >
-                          Cancel
-                        </button>
+          <>
+            {/* Filter tabs — purely client-side, no extra API calls. */}
+            <div className="flex gap-1" role="tablist" aria-label="Filter videos">
+              {(["all", "unscheduled", "scheduled"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === tab}
+                  onClick={() => setFilter(tab)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                    filter === tab
+                      ? "bg-accent-soft text-accent"
+                      : "text-ink-muted hover:bg-background hover:text-ink"
+                  }`}
+                >
+                  {tab === "all" ? "All" : tab === "unscheduled" ? "Unscheduled" : "Scheduled"}
+                  <span className="ml-1.5 text-xs opacity-70">({counts[tab]})</span>
+                </button>
+              ))}
+            </div>
+
+            {filteredVideos !== null && filteredVideos.length === 0 ? (
+              <EmptyState
+                title={filter === "unscheduled" ? "No unscheduled videos" : "No scheduled videos"}
+                description={
+                  filter === "unscheduled"
+                    ? "All your videos are already in the queue."
+                    : "Head to Queue to schedule a video."
+                }
+              />
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {(filteredVideos ?? []).map((video) => (
+                  <li key={video.id}>
+                    <Card className="flex items-center gap-3 sm:gap-4">
+                      <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+                        <p className="truncate text-sm font-medium text-ink">{video.original_filename}</p>
+                        {video.assigned_slot_id !== null ? (
+                          <Badge tone="progress">Scheduled</Badge>
+                        ) : null}
                       </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmingDeleteId(video.id)}
-                        className="text-xs font-medium text-ink-muted hover:text-status-danger"
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                </Card>
-              </li>
-            ))}
-          </ul>
+                      <div className="flex shrink-0 items-center gap-3">
+                        <p className="hidden text-xs text-ink-muted sm:block">{formatFileSize(video.file_size_bytes)}</p>
+                        {confirmingDeleteId === video.id ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void handleDelete(video.id)}
+                              disabled={deletingId === video.id}
+                              className="text-xs font-medium text-status-danger hover:underline disabled:opacity-60"
+                            >
+                              {deletingId === video.id ? "Deleting…" : "Confirm delete"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingDeleteId(null)}
+                              disabled={deletingId === video.id}
+                              className="text-xs font-medium text-ink-muted hover:text-ink disabled:opacity-60"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmingDeleteId(video.id)}
+                            className="text-xs font-medium text-ink-muted hover:text-status-danger"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </Card>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         )}
       </div>
     </>
