@@ -13,7 +13,9 @@ const WEEKDAYS: { key: string; label: string }[] = [
   { key: "sunday", label: "Sunday" },
 ];
 
-const DEFAULT_NEW_TIME = "09:00";
+// Starting value for the draft time picker only — never committed unless the
+// user clicks "Add".
+const DEFAULT_DRAFT_TIME = "09:00";
 
 function formatTimeLabel(time: string): string {
   const [hourStr, minuteStr] = time.split(":");
@@ -32,10 +34,11 @@ function formatTimeLabel(time: string): string {
  * decides how a weekday-grouped view reads from and writes back to it —
  * it never calls the API itself.
  *
- * A day's on/off toggle is derived state (on iff it has at least one
- * posting time), not a separate stored flag: turning a day on seeds it
- * with one default time (09:00), turning it off drops every time for that
- * day. Adding a duplicate (weekday, time) pair is a no-op client-side —
+ * A day's on/off toggle is on iff it has at least one posting time or
+ * the user has just enabled it with none yet (`emptyEnabledDays`, local
+ * UI state only — never sent to the API). Turning a day on adds no time;
+ * turning it off drops every time for that day, and removing a day's last
+ * time turns it back off. Adding a duplicate (weekday, time) pair is a no-op client-side —
  * posting_cadence_times has a real UNIQUE(cadence_id, weekday,
  * posting_time) constraint on the backend, and this is simpler than
  * surfacing that as a save-time error for a case the UI can just prevent.
@@ -47,6 +50,9 @@ function formatTimeLabel(time: string): string {
  * and a confirm button inline; the value is committed only on confirm.
  * Persisted times appear as chips; nothing looks draft unless the user
  * deliberately opened the add form.
+ *
+ * Milestone 3.14 follow-up: enabling a day no longer seeds a 09:00 time.
+ * 09:00 survives only as the draft picker's starting value.
  */
 export function WeeklyRhythmEditor({
   postingTimes,
@@ -56,7 +62,15 @@ export function WeeklyRhythmEditor({
   onChange: (next: PostingTime[]) => void;
 }) {
   const [addingForDay, setAddingForDay] = useState<string | null>(null);
-  const [draftTime, setDraftTime] = useState(DEFAULT_NEW_TIME);
+  const [draftTime, setDraftTime] = useState(DEFAULT_DRAFT_TIME);
+  const [emptyEnabledDays, setEmptyEnabledDays] = useState<Set<string>>(() => new Set());
+
+  function withDay(set: Set<string>, weekday: string, present: boolean): Set<string> {
+    const next = new Set(set);
+    if (present) next.add(weekday);
+    else next.delete(weekday);
+    return next;
+  }
 
   function timesFor(weekday: string): PostingTime[] {
     return postingTimes
@@ -67,17 +81,19 @@ export function WeeklyRhythmEditor({
 
   function handleToggleDay(weekday: string, enabled: boolean) {
     if (enabled) {
-      onChange([...postingTimes, { weekday, posting_time: DEFAULT_NEW_TIME }]);
+      // Enable with zero times; the user adds real times explicitly.
+      setEmptyEnabledDays((current) => withDay(current, weekday, true));
     } else {
       // Close any open add form for this day before removing its times.
       setAddingForDay((current) => (current === weekday ? null : current));
+      setEmptyEnabledDays((current) => withDay(current, weekday, false));
       onChange(postingTimes.filter((entry) => entry.weekday !== weekday));
     }
   }
 
   function handleStartAdding(weekday: string) {
     setAddingForDay(weekday);
-    setDraftTime(DEFAULT_NEW_TIME);
+    setDraftTime(DEFAULT_DRAFT_TIME);
   }
 
   function handleConfirmAdd(weekday: string) {
@@ -95,6 +111,10 @@ export function WeeklyRhythmEditor({
   }
 
   function handleRemoveTime(weekday: string, time: string) {
+    // Removing the day's last time turns the day off, as before.
+    if (timesFor(weekday).length === 1) {
+      setEmptyEnabledDays((current) => withDay(current, weekday, false));
+    }
     onChange(postingTimes.filter((entry) => !(entry.weekday === weekday && entry.posting_time === time)));
   }
 
@@ -102,7 +122,7 @@ export function WeeklyRhythmEditor({
     <div className="flex flex-col divide-y divide-border">
       {WEEKDAYS.map(({ key, label }) => {
         const times = timesFor(key);
-        const isActive = times.length > 0;
+        const isActive = times.length > 0 || emptyEnabledDays.has(key);
         const isAddingHere = addingForDay === key;
 
         return (
@@ -119,24 +139,26 @@ export function WeeklyRhythmEditor({
             {isActive ? (
               <div className="flex flex-1 flex-col gap-2">
                 {/* Committed time chips — these are the real saved times. */}
-                <div className="flex flex-wrap gap-2">
-                  {times.map((entry) => (
-                    <span
-                      key={`${entry.weekday}-${entry.posting_time}`}
-                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-ink"
-                    >
-                      <span>{formatTimeLabel(entry.posting_time)}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveTime(key, entry.posting_time)}
-                        aria-label={`Remove ${label} ${formatTimeLabel(entry.posting_time)}`}
-                        className="text-xs text-ink-muted hover:text-accent"
+                {times.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {times.map((entry) => (
+                      <span
+                        key={`${entry.weekday}-${entry.posting_time}`}
+                        className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-ink"
                       >
-                        Remove
-                      </button>
-                    </span>
-                  ))}
-                </div>
+                        <span>{formatTimeLabel(entry.posting_time)}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveTime(key, entry.posting_time)}
+                          aria-label={`Remove ${label} ${formatTimeLabel(entry.posting_time)}`}
+                          className="text-xs text-ink-muted hover:text-accent"
+                        >
+                          Remove
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
 
                 {/* Draft add form — only visible after clicking "+ Add posting time". */}
                 {isAddingHere ? (

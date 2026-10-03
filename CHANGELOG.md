@@ -2,6 +2,24 @@
 
 ## 2026-10-03
 
+### Milestone 3.14 UX Follow-up — Remove Default 9:00 AM Cadence Time
+
+Frontend-only; no backend/API/cadence-semantics changes.
+
+- Root cause: `WeeklyRhythmEditor` derived a day's checkbox purely from "has at least
+  one posting time", so enabling a day had to insert a real `09:00` entry to stay
+  checked. Users then had to remove that phantom time after adding the one they wanted.
+- Fix: a day is now on if it has times **or** the user just enabled it
+  (`emptyEnabledDays`, local UI state never sent to the API). Enabling adds no time.
+  `09:00` remains only as the draft picker's starting value, committed only on "Add".
+- Unchanged: disabling a day drops all its times; removing a day's last time turns it
+  off; duplicate (weekday, time) adds are a no-op; Save sends exactly the visible chips.
+- Tests: replaced "enables a weekday and seeds it with a default time" with
+  zero-times/no-09:00, draft-not-committed, cancel-adds-nothing, and
+  add-one/add-two/remove/save-exact tests. The save and refresh-after-save tests now add a
+  time explicitly. Verified that the new tests fail against the previous component.
+  `vitest` 150/150, `eslint`, `tsc --noEmit`, `next build` pass.
+
 ### Milestone 3.14 Product Cleanup Follow-up — Activation Flow, Cadence UX + Pickle Batch Brand Baseline
 
 Frontend-only pass: no backend/API/schema changes. This is a usability baseline and

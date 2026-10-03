@@ -57,6 +57,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/** Opens a day's draft picker, enters `time` (HH:MM), and clicks Add. */
+async function addTime(user: ReturnType<typeof userEvent.setup>, day: string, time: string) {
+  await user.click(screen.getByRole("button", { name: `Add posting time for ${day}` }));
+  const input = screen.getByLabelText(`New time for ${day}`);
+  await user.clear(input);
+  await user.type(input, time);
+  await user.click(screen.getByRole("button", { name: `Add time to ${day}` }));
+}
+
 describe("QueuePage — posting rhythm", () => {
   it("loads an existing cadence into the weekly editor", async () => {
     cadenceApi.getCadence.mockResolvedValue({
@@ -71,7 +80,9 @@ describe("QueuePage — posting rhythm", () => {
     expect(screen.getByRole("checkbox", { name: "Tuesday" })).not.toBeChecked();
   });
 
-  it("enables a weekday and seeds it with a default time", async () => {
+  // Milestone 3.14 follow-up: enabling a day must not seed a phantom 09:00
+  // time — it starts empty until the user explicitly adds one.
+  it("enables a weekday with zero committed times and no 09:00", async () => {
     cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
 
     render(<QueuePage />);
@@ -81,7 +92,80 @@ describe("QueuePage — posting rhythm", () => {
     await user.click(screen.getByRole("checkbox", { name: "Wednesday" }));
 
     expect(screen.getByRole("checkbox", { name: "Wednesday" })).toBeChecked();
-    expect(screen.getByText("9:00 AM")).toBeInTheDocument();
+    expect(screen.queryByText("9:00 AM")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Remove Wednesday/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("New time for Wednesday")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add posting time for Wednesday" })).toBeInTheDocument();
+  });
+
+  it("opens the draft picker from Add posting time without committing its value", async () => {
+    cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Monday" })).not.toBeChecked());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox", { name: "Monday" }));
+    await user.click(screen.getByRole("button", { name: "Add posting time for Monday" }));
+
+    // The draft picker may start at 09:00, but that is not a committed time.
+    expect(screen.getByLabelText("New time for Monday")).toHaveValue("09:00");
+    expect(screen.queryByText("9:00 AM")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Remove Monday/ })).not.toBeInTheDocument();
+  });
+
+  it("adds nothing when the picker on a newly enabled day is cancelled", async () => {
+    cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
+    cadenceApi.saveCadence.mockResolvedValue({
+      configured: true, timezone: "America/New_York", is_active: false, posting_times: [],
+    });
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Monday" })).not.toBeChecked());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox", { name: "Monday" }));
+    await user.click(screen.getByRole("button", { name: "Add posting time for Monday" }));
+    await user.click(screen.getByRole("button", { name: "Cancel adding time to Monday" }));
+
+    expect(screen.queryByLabelText("New time for Monday")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Remove Monday/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /save schedule/i }));
+    await waitFor(() => expect(cadenceApi.saveCadence).toHaveBeenCalledTimes(1));
+    expect(cadenceApi.saveCadence.mock.calls[0][1].posting_times).toEqual([]);
+  });
+
+  it("builds a newly enabled day from only explicitly added times and saves exactly those", async () => {
+    cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
+    cadenceApi.saveCadence.mockResolvedValue({
+      configured: true, timezone: "America/New_York", is_active: false,
+      posting_times: [{ weekday: "monday", posting_time: "18:00" }],
+    });
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Monday" })).not.toBeChecked());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox", { name: "Monday" }));
+
+    await addTime(user, "Monday", "14:30");
+    expect(screen.getAllByRole("button", { name: /^Remove Monday/ })).toHaveLength(1);
+    expect(screen.getByText("2:30 PM")).toBeInTheDocument();
+    expect(screen.queryByText("9:00 AM")).not.toBeInTheDocument();
+
+    await addTime(user, "Monday", "18:00");
+    expect(screen.getAllByRole("button", { name: /^Remove Monday/ })).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Remove Monday 2:30 PM" }));
+    expect(screen.getAllByRole("button", { name: /^Remove Monday/ })).toHaveLength(1);
+    expect(screen.getByText("6:00 PM")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /save schedule/i }));
+    await waitFor(() => expect(cadenceApi.saveCadence).toHaveBeenCalledTimes(1));
+    expect(cadenceApi.saveCadence.mock.calls[0][1].posting_times).toEqual([
+      { weekday: "monday", posting_time: "18:00" },
+    ]);
   });
 
   it("disables a weekday and removes its times", async () => {
@@ -194,6 +278,7 @@ describe("QueuePage — posting rhythm", () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("checkbox", { name: "Friday" }));
+    await addTime(user, "Friday", "09:00");
     await user.click(screen.getByRole("button", { name: /save schedule/i }));
 
     await waitFor(() =>
@@ -232,6 +317,7 @@ describe("QueuePage — posting rhythm", () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("checkbox", { name: "Monday" }));
+    await addTime(user, "Monday", "09:00");
     await user.click(screen.getByRole("button", { name: /save schedule/i }));
 
     await waitFor(() => expect(screen.getByText("Open")).toBeInTheDocument());
