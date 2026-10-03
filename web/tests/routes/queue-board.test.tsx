@@ -36,6 +36,7 @@ const queueApi = vi.hoisted(() => ({
   assignVideoToSlot: vi.fn(),
   assignNextOpenSlot: vi.fn(),
   unassignSlot: vi.fn(),
+  retrySlotPublication: vi.fn(),
 }));
 vi.mock("@/lib/api/queue", () => queueApi);
 
@@ -63,6 +64,7 @@ function captionFor(videoId: number, text: string | null, overrides: Partial<Cap
 // Milestone 3.11 publish-state fields, defaulted for slots that don't care.
 const NO_PUBLISH_DETAIL = {
   reason_code: null, message: null, action_hint: null, published_at: null, can_unassign: false, publications: [],
+  can_retry: false, retry_requires_confirmation: false,
 };
 
 const OPEN_SLOT = {
@@ -336,5 +338,80 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     await user.click(screen.getByRole("button", { name: /try again/i }));
 
     await waitFor(() => expect(screen.getByText("No slots in this window yet.")).toBeInTheDocument());
+  });
+
+  // --- Milestone 3.14: recovery (Retry) -------------------------------------------
+
+  const RETRYABLE_FAILED_SLOT = { ...FAILED_SLOT, can_retry: true };
+  const UNKNOWN_SLOT = {
+    ...ATTENTION_SLOT, id: 6, reason_code: "OUTCOME_UNKNOWN", message: "We couldn't confirm whether this was published.",
+    platform_post_status: "UNKNOWN", can_retry: true, retry_requires_confirmation: true,
+  };
+
+  it("does not offer Retry when the backend says the post can't be retried", async () => {
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [FAILED_SLOT, PUBLISHED_SLOT, ASSIGNED_SLOT] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+
+    render(<QueuePage />);
+
+    await waitFor(() => expect(screen.getByText("failed.mp4")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("retries a failed post directly and reloads the queue", async () => {
+    queueApi.listQueueSlots
+      .mockResolvedValueOnce({ slots: [RETRYABLE_FAILED_SLOT] })
+      .mockResolvedValue({ slots: [{ ...RETRYABLE_FAILED_SLOT, display_status: "SCHEDULED", can_retry: false }] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+    queueApi.retrySlotPublication.mockResolvedValue({});
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(queueApi.retrySlotPublication).toHaveBeenCalledWith("real-token", 4, { confirmNotPublished: false });
+    await waitFor(() => expect(screen.getByText("Scheduled")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("asks for confirmation before retrying a post whose outcome is unknown", async () => {
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [UNKNOWN_SLOT] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+    queueApi.retrySlotPublication.mockResolvedValue({});
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(queueApi.retrySlotPublication).not.toHaveBeenCalled();
+    expect(screen.getByText(/retrying will post it a second time/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText(/retrying will post it a second time/)).not.toBeInTheDocument();
+    expect(queueApi.retrySlotPublication).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: /it isn't posted — retry/i }));
+    expect(queueApi.retrySlotPublication).toHaveBeenCalledWith("real-token", 6, { confirmNotPublished: true });
+  });
+
+  it("shows the backend's message when a retry is refused", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    queueApi.listQueueSlots.mockResolvedValue({ slots: [RETRYABLE_FAILED_SLOT] });
+    videosApi.listVideos.mockResolvedValue({ videos: [] });
+    queueApi.retrySlotPublication.mockRejectedValue(
+      new ApiError("This post changed while retrying. Refresh and try again.", { status: 409, reasonCode: "CONCURRENT_UPDATE" }),
+    );
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument());
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("This post changed while retrying. Refresh and try again.")).toBeInTheDocument(),
+    );
   });
 });

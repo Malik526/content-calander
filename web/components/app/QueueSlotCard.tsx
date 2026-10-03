@@ -48,7 +48,12 @@ function formatSlotDateTime(iso: string): string {
  * Milestone 3.11: the badge comes from lib/status.ts's presentQueueStatus
  * (shared with the calendar); slot.message (sanitized, server-written
  * copy) is shown under the status, plus an advisory action hint and the
- * publish time once published. No retry action (Milestone 3.13).
+ * publish time once published.
+ *   onRetry(confirmNotPublished) — Milestone 3.14: shown only when the
+ *     backend reports can_retry. When retry_requires_confirmation, the
+ *     first click opens an inline confirmation (the post may already be
+ *     live, and there's no platform id to check) and only the explicit
+ *     confirm sends confirmNotPublished=true.
  *   busy — disables both actions while a request for this slot is in flight.
  *   onSaveCaption(videoId, text) / onGenerateCaption(videoId, overwrite) —
  *     Milestone 3.10: the assigned video's caption actions, rendered via
@@ -59,6 +64,7 @@ export function QueueSlotCard({
   unassignedVideos,
   onAssign,
   onRemove,
+  onRetry,
   onSaveCaption,
   onGenerateCaption,
   busy = false,
@@ -67,12 +73,14 @@ export function QueueSlotCard({
   unassignedVideos: VideoResponse[];
   onAssign: (videoId: number) => void;
   onRemove: () => void;
+  onRetry: (confirmNotPublished: boolean) => void;
   onSaveCaption: (videoId: number, text: string) => Promise<CaptionResponse>;
   onGenerateCaption: (videoId: number, overwrite: boolean) => Promise<CaptionResponse>;
   busy?: boolean;
 }) {
   const assignedVideo = slot.assigned_video;
   const [pendingVideoId, setPendingVideoId] = useState<string>("");
+  const [confirmingRetry, setConfirmingRetry] = useState(false);
   const presentation = presentQueueStatus(slot.display_status);
   const hint = presentActionHint(slot.action_hint);
 
@@ -139,9 +147,47 @@ export function QueueSlotCard({
             >
               Remove from schedule
             </button>
+          ) : slot.can_retry && !confirmingRetry ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => (slot.retry_requires_confirmation ? setConfirmingRetry(true) : onRetry(false))}
+              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
+            >
+              {busy ? "Retrying…" : "Retry"}
+            </button>
           ) : null}
         </div>
       </div>
+
+      {slot.can_retry && confirmingRetry ? (
+        <div role="group" aria-label="Confirm retry" className="flex flex-col gap-2 rounded-lg border border-border px-3 py-2">
+          <p className="text-xs text-ink">
+            We can&apos;t tell whether this was posted. Check your TikTok profile first — if it&apos;s already there,
+            retrying will post it a second time.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setConfirmingRetry(false);
+                onRetry(true);
+              }}
+              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
+            >
+              It isn&apos;t posted — retry
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmingRetry(false)}
+              className="text-xs font-medium text-ink-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {assignedVideo ? (
         <CaptionEditor

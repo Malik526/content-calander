@@ -179,6 +179,11 @@ export interface QueueSlotResponse {
   /** Aware UTC; set only when PUBLISHED. */
   published_at: string | null;
   can_unassign: boolean;
+  /** Milestone 3.13: a FAILED or UNKNOWN post that POST .../retry accepts. */
+  can_retry: boolean;
+  /** Retrying could duplicate a post that may already be live — the user
+   * must confirm it isn't on the platform first (confirm_not_published). */
+  retry_requires_confirmation: boolean;
   assigned_video: QueueVideoSummary | null;
   platform_post_status: string | null;
   publications: PublicationStatus[];

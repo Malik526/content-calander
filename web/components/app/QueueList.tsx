@@ -14,6 +14,7 @@ export function QueueList({
   busySlotId,
   onAssign,
   onRemove,
+  onRetry,
   onSaveCaption,
   onGenerateCaption,
 }: {
@@ -22,6 +23,7 @@ export function QueueList({
   busySlotId: number | null;
   onAssign: (slotId: number, videoId: number) => void;
   onRemove: (slotId: number) => void;
+  onRetry: (slotId: number, confirmNotPublished: boolean) => void;
   onSaveCaption: (videoId: number, text: string) => Promise<CaptionResponse>;
   onGenerateCaption: (videoId: number, overwrite: boolean) => Promise<CaptionResponse>;
 }) {
@@ -39,6 +41,7 @@ export function QueueList({
             busy={busySlotId === slot.id}
             onAssign={(videoId) => onAssign(slot.id, videoId)}
             onRemove={() => onRemove(slot.id)}
+            onRetry={(confirmNotPublished) => onRetry(slot.id, confirmNotPublished)}
             onSaveCaption={onSaveCaption}
             onGenerateCaption={onGenerateCaption}
           />

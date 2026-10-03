@@ -9,7 +9,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { Spinner } from "@/components/ui/Spinner";
 import { ApiError } from "@/lib/api/client";
 import { generateCaption, saveCaption } from "@/lib/api/captions";
-import { assignNextOpenSlot, assignVideoToSlot, listQueueSlots, unassignSlot } from "@/lib/api/queue";
+import { assignNextOpenSlot, assignVideoToSlot, listQueueSlots, retrySlotPublication, unassignSlot } from "@/lib/api/queue";
 import { listVideos } from "@/lib/api/videos";
 import type { CaptionResponse, QueueSlotResponse, VideoResponse } from "@/lib/api/types";
 
@@ -54,8 +54,14 @@ function monthWindow(monthCursor: Date): { from: string; to: string } {
  * No drag/drop, no per-slot editing beyond assign/remove, no manual
  * one-off slot creation — all explicitly deferred to a later milestone
  * per this milestone's own brief.
+ *
+ * Milestone 3.14:
+ *   refreshKey — the board reloads whenever this changes (the page bumps it
+ *     after a cadence save, which regenerates slots server-side).
+ *   Retry — a FAILED/UNKNOWN slot's recovery action (POST .../retry); the
+ *     confirmation step lives in QueueSlotCard.
  */
-export function QueueBoard({ accessToken }: { accessToken: string | null }) {
+export function QueueBoard({ accessToken, refreshKey = 0 }: { accessToken: string | null; refreshKey?: number }) {
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
   const [monthCursor, setMonthCursor] = useState(() => new Date());
   const [slots, setSlots] = useState<QueueSlotResponse[] | null>(null);
@@ -91,7 +97,7 @@ export function QueueBoard({ accessToken }: { accessToken: string | null }) {
     }
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, monthCursor]);
+  }, [accessToken, monthCursor, refreshKey]);
 
   const unassignedVideos = videos.filter((video) => video.assigned_slot_id === null);
   const selectedSlot = slots?.find((slot) => slot.id === selectedSlotId) ?? null;
@@ -130,6 +136,21 @@ export function QueueBoard({ accessToken }: { accessToken: string | null }) {
       await load();
     } catch (error) {
       setActionError(error instanceof ApiError ? error.message : "Could not remove this video from the schedule.");
+    } finally {
+      setBusySlotId(null);
+    }
+  }
+
+  async function handleRetry(slotId: number, confirmNotPublished: boolean) {
+    setActionError(null);
+    setBusySlotId(slotId);
+    try {
+      await retrySlotPublication(accessToken, slotId, { confirmNotPublished });
+      await load();
+    } catch (error) {
+      // The backend's 409 messages are written for users (scheduling/manual_recovery.py).
+      setActionError(error instanceof ApiError ? error.message : "Could not retry this post.");
+      if (error instanceof ApiError && error.reasonCode === "CONCURRENT_UPDATE") await load();
     } finally {
       setBusySlotId(null);
     }
@@ -226,6 +247,7 @@ export function QueueBoard({ accessToken }: { accessToken: string | null }) {
           busySlotId={busySlotId}
           onAssign={(slotId, videoId) => void handleAssign(slotId, videoId)}
           onRemove={(slotId) => void handleRemove(slotId)}
+          onRetry={(slotId, confirmNotPublished) => void handleRetry(slotId, confirmNotPublished)}
           onSaveCaption={handleSaveCaption}
           onGenerateCaption={handleGenerateCaption}
         />
@@ -246,6 +268,7 @@ export function QueueBoard({ accessToken }: { accessToken: string | null }) {
               busy={busySlotId === selectedSlot.id}
               onAssign={(videoId) => void handleAssign(selectedSlot.id, videoId)}
               onRemove={() => void handleRemove(selectedSlot.id)}
+              onRetry={(confirmNotPublished) => void handleRetry(selectedSlot.id, confirmNotPublished)}
               onSaveCaption={handleSaveCaption}
               onGenerateCaption={handleGenerateCaption}
             />

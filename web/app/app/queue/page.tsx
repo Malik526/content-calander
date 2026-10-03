@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { QueueBoard } from "@/components/app/QueueBoard";
 import { QueueScheduling } from "@/components/app/QueueScheduling";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -25,9 +26,15 @@ import { useSession } from "@/lib/session";
  * QueueSlotResponse instead). It's left alone, unused, rather than deleted
  * as part of this change — a separate, explicit cleanup, not a
  * side effect of unrelated work.
+ *
+ * Milestone 3.14: saving the cadence regenerates the slot horizon
+ * server-side, so the Queue must reload right after — queueVersion is
+ * bumped by QueueScheduling's onSaved and QueueBoard reloads whenever it
+ * changes (before this, new slots only appeared after a browser refresh).
  */
 export default function QueuePage() {
   const { accessToken } = useSession();
+  const [queueVersion, setQueueVersion] = useState(0);
 
   return (
     <>
@@ -37,14 +44,14 @@ export default function QueuePage() {
           <h2 id="posting-rhythm-heading" className="mb-3 text-sm font-semibold text-ink">
             Posting rhythm
           </h2>
-          <QueueScheduling accessToken={accessToken} />
+          <QueueScheduling accessToken={accessToken} onSaved={() => setQueueVersion((v) => v + 1)} />
         </section>
 
         <section aria-labelledby="queue-heading">
           <h2 id="queue-heading" className="mb-3 text-sm font-semibold text-ink">
             Queue
           </h2>
-          <QueueBoard accessToken={accessToken} />
+          <QueueBoard accessToken={accessToken} refreshKey={queueVersion} />
         </section>
       </div>
     </>

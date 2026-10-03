@@ -37,6 +37,7 @@ const queueApi = vi.hoisted(() => ({
   assignVideoToSlot: vi.fn(),
   assignNextOpenSlot: vi.fn(),
   unassignSlot: vi.fn(),
+  retrySlotPublication: vi.fn(),
 }));
 vi.mock("@/lib/api/queue", () => queueApi);
 
@@ -171,5 +172,47 @@ describe("QueuePage — posting rhythm", () => {
         }),
       ),
     );
+  });
+
+  // Milestone 3.14 regression: saving used to leave the Queue stale until a
+  // manual browser refresh, because QueueBoard only loaded on mount.
+  it("shows the slots a cadence save generated without a page refresh", async () => {
+    const generatedSlot = {
+      id: 1, scheduled_at: "2026-10-05T09:00:00", timezone: "America/New_York", status: "OPEN",
+      display_status: "OPEN", reason_code: null, message: null, action_hint: null, published_at: null,
+      can_unassign: false, can_retry: false, retry_requires_confirmation: false, assigned_video: null,
+      platform_post_status: null, publications: [],
+    };
+    cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
+    cadenceApi.saveCadence.mockResolvedValue({
+      configured: true, timezone: "America/New_York", is_active: true,
+      posting_times: [{ weekday: "monday", posting_time: "09:00" }],
+    });
+    queueApi.listQueueSlots.mockResolvedValueOnce({ slots: [] }).mockResolvedValue({ slots: [generatedSlot] });
+
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByText("No slots in this window yet.")).toBeInTheDocument());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox", { name: "Monday" }));
+    await user.click(screen.getByRole("button", { name: /save schedule/i }));
+
+    await waitFor(() => expect(screen.getByText("Open")).toBeInTheDocument());
+    expect(screen.queryByText("No slots in this window yet.")).not.toBeInTheDocument();
+    expect(queueApi.listQueueSlots).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reload the queue when saving the cadence fails", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
+    cadenceApi.saveCadence.mockRejectedValue(new ApiError("Invalid timezone."));
+
+    render(<QueuePage />);
+    await waitFor(() => expect(queueApi.listQueueSlots).toHaveBeenCalledTimes(1));
+
+    await userEvent.setup().click(screen.getByRole("button", { name: /save schedule/i }));
+
+    await waitFor(() => expect(screen.getByText("Invalid timezone.")).toBeInTheDocument());
+    expect(queueApi.listQueueSlots).toHaveBeenCalledTimes(1);
   });
 });

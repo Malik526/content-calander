@@ -91,6 +91,7 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
 
   if (!response.ok) {
     let message = `Request failed (HTTP ${response.status}).`;
+    let reasonCode = "HTTP_ERROR";
     try {
       // FastAPI's HTTPException always serializes as {"detail": "..."} —
       // this backend never sends {"message": ...}. The `message` fallback
@@ -99,13 +100,23 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
       // backend error actually carries, and was previously never read at
       // all, silently discarding the real reason behind every backend
       // error (401/404/409/etc.) in favor of the generic message below.
-      const errorBody = (await response.json()) as { detail?: string; message?: string };
-      if (errorBody?.detail) message = errorBody.detail;
-      else if (errorBody?.message) message = errorBody.message;
+      // Milestone 3.13+: some routes (POST /api/queue/slots/{id}/retry)
+      // send a structured detail, {"code": ..., "message": ...} — its code
+      // becomes reasonCode so callers can branch without parsing text.
+      const errorBody = (await response.json()) as {
+        detail?: string | { code?: string; message?: string };
+        message?: string;
+      };
+      const detail = errorBody?.detail;
+      if (typeof detail === "string" && detail) message = detail;
+      else if (detail && typeof detail === "object") {
+        if (detail.message) message = detail.message;
+        if (detail.code) reasonCode = detail.code;
+      } else if (errorBody?.message) message = errorBody.message;
     } catch {
       // response body wasn't JSON — keep the generic message above
     }
-    throw new ApiError(message, { status: response.status, reasonCode: "HTTP_ERROR" });
+    throw new ApiError(message, { status: response.status, reasonCode });
   }
 
   // 204 No Content (e.g. DELETE /api/videos/{id} — Milestone 3.7 follow-up)

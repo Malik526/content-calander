@@ -167,4 +167,16 @@ describe("apiRequest — NEXT_PUBLIC_API_BASE_URL trailing-slash normalization",
       expect.anything(),
     );
   });
+
+  it("reads a structured {code, message} detail into message and reasonCode", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({ detail: { code: "CONFIRMATION_REQUIRED", message: "Check TikTok first." } }, { status: 409 }),
+      ),
+    );
+    await expect(apiRequest("/api/queue/slots/1/retry", { method: "POST" })).rejects.toMatchObject({
+      name: "ApiError", status: 409, reasonCode: "CONFIRMATION_REQUIRED", message: "Check TikTok first.",
+    });
+  });
 });

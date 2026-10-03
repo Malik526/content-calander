@@ -39,14 +39,21 @@ const TIMEZONE_OPTIONS = [
  *
  * Save is still one action end to end: PUT /api/cadence both persists the
  * config and regenerates the slot horizon atomically
- * (api/routes/cadence.py) — QueueBoard picks up the regenerated slots on
- * its own next load, not through any callback from this component.
+ * (api/routes/cadence.py). Milestone 3.14: onSaved then fires so the page
+ * can reload QueueBoard, which shows those regenerated slots.
  *
  * Props:
  *   accessToken — threaded through exactly like every other lib/api/*
  *     caller (see lib/api/platforms.ts), not read from useSession() itself.
+ *   onSaved — called after a successful save (not after a failed one).
  */
-export function QueueScheduling({ accessToken }: { accessToken: string | null }) {
+export function QueueScheduling({
+  accessToken,
+  onSaved,
+}: {
+  accessToken: string | null;
+  onSaved?: () => void;
+}) {
   const [cadence, setCadence] = useState<CadenceResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -93,6 +100,7 @@ export function QueueScheduling({ accessToken }: { accessToken: string | null })
     try {
       const result = await saveCadence(accessToken, { timezone, is_active: isActive, posting_times: postingTimes });
       setCadence(result);
+      onSaved?.();
     } catch (error) {
       setSaveError(error instanceof ApiError ? error.message : "Could not save your posting schedule.");
     } finally {

@@ -36,3 +36,14 @@ export function assignNextOpenSlot(accessToken: string | null, videoId: number):
 export function unassignSlot(accessToken: string | null, slotId: number): Promise<QueueSlotResponse> {
   return apiRequest<QueueSlotResponse>(`/api/queue/slots/${slotId}/unassign`, { method: "POST", accessToken });
 }
+
+/** Milestone 3.13 recovery: retry a FAILED post, re-check an UNKNOWN one
+ * that has a platform id, or — only with confirmNotPublished — resubmit an
+ * UNKNOWN one that doesn't. The backend decides which; 409 when refused. */
+export function retrySlotPublication(
+  accessToken: string | null, slotId: number, { confirmNotPublished = false }: { confirmNotPublished?: boolean } = {},
+): Promise<QueueSlotResponse> {
+  return apiRequest<QueueSlotResponse>(`/api/queue/slots/${slotId}/retry`, {
+    method: "POST", body: { confirm_not_published: confirmNotPublished }, accessToken,
+  });
+}
