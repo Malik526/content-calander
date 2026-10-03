@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatScheduledAt, libraryFilterFor, platformPostStatusPresentation, presentActionHint, presentQueueStatus } from "@/lib/status";
+import { formatScheduledAt, libraryFilterFor, libraryPublishStatus, platformPostStatusPresentation, presentActionHint, presentQueueStatus } from "@/lib/status";
 import type { PlatformPostStatus } from "@/lib/api/types";
 
 describe("platformPostStatusPresentation", () => {
@@ -63,5 +63,17 @@ describe("libraryFilterFor (Milestone 3.14 final follow-up)", () => {
     for (const status of ["SCHEDULED", "PUBLISHING", "FAILED", "NEEDS_ATTENTION", "SOMETHING_NEW"]) {
       expect(libraryFilterFor(status)).toBe("scheduled");
     }
+  });
+});
+
+describe("libraryPublishStatus", () => {
+  it("uses the backend publish_status when present", () => {
+    expect(libraryPublishStatus({ publish_status: "PUBLISHED", assigned_slot_id: 1 })).toBe("PUBLISHED");
+    expect(libraryPublishStatus({ publish_status: "NEEDS_ATTENTION", assigned_slot_id: 1 })).toBe("NEEDS_ATTENTION");
+  });
+
+  it("falls back to assigned_slot_id when an older API omits it", () => {
+    expect(libraryPublishStatus({ assigned_slot_id: null })).toBe("UNSCHEDULED");
+    expect(libraryPublishStatus({ assigned_slot_id: 7 })).toBe("SCHEDULED");
   });
 });

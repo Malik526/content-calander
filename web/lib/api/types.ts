@@ -95,8 +95,10 @@ export interface VideoResponse {
   /** Milestone 3.14 final follow-up — "UNSCHEDULED", or the same
    * display_status the Queue shows for this video's slot (SCHEDULED,
    * PUBLISHING, PUBLISHED, FAILED, NEEDS_ATTENTION). Resolved server-side
-   * by publish_status.resolve_video_publish_status; never derive it here. */
-  publish_status: string;
+   * by publish_status.resolve_video_publish_status; never derive it here.
+   * Optional only because an older deployed API omits it — read it through
+   * lib/status.ts's libraryPublishStatus. */
+  publish_status?: string;
 }
 
 export interface VideoListResponse {

@@ -12,7 +12,7 @@ import { ApiError } from "@/lib/api/client";
 import { deleteVideo, listVideos } from "@/lib/api/videos";
 import type { VideoResponse } from "@/lib/api/types";
 import { useSession } from "@/lib/session";
-import { libraryFilterFor, presentQueueStatus, type LibraryFilter } from "@/lib/status";
+import { libraryFilterFor, libraryPublishStatus, presentQueueStatus, type LibraryFilter } from "@/lib/status";
 import { useUploadManager } from "@/lib/uploads";
 
 const FILTER_TABS: { key: LibraryFilter; label: string }[] = [
@@ -137,7 +137,7 @@ export default function LibraryPage() {
 
   // Derive counts from the full list for filter tab labels; apply filter for display.
   const matchesFilter = (video: VideoResponse, tab: LibraryFilter) =>
-    tab === "all" || libraryFilterFor(video.publish_status) === tab;
+    tab === "all" || libraryFilterFor(libraryPublishStatus(video)) === tab;
 
   const counts = Object.fromEntries(
     FILTER_TABS.map(({ key }) => [key, videos?.filter((v) => matchesFilter(v, key)).length ?? 0]),
@@ -193,11 +193,7 @@ export default function LibraryPage() {
                     <Card className="flex items-center gap-3 sm:gap-4">
                       <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
                         <p className="truncate text-sm font-medium text-ink">{video.original_filename}</p>
-                        {video.publish_status !== "UNSCHEDULED" ? (
-                          <Badge tone={presentQueueStatus(video.publish_status).tone}>
-                            {presentQueueStatus(video.publish_status).label}
-                          </Badge>
-                        ) : null}
+                        <LibraryStatusBadge publishStatus={libraryPublishStatus(video)} />
                       </div>
                       <div className="flex shrink-0 items-center gap-3">
                         <p className="hidden text-xs text-ink-muted sm:block">{formatFileSize(video.file_size_bytes)}</p>
@@ -246,4 +242,11 @@ function formatFileSize(bytes: number | null): string {
   if (bytes === null) return "";
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Queue-language badge for a video's publish status; none when unscheduled. */
+function LibraryStatusBadge({ publishStatus }: { publishStatus: string }) {
+  if (publishStatus === "UNSCHEDULED") return null;
+  const { label, tone } = presentQueueStatus(publishStatus);
+  return <Badge tone={tone}>{label}</Badge>;
 }

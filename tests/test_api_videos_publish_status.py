@@ -135,3 +135,52 @@ def test_publish_status_stays_tenant_isolated(client, users, db_path):
     _scheduled(client, db_path, user_a, status="PUBLISHED", platform_post_id="pub_1")
     _act_as(user_b)
     assert client.get("/api/videos").json()["videos"] == []
+
+
+# --- Shaped like the real production rows (2026-10-03 localhost report) ---------------
+# Real published videos (e.g. video 15 -> slot 184 -> platform_post 28) have a
+# past scheduled_at, a post last touched days ago, an ASSIGNED slot pointing
+# back at the video, and one tiktok post with a platform id. Staleness and
+# overdue rules must not turn a persisted PUBLISHED post into NEEDS_ATTENTION,
+# whether or not a worker is running.
+
+PAST = "2026-09-28T09:00:00"
+DAYS_AGO = "2026-09-28T13:00:40+00:00"
+
+
+def test_real_shaped_published_video_is_published_in_library_and_queue(client, users, db_path):
+    video_id = _scheduled(
+        client, db_path, users[0], scheduled_at=PAST, status="PUBLISHED", platform_post_id="v_pub_url~v2.real",
+        published_at=DAYS_AGO, updated_at=DAYS_AGO,
+    )
+    _act_as(users[0])
+    assert _library_status(client, video_id) == "PUBLISHED" == _queue_status(client, video_id)
+
+
+@pytest.mark.parametrize(
+    ("scheduled_at", "post_fields", "expected"),
+    [
+        (FUTURE, {}, "SCHEDULED"),
+        (PAST, {"status": "PUBLISHING", "updated_at": "now"}, "PUBLISHING"),
+        (PAST, {"status": "FAILED", "failure_code": "CAPTION_TOO_LONG", "updated_at": DAYS_AGO}, "FAILED"),
+        (PAST, {"status": "UNKNOWN", "updated_at": DAYS_AGO}, "NEEDS_ATTENTION"),
+    ],
+)
+def test_real_shaped_lifecycle_states_match_queue(client, users, db_path, scheduled_at, post_fields, expected):
+    if post_fields.get("updated_at") == "now":
+        post_fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+    video_id = _scheduled(client, db_path, users[0], scheduled_at=scheduled_at, **post_fields)
+    _act_as(users[0])
+    assert _library_status(client, video_id) == expected == _queue_status(client, video_id)
+
+
+def test_genuinely_broken_video_slot_relationship_needs_attention(client, users, db_path):
+    # The video claims a slot that now holds a different video.
+    video_id = _scheduled(client, db_path, users[0], scheduled_at=PAST, status="PUBLISHED", platform_post_id="p1")
+    other_id = _unscheduled_video(db_path, users[0], name="other")
+    with ContentStore(db_path=db_path) as store:
+        slot_id = store.get_video(video_id).assigned_slot_id
+        store._conn.execute("UPDATE content_slots SET assigned_video_id = ? WHERE id = ?", (other_id, slot_id))
+        store._conn.commit()
+    _act_as(users[0])
+    assert _library_status(client, video_id) == "NEEDS_ATTENTION"

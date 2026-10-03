@@ -279,6 +279,24 @@ describe("LibraryPage", () => {
       expect(screen.queryByText("posted.mp4")).not.toBeInTheDocument();
     });
 
+    // Regression: localhost pointed at the deployed API, which predates
+    // publish_status, and every assigned video rendered "Needs attention".
+    it("never shows Needs attention when an older API omits publish_status", async () => {
+      videosApi.listVideos.mockResolvedValue({
+        videos: [
+          { id: 1, original_filename: "old-loose.mp4", status: "DISCOVERED", file_size_bytes: 1000, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null },
+          { id: 2, original_filename: "old-assigned.mp4", status: "DISCOVERED", file_size_bytes: 1000, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: 184 },
+        ],
+      });
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("old-assigned.mp4")).toBeInTheDocument());
+
+      expect(screen.queryByText("Needs attention")).not.toBeInTheDocument();
+      expect(rowFor("old-assigned.mp4").getByText("Scheduled")).toBeInTheDocument();
+      expect(rowFor("old-loose.mp4").queryByText(/Scheduled|Needs attention/)).toBeNull();
+      expect(screen.getByRole("tab", { name: /^Unscheduled/ })).toHaveTextContent("(1)");
+    });
+
     it("shows an empty state when no videos match the active filter", async () => {
       videosApi.listVideos.mockResolvedValue({ videos: [video(1, "clip.mp4", "UNSCHEDULED", null)] });
       renderLibraryPage();

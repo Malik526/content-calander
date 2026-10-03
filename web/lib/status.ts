@@ -56,6 +56,16 @@ export function libraryFilterFor(publishStatus: string): Exclude<LibraryFilter, 
   return "scheduled";
 }
 
+/**
+ * A Library video's publish status. An API deployed before publish_status
+ * existed omits the field (Netlify and Railway deploy separately), so fall
+ * back to the old assigned_slot_id reading rather than letting a missing
+ * field render as "Needs attention".
+ */
+export function libraryPublishStatus(video: { publish_status?: string; assigned_slot_id: number | null }): string {
+  return video.publish_status ?? (video.assigned_slot_id === null ? "UNSCHEDULED" : "SCHEDULED");
+}
+
 /** Advisory next steps for a backend action_hint (Milestone 3.11). There is
  * deliberately no retry action — that arrives with Milestone 3.13. */
 export function presentActionHint(actionHint: string | null): { label: string; href?: string } | null {

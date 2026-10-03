@@ -15,6 +15,16 @@
   Publishing, Failed and Needs attention; badges reuse `presentQueueStatus`. Bucketing lives in
   `lib/status.ts`'s `libraryFilterFor`.
 - Multi-platform ambiguity and the N+1 listing read are recorded in ADR-0013's new addendum.
+- Follow-up fix (same day): localhost showed real published videos as "Needs attention". The
+  backend was right: tracing the real Postgres rows (e.g. video 15 → slot 184 → post 28,
+  PUBLISHED) through both resolvers and the route serializer returned PUBLISHED. The cause was
+  `web/.env.local` pointing localhost at the deployed Railway API, which predates
+  `publish_status`. The missing field then fell through `presentQueueStatus` to "Needs attention".
+  The Library now reads the field via `libraryPublishStatus`, which falls back to the old
+  `assigned_slot_id` reading when an older API omits it. That can also happen briefly in
+  production because Netlify and Railway deploy separately. Added regressions shaped like the
+  real rows (past schedule, stale `updated_at`) for every state plus a genuinely broken
+  video/slot link, and a frontend test for the missing-field case.
 - Tests: `tests/test_api_videos_publish_status.py` (each state equals the Queue's status, upload
   response, tenant isolation), resolver unit tests in `tests/test_publish_status.py`, and
   rewritten Library tab tests plus a `libraryFilterFor` test.
