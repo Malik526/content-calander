@@ -92,6 +92,11 @@ export interface VideoResponse {
    * video already occupies a content_slot; the Queue's "unscheduled
    * videos" list filters on this rather than re-deriving it. */
   assigned_slot_id: number | null;
+  /** Milestone 3.14 final follow-up — "UNSCHEDULED", or the same
+   * display_status the Queue shows for this video's slot (SCHEDULED,
+   * PUBLISHING, PUBLISHED, FAILED, NEEDS_ATTENTION). Resolved server-side
+   * by publish_status.resolve_video_publish_status; never derive it here. */
+  publish_status: string;
 }
 
 export interface VideoListResponse {

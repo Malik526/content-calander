@@ -12,9 +12,21 @@ import { ApiError } from "@/lib/api/client";
 import { deleteVideo, listVideos } from "@/lib/api/videos";
 import type { VideoResponse } from "@/lib/api/types";
 import { useSession } from "@/lib/session";
+import { libraryFilterFor, presentQueueStatus, type LibraryFilter } from "@/lib/status";
 import { useUploadManager } from "@/lib/uploads";
 
-type LibraryFilter = "all" | "unscheduled" | "scheduled";
+const FILTER_TABS: { key: LibraryFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "unscheduled", label: "Unscheduled" },
+  { key: "scheduled", label: "Scheduled" },
+  { key: "published", label: "Published" },
+];
+
+const EMPTY_FILTER_COPY: Record<Exclude<LibraryFilter, "all">, { title: string; description: string }> = {
+  unscheduled: { title: "No unscheduled videos", description: "All your videos are already in the queue." },
+  scheduled: { title: "No scheduled videos", description: "Head to Queue to schedule a video." },
+  published: { title: "No published videos yet", description: "Videos appear here once they've been posted." },
+};
 
 /**
  * /app/library (Milestone 3.7). Real batch upload + real, backend-verified
@@ -50,6 +62,11 @@ type LibraryFilter = "all" | "unscheduled" | "scheduled";
  * "Scheduled" badge on each row shows at a glance which videos are already
  * in the queue. Filter state is client-local; the full list is always
  * fetched from the server.
+ *
+ * Milestone 3.14 final follow-up: tabs and badges now come from the
+ * backend's publish_status (the same resolver the Queue uses) instead of
+ * assigned_slot_id, adding a Published tab. Scheduled covers every
+ * not-yet-published state; the badge uses the Queue's own labels.
  */
 export default function LibraryPage() {
   const { accessToken } = useSession();
@@ -119,22 +136,14 @@ export default function LibraryPage() {
   }
 
   // Derive counts from the full list for filter tab labels; apply filter for display.
-  const counts = {
-    all: videos?.length ?? 0,
-    unscheduled: videos?.filter((v) => (v.assigned_slot_id ?? null) === null).length ?? 0,
-    scheduled: videos?.filter((v) => v.assigned_slot_id !== null).length ?? 0,
-  };
+  const matchesFilter = (video: VideoResponse, tab: LibraryFilter) =>
+    tab === "all" || libraryFilterFor(video.publish_status) === tab;
 
-  const filteredVideos =
-    videos === null
-      ? null
-      : videos.filter((video) => {
-          switch (filter) {
-            case "unscheduled": return (video.assigned_slot_id ?? null) === null;
-            case "scheduled": return video.assigned_slot_id !== null;
-            default: return true;
-          }
-        });
+  const counts = Object.fromEntries(
+    FILTER_TABS.map(({ key }) => [key, videos?.filter((v) => matchesFilter(v, key)).length ?? 0]),
+  ) as Record<LibraryFilter, number>;
+
+  const filteredVideos = videos === null ? null : videos.filter((video) => matchesFilter(video, filter));
 
   return (
     <>
@@ -156,7 +165,7 @@ export default function LibraryPage() {
           <>
             {/* Filter tabs — purely client-side, no extra API calls. */}
             <div className="flex gap-1" role="tablist" aria-label="Filter videos">
-              {(["all", "unscheduled", "scheduled"] as const).map((tab) => (
+              {FILTER_TABS.map(({ key: tab, label }) => (
                 <button
                   key={tab}
                   type="button"
@@ -169,21 +178,14 @@ export default function LibraryPage() {
                       : "text-ink-muted hover:bg-background hover:text-ink"
                   }`}
                 >
-                  {tab === "all" ? "All" : tab === "unscheduled" ? "Unscheduled" : "Scheduled"}
+                  {label}
                   <span className="ml-1.5 text-xs opacity-70">({counts[tab]})</span>
                 </button>
               ))}
             </div>
 
-            {filteredVideos !== null && filteredVideos.length === 0 ? (
-              <EmptyState
-                title={filter === "unscheduled" ? "No unscheduled videos" : "No scheduled videos"}
-                description={
-                  filter === "unscheduled"
-                    ? "All your videos are already in the queue."
-                    : "Head to Queue to schedule a video."
-                }
-              />
+            {filter !== "all" && filteredVideos !== null && filteredVideos.length === 0 ? (
+              <EmptyState title={EMPTY_FILTER_COPY[filter].title} description={EMPTY_FILTER_COPY[filter].description} />
             ) : (
               <ul className="flex flex-col gap-3">
                 {(filteredVideos ?? []).map((video) => (
@@ -191,8 +193,10 @@ export default function LibraryPage() {
                     <Card className="flex items-center gap-3 sm:gap-4">
                       <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
                         <p className="truncate text-sm font-medium text-ink">{video.original_filename}</p>
-                        {video.assigned_slot_id !== null ? (
-                          <Badge tone="progress">Scheduled</Badge>
+                        {video.publish_status !== "UNSCHEDULED" ? (
+                          <Badge tone={presentQueueStatus(video.publish_status).tone}>
+                            {presentQueueStatus(video.publish_status).label}
+                          </Badge>
                         ) : null}
                       </div>
                       <div className="flex shrink-0 items-center gap-3">

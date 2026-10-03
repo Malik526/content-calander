@@ -2,6 +2,36 @@
 
 ## 2026-10-03
 
+### Milestone 3.14 Final UX Follow-up — Library Publishing Status
+
+- Root cause: the Library derived its tabs and badge from `videos.assigned_slot_id` alone, so a
+  published video (which keeps its slot) still showed as Scheduled, and failed or uncertain posts
+  were labeled Scheduled too.
+- API: `VideoResponse.publish_status` on `GET`/`POST /api/videos`, from the new
+  `publish_status.resolve_video_publish_status`: `UNSCHEDULED`, or the Queue's own
+  `resolve_slot_publish_status` result for the video's slot. Read-only; no schema change, and no
+  scheduling, publishing, retry or reconciliation behavior changed.
+- Library: tabs are All / Unscheduled / Scheduled / Published. Scheduled holds Scheduled,
+  Publishing, Failed and Needs attention; badges reuse `presentQueueStatus`. Bucketing lives in
+  `lib/status.ts`'s `libraryFilterFor`.
+- Multi-platform ambiguity and the N+1 listing read are recorded in ADR-0013's new addendum.
+- Tests: `tests/test_api_videos_publish_status.py` (each state equals the Queue's status, upload
+  response, tenant isolation), resolver unit tests in `tests/test_publish_status.py`, and
+  rewritten Library tab tests plus a `libraryFilterFor` test.
+
+### Milestone 3.14 Final UX Follow-up — Mobile Browser Chrome Uses Brand Green
+
+- Root cause: the pickle-green rebrand changed `globals.css` only. The pre-rebrand indigo
+  `#4338ca` was still hardcoded as `viewport.themeColor` in `web/app/layout.tsx` (emitted as
+  `<meta name="theme-color">`, which iOS Safari and Android Chrome use to tint their chrome) and as
+  `theme_color` in `web/public/manifest.webmanifest`.
+- Fix: new `web/lib/brand-theme.ts` holds theme color `#2c7a51` (`--color-accent`) and background
+  `#f4f9f4` (`--color-background`). The layout reads it; the manifest's `theme_color` and
+  `background_color` (previously `#fafafa`) match it. Still metadata only, not a PWA.
+- Tests: `web/tests/lib/brand-theme.test.ts` checks the constant against the CSS tokens, the
+  layout's `viewport` export and the manifest, and that no `#4338ca` remains. Verified in the
+  static export: `out/index.html` and `out/app/index.html` emit `theme-color` `#2c7a51`.
+
 ### Milestone 3.14 UX Follow-up — Remove Default 9:00 AM Cadence Time
 
 Frontend-only; no backend/API/cadence-semantics changes.

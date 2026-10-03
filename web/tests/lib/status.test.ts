@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatScheduledAt, platformPostStatusPresentation, presentActionHint, presentQueueStatus } from "@/lib/status";
+import { formatScheduledAt, libraryFilterFor, platformPostStatusPresentation, presentActionHint, presentQueueStatus } from "@/lib/status";
 import type { PlatformPostStatus } from "@/lib/api/types";
 
 describe("platformPostStatusPresentation", () => {
@@ -53,5 +53,15 @@ describe("presentActionHint (Milestone 3.11)", () => {
     expect(presentActionHint("EDIT_CAPTION")?.label).toBe("Edit the caption below.");
     expect(presentActionHint("TRY_AGAIN_LATER")).toBeNull();
     expect(presentActionHint(null)).toBeNull();
+  });
+});
+
+describe("libraryFilterFor (Milestone 3.14 final follow-up)", () => {
+  it("buckets backend publish_status into Library tabs", () => {
+    expect(libraryFilterFor("UNSCHEDULED")).toBe("unscheduled");
+    expect(libraryFilterFor("PUBLISHED")).toBe("published");
+    for (const status of ["SCHEDULED", "PUBLISHING", "FAILED", "NEEDS_ATTENTION", "SOMETHING_NEW"]) {
+      expect(libraryFilterFor(status)).toBe("scheduled");
+    }
   });
 });

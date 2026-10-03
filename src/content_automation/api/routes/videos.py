@@ -142,6 +142,7 @@ from content_automation.media import media_storage
 from content_automation.media.inspection import file_hash
 from content_automation.persistence.content_store import UserRecord, VideoRecord
 from content_automation.persistence.protocol import ContentStoreProtocol
+from content_automation.publishing.publish_status import resolve_video_publish_status
 from content_automation.storage.protocol import StorageProtocol
 
 router = APIRouter()
@@ -154,11 +155,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _to_video_response(video: VideoRecord) -> VideoResponse:
+def _to_video_response(store: ContentStoreProtocol, video: VideoRecord) -> VideoResponse:
+    """publish_status comes from the same resolver the Queue uses (see
+    publish_status.resolve_video_publish_status), never derived here. An
+    unscheduled video needs no further reads."""
+    slot, posts = None, []
+    if video.assigned_slot_id is not None:
+        slot = store.get_slot(video.assigned_slot_id)
+        posts = store.list_platform_posts_for_video(video.id)
+    publish = resolve_video_publish_status(video, slot, posts)
     return VideoResponse(
         id=video.id, original_filename=video.original_filename, status=video.status,
         file_size_bytes=video.file_size_bytes, created_at=video.created_at,
-        assigned_slot_id=video.assigned_slot_id,
+        assigned_slot_id=video.assigned_slot_id, publish_status=publish.display_status,
     )
 
 
@@ -207,7 +216,7 @@ def _process_one_upload(
             file_hash=file_hash(tmp_path), file_size_bytes=file_size_bytes, created_at=_now_iso(),
         )
         return _UploadOutcome(
-            result=VideoUploadResult(filename=original_filename, success=True, video=_to_video_response(video)),
+            result=VideoUploadResult(filename=original_filename, success=True, video=_to_video_response(store, video)),
             file_size_bytes=file_size_bytes, error_code=None, video_id=video.id,
         )
     except Exception as exc:  # noqa: BLE001 — see module docstring: one file's failure must never
@@ -337,7 +346,7 @@ def list_videos(
     user: UserRecord = Depends(get_current_user), store: ContentStoreProtocol = Depends(get_store),
 ) -> VideoListResponse:
     videos = store.list_videos_for_user(user.id)
-    return VideoListResponse(videos=[_to_video_response(v) for v in videos])
+    return VideoListResponse(videos=[_to_video_response(store, v) for v in videos])
 
 
 @router.delete("/videos/{video_id}", status_code=204)

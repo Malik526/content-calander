@@ -24,6 +24,11 @@ class VideoResponse(BaseModel):
     # file's own module docstring), a video's own slot id has real,
     # user-facing meaning and isn't an opaque internal identifier.
     assigned_slot_id: int | None
+    # Milestone 3.14 final follow-up: the video's publishing state from
+    # publishing.publish_status.resolve_video_publish_status — UNSCHEDULED,
+    # or the same display_status the Queue shows for its slot (SCHEDULED,
+    # PUBLISHING, PUBLISHED, FAILED, NEEDS_ATTENTION).
+    publish_status: str
 
 
 class VideoListResponse(BaseModel):

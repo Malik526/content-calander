@@ -50,6 +50,13 @@ What it does:
   (media.caption_editing.post_locks_caption) — never suggest an action the
   API would refuse.
 
+  Library (Milestone 3.14 final follow-up): resolve_video_publish_status
+  gives a video's state — UNSCHEDULED when it holds no slot, otherwise
+  exactly resolve_slot_publish_status for its slot, so Library and Queue
+  can never disagree. With several platforms it inherits the slot's
+  most-urgent rule (PUBLISHED only once every platform post is published);
+  per-platform Library status is future scope.
+
   Read-only: nothing here writes, retries or reconciles.
   content_slots.status is still never written past ASSIGNED (ADR-0013).
 
@@ -64,7 +71,7 @@ from zoneinfo import ZoneInfo
 
 from content_automation.config import PLATFORM_POST_STALE_MINUTES, PUBLISH_OVERDUE_GRACE_MINUTES, TIMEZONE
 from content_automation.media.caption_editing import post_locks_caption
-from content_automation.persistence.content_store import PlatformPostRecord, SlotRecord
+from content_automation.persistence.content_store import PlatformPostRecord, SlotRecord, VideoRecord
 from content_automation.publishing.failure_taxonomy import (
     EDIT_CAPTION,
     RECONNECT_ACCOUNT,
@@ -78,6 +85,8 @@ PUBLISHING = "PUBLISHING"
 PUBLISHED = "PUBLISHED"
 FAILED = "FAILED"
 NEEDS_ATTENTION = "NEEDS_ATTENTION"
+# Library only: the video holds no content_slot.
+UNSCHEDULED = "UNSCHEDULED"
 
 _URGENCY = [NEEDS_ATTENTION, FAILED, PUBLISHING, SCHEDULED, PUBLISHED]
 
@@ -261,3 +270,19 @@ def resolve_slot_publish_status(
     # Every post is PUBLISHED.
     latest = max((p.published_at for p in publications if p.published_at), default=None)
     return SlotPublishStatus(display_status=PUBLISHED, published_at=latest, can_unassign=False, publications=publications)
+
+
+def resolve_video_publish_status(
+    video: VideoRecord, slot: SlotRecord | None, posts: list[PlatformPostRecord], *, now_utc: datetime | None = None,
+) -> SlotPublishStatus:
+    """A Library video's publish state: UNSCHEDULED without a slot, else the
+    Queue's own status for that slot. A slot that doesn't point back at
+    this video is contradictory, so it needs attention rather than a guess."""
+    if video.assigned_slot_id is None:
+        return SlotPublishStatus(display_status=UNSCHEDULED)
+    if slot is None or slot.assigned_video_id != video.id:
+        return SlotPublishStatus(
+            display_status=NEEDS_ATTENTION, reason_code="STATE_INCONSISTENT",
+            message=_ATTENTION_MESSAGES["STATE_INCONSISTENT"],
+        )
+    return resolve_slot_publish_status(slot, posts, now_utc=now_utc)

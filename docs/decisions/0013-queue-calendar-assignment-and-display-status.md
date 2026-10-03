@@ -136,3 +136,21 @@ store open.
 Action hints are advisory only (`RECONNECT_ACCOUNT`, `EDIT_CAPTION` (dropped once the caption is
 locked), `TRY_AGAIN_LATER`). No retry endpoint or automatic recovery was added; that is
 Milestone 3.13.
+
+## Addendum (2026-10-03, Milestone 3.14 final follow-up): Library publishing status
+
+The Library shows the same status as the Queue rather than its own guess. `GET /api/videos`
+returns `publish_status`, from `publish_status.resolve_video_publish_status`: `UNSCHEDULED` when
+`videos.assigned_slot_id` is NULL, otherwise exactly `resolve_slot_publish_status` for that slot
+(a slot that doesn't point back at the video resolves to `NEEDS_ATTENTION`/`STATE_INCONSISTENT`).
+This works because `assigned_slot_id` stays set after publishing (`content_slots.status` never
+goes past `ASSIGNED`, per this ADR). No schema change.
+
+Library tabs bucket that value: Unscheduled, Published, and Scheduled for everything else
+(Scheduled, Publishing, Failed, Needs attention). The badge uses the Queue's labels.
+
+Open for multi-platform (Milestone 4): the video status inherits the slot's most-urgent rule, so
+a video published on TikTok but failed on another platform shows Failed and sits under
+Scheduled. Whether the Library should show per-platform status, or treat "published anywhere" as
+Published, is undecided. Listing also does two reads per scheduled video (N+1). That's fine at
+current library sizes; batch it if libraries get large.

@@ -4,12 +4,13 @@ OPEN/SCHEDULED/PUBLISHING/PUBLISHED/FAILED/NEEDS_ATTENTION. Pure: records are
 built directly and `now` is fixed, so no store or wall clock is involved."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 from datetime import datetime, timezone
 
 import pytest
 
 from content_automation.persistence.content_store import PlatformPostRecord, SlotRecord
-from content_automation.publishing.publish_status import resolve_slot_publish_status
+from content_automation.publishing.publish_status import resolve_slot_publish_status, resolve_video_publish_status
 
 # 2026-10-05 09:00 America/New_York == 13:00 UTC.
 NOW = datetime(2026, 10, 5, 13, 0, 0, tzinfo=timezone.utc)
@@ -181,3 +182,27 @@ def test_slot_is_published_only_when_every_platform_is():
     published = _post(status="PUBLISHED", platform_post_id="pub_1", published_at="2026-10-05T12:30:00+00:00")
     pending = _post(id=2, platform="instagram")
     assert _resolve(_slot(), [published, pending]).display_status == "SCHEDULED"
+
+
+# --- Library video status (Milestone 3.14 final follow-up) ---------------------------
+
+def _video(slot_id=1):
+    return SimpleNamespace(id=1, assigned_slot_id=slot_id)
+
+
+def test_video_without_slot_is_unscheduled():
+    assert resolve_video_publish_status(_video(slot_id=None), None, [], now_utc=NOW).display_status == "UNSCHEDULED"
+
+
+def test_video_status_matches_its_slot_status():
+    for post in (_post(), _post(status="PUBLISHED", platform_post_id="p1"), _post(status="FAILED"), _post(status="UNKNOWN")):
+        assert (
+            resolve_video_publish_status(_video(), _slot(), [post], now_utc=NOW)
+            == resolve_slot_publish_status(_slot(), [post], now_utc=NOW)
+        )
+
+
+def test_video_whose_slot_is_missing_or_points_elsewhere_needs_attention():
+    for slot in (None, _slot(video_id=99), _slot(status="OPEN", video_id=None)):
+        result = resolve_video_publish_status(_video(), slot, [_post()], now_utc=NOW)
+        assert (result.display_status, result.reason_code) == ("NEEDS_ATTENTION", "STATE_INCONSISTENT")

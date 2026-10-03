@@ -41,6 +41,21 @@ export function presentQueueStatus(displayStatus: string): { label: string; tone
   return QUEUE_STATUS_PRESENTATION[displayStatus] ?? QUEUE_STATUS_PRESENTATION.NEEDS_ATTENTION;
 }
 
+/** Library filter tabs (Milestone 3.14 final follow-up). */
+export type LibraryFilter = "all" | "unscheduled" | "scheduled" | "published";
+
+/**
+ * Which Library tab a video's backend publish_status belongs to. A pure
+ * bucketing of the server-resolved status — no lifecycle logic here.
+ * Scheduled holds everything in the workflow that hasn't published yet
+ * (Scheduled, Publishing, Failed, Needs attention); the badge shows which.
+ */
+export function libraryFilterFor(publishStatus: string): Exclude<LibraryFilter, "all"> {
+  if (publishStatus === "UNSCHEDULED") return "unscheduled";
+  if (publishStatus === "PUBLISHED") return "published";
+  return "scheduled";
+}
+
 /** Advisory next steps for a backend action_hint (Milestone 3.11). There is
  * deliberately no retry action — that arrives with Milestone 3.13. */
 export function presentActionHint(actionHint: string | null): { label: string; href?: string } | null {

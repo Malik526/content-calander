@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LibraryPage from "@/app/app/library/page";
@@ -62,8 +62,8 @@ describe("LibraryPage", () => {
   it("shows the account's own videos once loaded", async () => {
     videosApi.listVideos.mockResolvedValue({
       videos: [
-        { id: 1, original_filename: "clip-a.mp4", status: "DISCOVERED", file_size_bytes: 2_000_000, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null },
-        { id: 2, original_filename: "clip-b.mp4", status: "DISCOVERED", file_size_bytes: null, created_at: "2026-09-02T00:00:00Z", assigned_slot_id: null },
+        { id: 1, original_filename: "clip-a.mp4", status: "DISCOVERED", file_size_bytes: 2_000_000, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null, publish_status: "UNSCHEDULED" },
+        { id: 2, original_filename: "clip-b.mp4", status: "DISCOVERED", file_size_bytes: null, created_at: "2026-09-02T00:00:00Z", assigned_slot_id: null, publish_status: "UNSCHEDULED" },
       ],
     });
 
@@ -92,7 +92,7 @@ describe("LibraryPage", () => {
     videosApi.listVideos.mockResolvedValue({ videos: [] });
     videosApi.uploadVideos.mockResolvedValue({
       results: [
-        { filename: "good.mp4", success: true, video: { id: 3, original_filename: "good.mp4", status: "DISCOVERED", file_size_bytes: 10, created_at: "2026-09-03T00:00:00Z", assigned_slot_id: null }, error: null },
+        { filename: "good.mp4", success: true, video: { id: 3, original_filename: "good.mp4", status: "DISCOVERED", file_size_bytes: 10, created_at: "2026-09-03T00:00:00Z", assigned_slot_id: null, publish_status: "UNSCHEDULED" }, error: null },
         { filename: "bad.txt", success: false, video: null, error: "Unsupported file type." },
       ],
     });
@@ -172,12 +172,12 @@ describe("LibraryPage", () => {
 
     // The upload finishes while the user is elsewhere in the app.
     resolveUpload!({
-      results: [{ filename: "clip.mp4", success: true, video: { id: 9, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 5, created_at: "2026-09-04T00:00:00Z", assigned_slot_id: null }, error: null }],
+      results: [{ filename: "clip.mp4", success: true, video: { id: 9, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 5, created_at: "2026-09-04T00:00:00Z", assigned_slot_id: null, publish_status: "UNSCHEDULED" }, error: null }],
     });
 
     // Navigate back to Library.
     videosApi.listVideos.mockResolvedValue({
-      videos: [{ id: 9, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 5, created_at: "2026-09-04T00:00:00Z", assigned_slot_id: null }],
+      videos: [{ id: 9, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 5, created_at: "2026-09-04T00:00:00Z", assigned_slot_id: null, publish_status: "UNSCHEDULED" }],
     });
     rerender(
       <UploadProvider>
@@ -192,78 +192,111 @@ describe("LibraryPage", () => {
     await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
   });
 
-  // Milestone 3.14 UX cleanup: filter tabs (All / Unscheduled / Scheduled).
+  // Milestone 3.14 UX cleanup: filter tabs. Final follow-up: tabs and badges
+  // come from the backend's publish_status (the Queue's own resolver), with
+  // a Published tab; Scheduled holds every not-yet-published state.
   describe("Library filter tabs", () => {
+    const video = (id: number, name: string, publish_status: string, assigned_slot_id: number | null = id) => ({
+      id, original_filename: name, status: "DISCOVERED", file_size_bytes: 1000,
+      created_at: "2026-09-01T00:00:00Z", assigned_slot_id, publish_status,
+    });
+
     function withMixedVideos() {
       videosApi.listVideos.mockResolvedValue({
         videos: [
-          { id: 1, original_filename: "unscheduled.mp4", status: "DISCOVERED", file_size_bytes: 1000, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null },
-          { id: 2, original_filename: "scheduled.mp4", status: "ASSIGNED", file_size_bytes: 2000, created_at: "2026-09-02T00:00:00Z", assigned_slot_id: 5 },
+          video(1, "loose.mp4", "UNSCHEDULED", null),
+          video(2, "waiting.mp4", "SCHEDULED"),
+          video(3, "sending.mp4", "PUBLISHING"),
+          video(4, "posted.mp4", "PUBLISHED"),
+          video(5, "broken.mp4", "FAILED"),
+          video(6, "unclear.mp4", "NEEDS_ATTENTION"),
         ],
       });
     }
 
-    it("shows all videos in the default All tab", async () => {
+    const rowFor = (name: string) => within(screen.getByText(name).closest("li") as HTMLElement);
+    const visibleNames = () =>
+      ["loose.mp4", "waiting.mp4", "sending.mp4", "posted.mp4", "broken.mp4", "unclear.mp4"].filter((name) =>
+        screen.queryByText(name),
+      );
+
+    async function openTab(name: RegExp) {
+      await userEvent.setup().click(screen.getByRole("tab", { name }));
+    }
+
+    async function renderMixed() {
       withMixedVideos();
       renderLibraryPage();
-      await waitFor(() => expect(screen.getByText("unscheduled.mp4")).toBeInTheDocument());
-      expect(screen.getByText("scheduled.mp4")).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText("loose.mp4")).toBeInTheDocument());
+    }
+
+    it("shows all videos in the default All tab", async () => {
+      await renderMixed();
+      expect(visibleNames()).toHaveLength(6);
     });
 
-    it("shows a Scheduled badge on videos that are in a queue slot", async () => {
-      withMixedVideos();
-      renderLibraryPage();
-      await waitFor(() => expect(screen.getByText("scheduled.mp4")).toBeInTheDocument());
-      // The badge is a <span role="status"/"presentation"> (via Badge component);
-      // the filter tab also says "Scheduled" — use getAllByText and confirm
-      // at least one occurrence is the badge (not just the tab).
-      const scheduledEls = screen.getAllByText(/^Scheduled$/);
-      expect(scheduledEls.length).toBeGreaterThanOrEqual(1);
+    it("badges each video with the Queue's status label, and none for unscheduled", async () => {
+      await renderMixed();
+      expect(rowFor("loose.mp4").queryByText(/Scheduled|Published|Publishing|Failed|Needs attention/)).toBeNull();
+      expect(rowFor("waiting.mp4").getByText("Scheduled")).toBeInTheDocument();
+      expect(rowFor("sending.mp4").getByText("Publishing")).toBeInTheDocument();
+      expect(rowFor("posted.mp4").getByText("Published")).toBeInTheDocument();
+      expect(rowFor("broken.mp4").getByText("Failed")).toBeInTheDocument();
+      expect(rowFor("unclear.mp4").getByText("Needs attention")).toBeInTheDocument();
+    });
+
+    it("counts each tab from publish_status", async () => {
+      await renderMixed();
+      expect(screen.getByRole("tab", { name: /^All/ })).toHaveTextContent("(6)");
+      expect(screen.getByRole("tab", { name: /^Unscheduled/ })).toHaveTextContent("(1)");
+      expect(screen.getByRole("tab", { name: /^Scheduled/ })).toHaveTextContent("(4)");
+      expect(screen.getByRole("tab", { name: /^Published/ })).toHaveTextContent("(1)");
     });
 
     it("Unscheduled tab shows only videos without a slot", async () => {
-      withMixedVideos();
-      renderLibraryPage();
-      await waitFor(() => expect(screen.getByText("unscheduled.mp4")).toBeInTheDocument());
-
-      const user = userEvent.setup();
-      await user.click(screen.getByRole("tab", { name: /unscheduled/i }));
-
-      expect(screen.getByText("unscheduled.mp4")).toBeInTheDocument();
-      expect(screen.queryByText("scheduled.mp4")).not.toBeInTheDocument();
+      await renderMixed();
+      await openTab(/^Unscheduled/);
+      expect(visibleNames()).toEqual(["loose.mp4"]);
     });
 
-    it("Scheduled tab shows only videos assigned to a slot", async () => {
-      withMixedVideos();
-      renderLibraryPage();
-      await waitFor(() => expect(screen.getByText("scheduled.mp4")).toBeInTheDocument());
+    it("Scheduled tab holds scheduled, publishing, failed and needs-attention videos but not published ones", async () => {
+      await renderMixed();
+      await openTab(/^Scheduled/);
+      expect(visibleNames()).toEqual(["waiting.mp4", "sending.mp4", "broken.mp4", "unclear.mp4"]);
+      expect(rowFor("sending.mp4").getByText("Publishing")).toBeInTheDocument();
+    });
 
-      const user = userEvent.setup();
-      await user.click(screen.getByRole("tab", { name: /^scheduled/i }));
+    it("Published tab shows only published videos, badged Published", async () => {
+      await renderMixed();
+      await openTab(/^Published/);
+      expect(visibleNames()).toEqual(["posted.mp4"]);
+      expect(rowFor("posted.mp4").getByText("Published")).toBeInTheDocument();
+    });
 
-      expect(screen.queryByText("unscheduled.mp4")).not.toBeInTheDocument();
-      expect(screen.getByText("scheduled.mp4")).toBeInTheDocument();
+    it("classifies by publish_status, not assigned_slot_id — a published video still holds its slot", async () => {
+      await renderMixed();
+      await openTab(/^Scheduled/);
+      expect(screen.queryByText("posted.mp4")).not.toBeInTheDocument();
     });
 
     it("shows an empty state when no videos match the active filter", async () => {
-      videosApi.listVideos.mockResolvedValue({
-        videos: [{ id: 1, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 1000, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null }],
-      });
+      videosApi.listVideos.mockResolvedValue({ videos: [video(1, "clip.mp4", "UNSCHEDULED", null)] });
       renderLibraryPage();
       await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
 
-      const user = userEvent.setup();
-      await user.click(screen.getByRole("tab", { name: /^scheduled/i }));
-
+      await openTab(/^Scheduled/);
       expect(screen.getByText("No scheduled videos")).toBeInTheDocument();
       expect(screen.queryByText("clip.mp4")).not.toBeInTheDocument();
+
+      await openTab(/^Published/);
+      expect(screen.getByText("No published videos yet")).toBeInTheDocument();
     });
   });
 
   describe("Delete Video (Milestone 3.7 follow-up)", () => {
     function withOneVideo() {
       videosApi.listVideos.mockResolvedValue({
-        videos: [{ id: 7, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 10, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null }],
+        videos: [{ id: 7, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 10, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: null, publish_status: "UNSCHEDULED" }],
       });
     }
 
