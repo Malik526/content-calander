@@ -25,6 +25,13 @@ What it does:
   Pure read; never claims or writes. Claiming stays in
   worker.run_due_posts_once (via its due_posts parameter).
 
+  Milestone 3.14 follow-up (overdue telemetry): lateness_seconds() — how
+  far past its scheduled time a post is, in its own slot's timezone —
+  feeds the hosted worker's due_backlog / post_claimed / outcome log
+  events. Observability only: due-ness itself is unchanged, and there is
+  still no lateness cutoff (the provisional V1 catch-up rule — see the
+  Milestone 3.14 evaluation record, "Overdue Publishing").
+
 Dependencies:
   scheduling.due_post_selector, persistence.protocol, config.TIMEZONE.
 """
@@ -55,6 +62,20 @@ def _slot_timezone(store: ContentStoreProtocol, post: PlatformPostRecord) -> str
         return None
     slot = store.get_slot(video.assigned_slot_id)
     return slot.timezone if slot is not None else None
+
+
+def lateness_seconds(store: ContentStoreProtocol, post: PlatformPostRecord, now_utc: datetime) -> int:
+    """Whole seconds now_utc is past post.scheduled_at (negative if
+    early), with scheduled_at read as wall-clock time in the post's slot
+    timezone. Computed between aware instants, so a DST change between the
+    two is measured correctly rather than as a wall-clock difference."""
+    tz_name = _slot_timezone(store, post)
+    try:
+        tz = ZoneInfo(tz_name or TIMEZONE)
+    except (KeyError, ValueError):
+        tz = ZoneInfo(TIMEZONE)
+    scheduled = datetime.fromisoformat(post.scheduled_at).replace(tzinfo=tz)
+    return int((now_utc - scheduled).total_seconds())
 
 
 def get_hosted_due_posts(

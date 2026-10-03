@@ -80,3 +80,7 @@ running hosted unchanged.
 > **3.13 update:** both open items above are resolved — the submission checkpoint closes the
 > crash-after-publish-ID duplicate risk, and a per-connection advisory lock closes the token-refresh
 > race, so multiple replicas are supported. See ADR-0016.
+
+> **3.14 follow-up:** `nixpacks.toml` is gone. Both services now build from the repo-root `Dockerfile`
+> (ffmpeg via apt, and no `ARG` so runtime secrets never enter the image build). See the 3.14 evaluation
+> record's "Build Secret Hardening".

@@ -51,12 +51,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from content_automation.config import CREDENTIAL_ENCRYPTION_KEY, DATABASE_URL, STORAGE_BACKEND
+from content_automation.config import (
+    CREDENTIAL_ENCRYPTION_KEY,
+    DATABASE_URL,
+    STORAGE_BACKEND,
+    WORKER_POLL_INTERVAL_SECONDS,
+)
 from content_automation.persistence.protocol import ContentStoreProtocol
 from content_automation.publishing.publisher import Publisher
 from content_automation.publishing.tiktok.hosted_publisher import build_hosted_tiktok_publisher
 from content_automation.scheduling.crash_recovery import recover_stale_posts_once
-from content_automation.scheduling.hosted_due_selection import get_hosted_due_posts
+from content_automation.scheduling.hosted_due_selection import get_hosted_due_posts, lateness_seconds
 from content_automation.scheduling.reconciliation import reconcile_pending_status_checks_once
 from content_automation.scheduling.worker import log_event, run_due_posts_once
 from content_automation.storage.protocol import StorageProtocol
@@ -100,10 +105,12 @@ def run_hosted_cycle(
         try:
             due_posts = get_hosted_due_posts(store, PLATFORM, user_id, now_utc)
             summary.due += len(due_posts)
+            _log_due_backlog(store, user_id, due_posts, now_utc)
             if dry_run:
                 for post in due_posts:
                     log_event("dry_run_would_claim", platform_post_row_id=post.id, video_id=post.video_id,
-                              platform=post.platform, scheduled_at=post.scheduled_at, user_id=user_id)
+                              platform=post.platform, scheduled_at=post.scheduled_at, user_id=user_id,
+                              lateness_seconds=lateness_seconds(store, post, now_utc))
                 continue
 
             publisher = publisher_factory(store, user_id)
@@ -125,6 +132,7 @@ def run_hosted_cycle(
 
             run = run_due_posts_once(
                 store, publisher, platform=PLATFORM, user_id=user_id, storage=storage, due_posts=due_posts,
+                lateness_seconds=lambda post: lateness_seconds(store, post, datetime.now(timezone.utc)),
             )
             summary.claimed += run.claimed
             summary.published += run.published
@@ -137,6 +145,22 @@ def run_hosted_cycle(
             logger.debug("user cycle error detail", exc_info=True)
 
     return summary
+
+
+def _log_due_backlog(store: ContentStoreProtocol, user_id: int, due_posts, now_utc: datetime) -> None:
+    """Milestone 3.14 follow-up (overdue telemetry): one event per user per
+    cycle with due work. overdue = due posts more than one poll interval
+    late, i.e. ones a healthy, continuously running worker would already
+    have claimed — a measurement definition, not a publishing cutoff
+    (overdue posts are still published; see the 3.14 evaluation record)."""
+    if not due_posts:
+        return
+    lateness = [lateness_seconds(store, post, now_utc) for post in due_posts]
+    log_event(
+        "due_backlog", user_id=user_id, platform=PLATFORM, due=len(due_posts),
+        overdue=sum(1 for seconds in lateness if seconds > WORKER_POLL_INTERVAL_SECONDS),
+        max_lateness_seconds=max(lateness),
+    )
 
 
 def run_worker_loop(

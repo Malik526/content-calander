@@ -40,6 +40,7 @@ Dependencies:
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -91,6 +92,7 @@ def run_due_posts_once(
     store: ContentStore, publisher: Publisher, *, platform: str = "tiktok", now: datetime | None = None,
     user_id: int | None = None, storage: StorageProtocol | None = None,
     due_posts: list[PlatformPostRecord] | None = None,
+    lateness_seconds: Callable[[PlatformPostRecord], int] | None = None,
 ) -> WorkerRunSummary:
     """Discover due PENDING platform_posts rows for `platform`, attempt to
     atomically claim each one, and execute the proven publish flow for
@@ -123,6 +125,12 @@ def run_due_posts_once(
     does, because hosted slots are scheduled in each user's own timezone
     (scheduling/hosted_due_selection.py). Claiming and execution below are
     identical either way; only discovery differs.
+
+    lateness_seconds (Milestone 3.14 follow-up, overdue telemetry) is an
+    optional callable giving how late a post is right now; when supplied,
+    post_claimed and the outcome events carry lateness_seconds so overdue
+    publishing can be measured from logs. Logging only — it never affects
+    what is claimed or how it runs.
     """
     summary = WorkerRunSummary()
 
@@ -137,9 +145,13 @@ def run_due_posts_once(
             log_event("claim_skipped", platform_post_row_id=post.id, video_id=post.video_id, platform=post.platform)
             continue
         summary.claimed += 1
+        lateness = {"lateness_seconds": lateness_seconds(post)} if lateness_seconds else {}
+        # previous_failure_code: why an earlier attempt didn't publish (a
+        # retry), when there was one — the knowable part of "why late".
         log_event(
             "post_claimed", platform_post_row_id=post.id, video_id=post.video_id, platform=post.platform,
             scheduled_at=post.scheduled_at, user_id=post.user_id, retry_count=post.retry_count,
+            claimed_at=_now_iso(), **lateness, previous_failure_code=post.failure_code,
         )
         log_event("publish_started", platform_post_row_id=post.id, video_id=post.video_id, platform=post.platform)
 
@@ -150,6 +162,8 @@ def run_due_posts_once(
 
         final = store.get_platform_post(post.video_id, post.platform)
         outcome = {"platform_post_row_id": post.id, "video_id": post.video_id, "platform": post.platform}
+        if lateness_seconds:
+            outcome["lateness_seconds"] = lateness_seconds(post)
         if final is not None and final.status == "PUBLISHED":
             summary.published += 1
             log_event("publish_succeeded", **outcome, status=final.status)

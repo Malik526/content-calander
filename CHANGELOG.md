@@ -2,6 +2,50 @@
 
 ## 2026-10-03
 
+### Milestone 3.14 follow-up — Build secret hardening, overdue telemetry, confirmed live publish
+
+See `docs/evaluations/productization/milestone-3.14-hosted-e2e-validation.md` ("Live Run",
+"Build Secret Hardening", "Overdue Publishing").
+
+- **Confirmed live:**
+  - The Railway worker (`dry_run=False`) found two overdue PENDING posts, claimed them,
+    submitted them, and received TikTok publish IDs.
+  - Reconciliation resolved both as PUBLISHED, and they were verified on the connected
+    TikTok account.
+  - This is the first real hosted end-to-end publish. Both posts were 58–65 min late,
+    because the worker came online after their scheduled times.
+- **Build secrets (configuration fix):**
+  - Railway's Nixpacks builder turned every service variable into `ARG X` + `ENV X=$X` in
+    its generated Dockerfile. Runtime secrets were therefore present during the image build
+    and written into the image's ENV config, which is what the `SecretsUsedInArgOrEnv`
+    warnings were about. No value was printed and nothing indicates disclosure, so no
+    rotation.
+  - Both services now build from a repo-root `Dockerfile` that declares no `ARG`, so with
+    Railway's Dockerfile builder no service variable enters the build. Railway injects them
+    at runtime.
+  - The image is `python:3.11-slim-bookworm` with apt `ffmpeg`; `nixpacks.toml` is removed.
+  - New `.dockerignore`.
+  - The API start command is now `python3 cli/run_api.py`: Railway runs Dockerfile start
+    commands without a shell, so `$PORT` can't be expanded there, and `run_api` reads it
+    itself.
+  - `tests/test_deploy_config.py` (14) guards all of this.
+- **Overdue publishing — V1 decision: keep automatic catch-up (provisional, no grace window).**
+  - Exact semantics: PENDING + `scheduled_at <= now` (slot timezone), no lateness cutoff,
+    no MISSED state, no batch limit, no spacing.
+  - Documented risks: a backlog posts back to back, and beyond TikTok's 6 inits per minute
+    the remainder end FAILED (`rate_limit_exceeded`, retryable via Retry). No duplicates.
+  - The future Post now / Reschedule / Skip UX is documented, not built.
+- **Overdue telemetry:**
+  - `hosted_due_selection.lateness_seconds` measures lateness in the slot's timezone,
+    DST-correct.
+  - New `due_backlog` event (`due`, `overdue`, `max_lateness_seconds`) per user per cycle.
+  - `post_claimed` gained `claimed_at`, `lateness_seconds` and `previous_failure_code`.
+  - Outcome events and `dry_run_would_claim` gained `lateness_seconds`.
+  - Logging only; selection is unchanged.
+  - `tests/test_hosted_overdue_semantics.py` (18) pins the semantics and the telemetry.
+- **Verification:** backend 1159 passed (was 1127). No Docker here, so the image build itself
+  is verified on Railway's next deploy.
+
 ### Milestone 3.14 follow-up — Show the connected TikTok account
 
 Settings showed only "TikTok: Connected", so during live validation it was impossible to tell

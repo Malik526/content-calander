@@ -1,0 +1,21 @@
+# Keep local secrets, data and unrelated toolchains out of the image build
+# context (Dockerfile). Railway builds from a clean git checkout, where most
+# of these don't exist — this also protects a local `docker build`.
+.env
+.env.*
+**/.env
+**/.env.*
+.git
+.venv
+**/__pycache__
+**/*.py[cod]
+*.egg-info
+build/
+.pytest_cache/
+data/
+content/
+evaluation/
+web/
+tests/
+docs/
+*.backup
