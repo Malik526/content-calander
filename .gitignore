@@ -52,3 +52,8 @@ evaluation/video_pipeline/results.jsonl
 
 #ignore images
 images/
+
+# Autobuild run artifacts (agent logs, diffs, screenshots) — local only.
+# See .autobuild/README.md.
+.autobuild/runs/*
+!.autobuild/runs/.gitkeep

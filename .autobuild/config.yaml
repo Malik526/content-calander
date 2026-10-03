@@ -1,0 +1,41 @@
+# Autobuild project configuration for Content Automation / Pickle Batch.
+# Framework, schemas and policy: ~/.agents/autobuild (AI engineering harness).
+# Validate: ~/.agents/autobuild/bin/autobuild config ~/content-automation
+version: 1
+
+project:
+  name: Content Automation
+
+agents:                          # any registered provider may fill any role
+  planner:
+    provider: codex
+  implementer:
+    provider: claude
+  reviewer:
+    provider: codex              # independence = fresh session; claude would also be valid
+
+git:
+  protected_branches: [main]
+  branch_prefix: agent/
+
+paths:
+  roadmap: docs/roadmap          # created by the planner on first approved plan
+  project_state: PROJECT_STATE.md
+  adr_directory: docs/decisions
+  runs_directory: .autobuild/runs
+
+limits:
+  max_review_cycles: 3
+  max_consecutive_implementations: 5
+
+validation:
+  browser_tool: playwright       # web/ has user-facing flows; browser QA arrives in phase 0.4
+  require_clean_git_before_start: true
+
+notifications:
+  enabled: false                 # providers arrive in phase 0.6
+  provider: console
+
+control:
+  remote_stop_enabled: false     # stop providers arrive in phase 0.6
+  provider: none

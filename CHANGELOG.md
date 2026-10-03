@@ -2,6 +2,24 @@
 
 ## 2026-10-03
 
+### Autobuild — Project Configuration
+
+Configuration only. No application, backend or `web/` change.
+
+- Adopts **autobuild**, the planner → implementer → independent-reviewer
+  control plane in the AI engineering harness (`~/.agents/autobuild`). The
+  framework, schemas and policy live in the harness. This repo owns only
+  `.autobuild/config.yaml` and `.autobuild/runs/`.
+- Config: role assignments (planner `codex`, implementer `claude`, reviewer
+  `codex`), protected branch `main`, branch prefix `agent/`, paths to
+  `PROJECT_STATE.md` / `docs/decisions/` / `docs/roadmap/` (created by the
+  planner on the first approved plan), review-cycle and rollover limits.
+  Notifications and remote stop are disabled until harness phase 0.6.
+- `.autobuild/runs/*` is git-ignored except `.gitkeep`. Run artifacts (agent
+  logs, diffs, screenshots) stay local.
+- Validation: `~/.agents/autobuild/bin/autobuild config .` OK (one expected
+  warning: `docs/roadmap` doesn't exist yet).
+
 ### Milestone 3.15 — Client Server-State Cache and Navigation UX
 
 Frontend-only (`web/`); no backend/API change.
