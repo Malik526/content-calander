@@ -2,6 +2,23 @@
 
 ## 2026-10-03
 
+### Milestone 3.14 Follow-up — Library Status: Production Validated, Localhost Mismatch Diagnosed
+
+- **Production validation passed:** after the backend deployed to Railway, known published
+  videos render as Published in the Library and appear in the Published filter.
+- **Localhost root cause:** `web/.env.local` points localhost at the Railway production API, not a
+  local one (confirmed in the served dev bundle). Before the backend deployed, localhost ran the
+  new Library code against the old API, which had no `publish_status`. The page first showed
+  "Needs attention" (missing field fell through to the unknown-status label), then "Scheduled"
+  (the `assigned_slot_id` fallback). Production and localhost now use the same Library code, the
+  same Railway API (which returns `publish_status`) and the same database. No Next.js caching was
+  involved: Library data is a client-side `fetch` and the API sends no cache headers. Publishing
+  status logic is unchanged.
+- **Fix:** dev builds now log a console warning when `/api/videos` omits `publish_status`, so the
+  fallback can't silently hide a version mismatch. `web/README.md` documents choosing the local
+  vs. deployed API and restarting `npm run dev` after changing it.
+- Validation: frontend 162/162, eslint, `tsc --noEmit`, `next build`. No backend code changed.
+
 ### Milestone 3.14 Final UX Follow-up — Library Publishing Status
 
 - Root cause: the Library derived its tabs and badge from `videos.assigned_slot_id` alone, so a

@@ -63,6 +63,16 @@ Anything server-only (a database URL, a service-role key, `SUPABASE_JWT_SECRET`,
 `CREDENTIAL_ENCRYPTION_KEY`) has no reason to exist in this package at all — see
 `tests/lib/no-secrets-in-client-bundle.test.ts`.
 
+**Which API localhost talks to.** `NEXT_PUBLIC_API_BASE_URL` in `.env.local` decides it:
+`http://127.0.0.1:8000` (`python3 cli/run_api.py` from the repo root, the `.env.example` default) or
+the deployed Railway API. Pointed at Railway, localhost runs your current frontend against whatever
+backend is deployed. A frontend change that needs a new API field shows the old behavior until the
+backend deploys. For example, the Library showed published videos as "Scheduled" because the deployed
+API predated `publish_status` (dev builds log a console warning when that field is missing). To test
+frontend and backend changes together before deploying, run the local API and point `.env.local` at
+it, then restart `npm run dev`. `NEXT_PUBLIC_*` values are inlined when the dev server compiles. The
+local API reads the same database the root `.env` points at.
+
 ## Design tokens
 
 Colors and fonts are centralized in `app/globals.css`'s `:root`/`@theme` block — that's the one place to change the site's look (background, surface, ink/text, border, accent). Components reference these via Tailwind utilities (`bg-accent`, `text-ink-muted`, etc.), never a hardcoded hex value. Site-wide text/contact details (name, tagline, description, contact email) live in `lib/site-config.ts`.

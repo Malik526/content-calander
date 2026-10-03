@@ -82,6 +82,14 @@ export default function LibraryPage() {
     setLoadError(null);
     try {
       const { videos: loaded } = await listVideos(accessToken);
+      // Dev-only: the libraryPublishStatus fallback hides an API that predates
+      // publish_status (e.g. localhost pointed at an older deployed backend).
+      if (process.env.NODE_ENV !== "production" && loaded.some((video) => video.publish_status === undefined)) {
+        console.warn(
+          "Library: /api/videos returned no publish_status, so statuses fall back to assigned_slot_id " +
+            "(published videos show as Scheduled). The API at NEXT_PUBLIC_API_BASE_URL is older than this frontend.",
+        );
+      }
       setVideos(loaded);
     } catch (error) {
       setLoadError(error instanceof ApiError ? error.message : "Could not load your videos.");

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LibraryPage from "@/app/app/library/page";
@@ -295,6 +295,21 @@ describe("LibraryPage", () => {
       expect(rowFor("old-assigned.mp4").getByText("Scheduled")).toBeInTheDocument();
       expect(rowFor("old-loose.mp4").queryByText(/Scheduled|Needs attention/)).toBeNull();
       expect(screen.getByRole("tab", { name: /^Unscheduled/ })).toHaveTextContent("(1)");
+    });
+
+    it("warns in development only when the API omits publish_status", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await renderMixed();
+      expect(warn).not.toHaveBeenCalled();
+      cleanup();
+
+      videosApi.listVideos.mockResolvedValue({
+        videos: [{ id: 2, original_filename: "old.mp4", status: "DISCOVERED", file_size_bytes: 1, created_at: "2026-09-01T00:00:00Z", assigned_slot_id: 184 }],
+      });
+      renderLibraryPage();
+      await waitFor(() => expect(screen.getByText("old.mp4")).toBeInTheDocument());
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("no publish_status"));
+      warn.mockRestore();
     });
 
     it("shows an empty state when no videos match the active filter", async () => {
