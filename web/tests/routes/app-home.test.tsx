@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AppHomePage from "@/app/app/page";
 import { SessionProvider } from "@/lib/session";
+import { renderWithProviders } from "@/tests/test-utils";
 
 /**
  * /app activation/status home (Milestone 3.14 UX cleanup) — lib/api/platforms,
@@ -46,7 +47,7 @@ vi.mock("@/lib/api/videos", () => videosApi);
 afterEach(() => vi.clearAllMocks());
 
 function renderHome() {
-  return render(
+  return renderWithProviders(
     <SessionProvider>
       <AppHomePage />
     </SessionProvider>,

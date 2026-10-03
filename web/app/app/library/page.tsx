@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -8,12 +8,14 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Spinner } from "@/components/ui/Spinner";
 import { VideoUploadForm } from "@/components/forms/VideoUploadForm";
+import { useVideoActions } from "@/hooks/useVideoActions";
+import { useVideos } from "@/hooks/useVideos";
 import { ApiError } from "@/lib/api/client";
-import { deleteVideo, listVideos } from "@/lib/api/videos";
 import type { VideoResponse } from "@/lib/api/types";
+import { PublishStatus } from "@/lib/domain/publishing";
 import { useSession } from "@/lib/session";
 import { libraryFilterFor, libraryPublishStatus, presentQueueStatus, type LibraryFilter } from "@/lib/status";
-import { useUploadManager } from "@/lib/uploads";
+import { usePersistentUiState } from "@/lib/ui-state";
 
 const FILTER_TABS: { key: LibraryFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -67,81 +69,58 @@ const EMPTY_FILTER_COPY: Record<Exclude<LibraryFilter, "all">, { title: string; 
  * backend's publish_status (the same resolver the Queue uses) instead of
  * assigned_slot_id, adding a Published tab. Scheduled covers every
  * not-yet-published state; the badge uses the Queue's own labels.
+ *
+ * Milestone 3.15: videos come from the shared cache (useVideos), so
+ * returning to Library renders the last list immediately while it
+ * refreshes in the background; the spinner is for the very first load
+ * only. A failed background refresh keeps the list with a Retry notice.
+ * Upload refreshes the cache itself (lib/uploads.tsx) and delete goes
+ * through useVideoActions, so Home and Queue see both too. The selected
+ * filter survives navigation (usePersistentUiState).
  */
 export default function LibraryPage() {
   const { accessToken } = useSession();
-  const { uploading } = useUploadManager();
-  const [videos, setVideos] = useState<VideoResponse[] | null>(null);
-  const [filter, setFilter] = useState<LibraryFilter>("all");
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const videosQuery = useVideos();
+  const { deleteVideo } = useVideoActions();
+  const videos = videosQuery.data ?? null;
+  const [filter, setFilter] = usePersistentUiState<LibraryFilter>("library.filter", "all");
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  async function loadVideos() {
-    setLoadError(null);
-    try {
-      const { videos: loaded } = await listVideos(accessToken);
-      // Dev-only: the libraryPublishStatus fallback hides an API that predates
-      // publish_status (e.g. localhost pointed at an older deployed backend).
-      if (process.env.NODE_ENV !== "production" && loaded.some((video) => video.publish_status === undefined)) {
-        console.warn(
-          "Library: /api/videos returned no publish_status, so statuses fall back to assigned_slot_id " +
-            "(published videos show as Scheduled). The API at NEXT_PUBLIC_API_BASE_URL is older than this frontend.",
-        );
-      }
-      setVideos(loaded);
-    } catch (error) {
-      setLoadError(error instanceof ApiError ? error.message : "Could not load your videos.");
-    }
-  }
-
+  // Dev-only: the libraryPublishStatus fallback hides an API that predates
+  // publish_status (e.g. localhost pointed at an older deployed backend).
   useEffect(() => {
-    if (!accessToken) {
-      // No real backend to call at all in this case (see this component's
-      // own doc comment) — settling straight to "no videos" is the
-      // correct terminal state here, not a synchronization step a
-      // cleanup/subscription would otherwise handle.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setVideos([]);
-      return;
+    if (process.env.NODE_ENV !== "production" && videos?.some((video) => video.publish_status === undefined)) {
+      console.warn(
+        "Library: /api/videos returned no publish_status, so statuses fall back to assigned_slot_id " +
+          "(published videos show as Scheduled). The API at NEXT_PUBLIC_API_BASE_URL is older than this frontend.",
+      );
     }
-    void loadVideos();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken]);
-
-  const wasUploadingRef = useRef(uploading);
-  useEffect(() => {
-    if (wasUploadingRef.current && !uploading) {
-      void loadVideos(); // a batch just finished while this page was mounted
-    }
-    wasUploadingRef.current = uploading;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploading]);
+  }, [videos]);
 
   /**
    * Delete Video (Milestone 3.7 follow-up). Confirmation is a two-click
    * inline affordance (see the row's own render below) rather than a
-   * modal dialog — no Dialog/Modal primitive exists in this shell yet,
-   * and this milestone's own scope guardrail is a small delete action,
-   * not a new UI primitive. On success, re-fetches from the backend
-   * rather than optimistically splicing the deleted row out locally, so
-   * the list always reflects real server state (same reasoning as the
-   * uploading-transition refresh above).
+   * modal dialog — no Dialog/Modal primitive exists in this shell yet.
+   * On success the shared videos cache is refetched rather than the row
+   * spliced out locally, so the list always reflects real server state.
    */
   async function handleDelete(videoId: number) {
     setDeleteError(null);
     setDeletingId(videoId);
     try {
-      await deleteVideo(accessToken, videoId);
+      await deleteVideo(videoId);
       setConfirmingDeleteId(null);
-      await loadVideos();
     } catch (error) {
       setDeleteError(error instanceof ApiError ? error.message : "Could not delete this video.");
     } finally {
       setDeletingId(null);
     }
   }
+
+  const loadErrorMessage =
+    videosQuery.error instanceof ApiError ? videosQuery.error.message : "Could not load your videos.";
 
   // Derive counts from the full list for filter tab labels; apply filter for display.
   const matchesFilter = (video: VideoResponse, tab: LibraryFilter) =>
@@ -161,8 +140,15 @@ export default function LibraryPage() {
 
         {deleteError ? <p className="text-sm font-medium text-status-danger">{deleteError}</p> : null}
 
-        {loadError ? (
-          <ErrorState message={loadError} onRetry={loadVideos} />
+        {videosQuery.isError && videos !== null ? (
+          <ErrorState
+            message="Couldn't refresh your videos. Showing the last list loaded."
+            onRetry={() => void videosQuery.refetch()}
+          />
+        ) : null}
+
+        {videosQuery.isError && videos === null ? (
+          <ErrorState message={loadErrorMessage} onRetry={() => void videosQuery.refetch()} />
         ) : videos === null ? (
           <Card>
             <Spinner label="Loading your videos…" />
@@ -171,8 +157,9 @@ export default function LibraryPage() {
           <EmptyState title="No videos yet" description="Upload a video above to see it here." />
         ) : (
           <>
-            {/* Filter tabs — purely client-side, no extra API calls. */}
-            <div className="flex gap-1" role="tablist" aria-label="Filter videos">
+            {/* Filter tabs — purely client-side, no extra API calls. Wraps so
+                four tabs never overflow a phone-width screen (Milestone 3.15). */}
+            <div className="flex flex-wrap gap-1" role="tablist" aria-label="Filter videos">
               {FILTER_TABS.map(({ key: tab, label }) => (
                 <button
                   key={tab}
@@ -254,7 +241,7 @@ function formatFileSize(bytes: number | null): string {
 
 /** Queue-language badge for a video's publish status; none when unscheduled. */
 function LibraryStatusBadge({ publishStatus }: { publishStatus: string }) {
-  if (publishStatus === "UNSCHEDULED") return null;
+  if (publishStatus === PublishStatus.UNSCHEDULED) return null;
   const { label, tone } = presentQueueStatus(publishStatus);
   return <Badge tone={tone}>{label}</Badge>;
 }

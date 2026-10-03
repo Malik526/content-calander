@@ -67,14 +67,14 @@ export interface ApiRequestOptions extends Omit<RequestInit, "body"> {
  * docs/decisions/0009-object-storage-media-lifecycle.md) so error
  * handling reads the same way on both sides of the stack.
  */
-export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+async function requestFrom<T>(baseUrl: string, path: string, options: ApiRequestOptions): Promise<T> {
   const { body, headers, accessToken, ...rest } = options;
 
   const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
 
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(`${baseUrl}${path}`, {
       ...rest,
       headers: {
         ...(isFormData ? {} : { "Content-Type": "application/json" }),
@@ -133,3 +133,18 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
     throw new ApiError("The server returned an unexpected response.", { reasonCode: "MALFORMED_RESPONSE" });
   }
 }
+
+/**
+ * Milestone 3.15: builds an apiRequest bound to one base URL. The request
+ * logic above uses only fetch, FormData and JSON, so another client (a
+ * future Expo app reading EXPO_PUBLIC_* config) can reuse it with its own
+ * base URL instead of Next's NEXT_PUBLIC_API_BASE_URL. Trailing slashes
+ * are stripped like the web default's.
+ */
+export function createApiRequest(baseUrl: string) {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  return <T>(path: string, options: ApiRequestOptions = {}): Promise<T> => requestFrom<T>(normalized, path, options);
+}
+
+/** The web app's client, configured from NEXT_PUBLIC_API_BASE_URL. */
+export const apiRequest = createApiRequest(API_BASE_URL);

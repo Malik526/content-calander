@@ -1,8 +1,8 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LibraryPage from "@/app/app/library/page";
-import { UploadProvider } from "@/lib/uploads";
+import { renderWithProviders } from "@/tests/test-utils";
 
 /**
  * Library's real backend wiring (Milestone 3.7, extended by the 3.7
@@ -42,11 +42,7 @@ function makeFile(name: string, content = "video bytes"): File {
 }
 
 function renderLibraryPage() {
-  return render(
-    <UploadProvider>
-      <LibraryPage />
-    </UploadProvider>,
-  );
+  return renderWithProviders(<LibraryPage />);
 }
 
 describe("LibraryPage", () => {
@@ -154,7 +150,7 @@ describe("LibraryPage", () => {
     // guarantee the real layout gives it — while only the child under it
     // is swapped, first away from LibraryPage (simulating navigating to
     // Queue mid-upload) and then back.
-    const { rerender } = renderLibraryPage();
+    const { rerenderWithProviders } = renderLibraryPage();
     await waitFor(() => expect(videosApi.listVideos).toHaveBeenCalledTimes(1));
 
     const user = userEvent.setup();
@@ -163,11 +159,7 @@ describe("LibraryPage", () => {
     await waitFor(() => expect(videosApi.uploadVideos).toHaveBeenCalledTimes(1));
 
     // Navigate away from Library mid-upload — only the page unmounts.
-    rerender(
-      <UploadProvider>
-        <div>Queue page placeholder</div>
-      </UploadProvider>,
-    );
+    rerenderWithProviders(<div>Queue page placeholder</div>);
     expect(screen.queryByLabelText(/upload videos/i)).not.toBeInTheDocument();
 
     // The upload finishes while the user is elsewhere in the app.
@@ -179,11 +171,7 @@ describe("LibraryPage", () => {
     videosApi.listVideos.mockResolvedValue({
       videos: [{ id: 9, original_filename: "clip.mp4", status: "DISCOVERED", file_size_bytes: 5, created_at: "2026-09-04T00:00:00Z", assigned_slot_id: null, publish_status: "UNSCHEDULED" }],
     });
-    rerender(
-      <UploadProvider>
-        <LibraryPage />
-      </UploadProvider>,
-    );
+    rerenderWithProviders(<LibraryPage />);
 
     // The upload genuinely completed (server-side and in the shared
     // provider) even though LibraryPage itself was unmounted throughout —

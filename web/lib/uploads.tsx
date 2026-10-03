@@ -26,9 +26,12 @@
  */
 
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useApiAuth } from "@/hooks/useApiAuth";
 import { ApiError } from "@/lib/api/client";
 import { uploadVideos } from "@/lib/api/videos";
 import type { VideoUploadResult } from "@/lib/api/types";
+import { queryKeys } from "@/lib/query/keys";
 
 export interface UploadManager {
   uploading: boolean;
@@ -43,6 +46,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const [uploading, setUploading] = useState(false);
   const [lastResults, setLastResults] = useState<VideoUploadResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const { userId } = useApiAuth();
 
   const upload = useCallback(async (files: FileList | File[], accessToken: string | null) => {
     setUploading(true);
@@ -54,8 +59,12 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       setError(e instanceof ApiError ? e.message : "Could not upload your videos.");
     } finally {
       setUploading(false);
+      // Milestone 3.15: refetch the shared videos cache whether or not the
+      // batch succeeded (a partial failure still created rows), so Library,
+      // Home and Queue show real server state wherever the user is now.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.videos(userId) });
     }
-  }, []);
+  }, [queryClient, userId]);
 
   return <UploadContext.Provider value={{ uploading, lastResults, error, upload }}>{children}</UploadContext.Provider>;
 }

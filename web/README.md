@@ -63,6 +63,13 @@ Anything server-only (a database URL, a service-role key, `SUPABASE_JWT_SECRET`,
 `CREDENTIAL_ENCRYPTION_KEY`) has no reason to exist in this package at all — see
 `tests/lib/no-secrets-in-client-bundle.test.ts`.
 
+**Server state (Milestone 3.15).** Screens read backend data through TanStack Query hooks in
+`hooks/` (`useVideos`, `useCadence`, `useQueueSlots`, `useTikTokConnection`), cached per user by
+`lib/query/`, and write through the mutation hooks/upload manager, which update or invalidate the
+affected cache entries. In-memory UI state that should survive navigation uses
+`lib/ui-state.tsx`. See `docs/decisions/0017-client-server-state-cache.md`; tests render screens
+with `tests/test-utils.tsx`'s `renderWithProviders`.
+
 **Which API localhost talks to.** `NEXT_PUBLIC_API_BASE_URL` in `.env.local` decides it:
 `http://127.0.0.1:8000` (`python3 cli/run_api.py` from the repo root, the `.env.example` default) or
 the deployed Railway API. Pointed at Railway, localhost runs your current frontend against whatever

@@ -2,6 +2,55 @@
 
 ## 2026-10-03
 
+### Milestone 3.15 — Client Server-State Cache and Navigation UX
+
+Frontend-only (`web/`); no backend/API change.
+
+- Root causes of flicker and refetching: every page held fetched data in its own state and
+  refetched on mount, rendered a spinner until then, and fetched the same resources separately
+  (videos ×3, TikTok status ×2, cadence ×2). Cross-view refresh was manual (`refreshKey`,
+  "was uploading" ref), refresh errors replaced content, and the session context re-rendered the
+  shell on every duplicate Supabase auth event. Details in ADR-0017.
+- Server state: TanStack Query v5 (`@tanstack/react-query`). One client lives in the persistent
+  `/app` layout (`components/app/AppDataProviders.tsx`, `lib/query/`). Resource hooks are in
+  `hooks/` (`useVideos`, `useCadence`, `useQueueSlots`, `useTikTokConnection`). Keys are
+  user-scoped and never include the token. Stale times: videos/queue 30 s with 15 s polling
+  while anything is publishing; cadence/TikTok 5 min. Refetch on focus and reconnect.
+- Mutations (`useSaveCadence`, `useQueueActions`, `useVideoActions`, `useTikTokActions`, upload
+  manager) update or invalidate exactly the affected entries. A Queue action now also refreshes
+  Library statuses; cadence save refreshes the Queue and updates Home from the cache.
+- Rendering: placeholders only on first load. A failed background refresh keeps the data and
+  shows Retry. Home now shows load errors instead of silently falling back to quick links.
+- UI state: `lib/ui-state.tsx` keeps the Library filter, Queue view/month and an unsaved cadence
+  draft in memory across navigation. It's user-scoped and never written to browser storage.
+- User isolation: an account switch or sign-out removes the previous user's queries and remounts
+  UI-state and upload providers. Tests caught that a full `clear()` discarded the new user's
+  first fetch; the provider now removes only the previous user's keys.
+- `lib/session.tsx` keeps the same session object for auth events that change nothing.
+- Native-safe contracts: `lib/domain/publishing.ts` (publish-status vocabulary, platform ids, no
+  framework imports). `lib/api/client.ts`'s `createApiRequest(baseUrl)` lets another client
+  supply its own base URL.
+- Mobile: Library filter tabs wrap (they overflowed 66 px at 390 px since 3.14).
+- Tests: `tests/routes/app-state.test.tsx` (navigation, loading, errors, mutations, UI state,
+  user isolation), a session-stability test, and `tests/test-utils.tsx`
+  (`renderWithProviders`); existing page tests run inside the real provider stack. Frontend
+  176/176, eslint, `tsc --noEmit`, `next build`.
+- Browser validation (Playwright, static export, 400 ms fixture API): revisits went from
+  ~810 ms with a spinner to ~45 ms with none, and a 13-step walk from 27 requests to 4.
+
+### Milestone 3.15 — Docs: ADR-0017, Native/iOS Readiness, Evaluation
+
+- `docs/decisions/0017-client-server-state-cache.md`: cache architecture, stale/invalidation
+  policy, server-state vs UI-state rule, user isolation.
+- `docs/architecture/native-ios-readiness.md`: shared backend vs web vs future native (iOS
+  first). Auth is already client-neutral. TikTok OAuth's web-only return redirect and the native
+  upload adapter are documented Milestone 7 changes, as is a future direct-to-storage upload
+  option.
+- `docs/evaluations/productization/milestone-3.15-functional-ux-native-prep.md`: before/after
+  browser measurements and remaining tap-target issues for the redesign.
+- `AGENTS.md`: durable frontend server-state rule. `PROJECT_STATE.md` and `web/README.md`
+  updated.
+
 ### Milestone 3.14 Follow-up — Library Status: Production Validated, Localhost Mismatch Diagnosed
 
 - **Production validation passed:** after the backend deployed to Railway, known published

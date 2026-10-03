@@ -96,6 +96,20 @@ function computeInitialSession(): Session {
   return LOADING_SESSION;
 }
 
+/** Milestone 3.15: Supabase re-emits auth events with identical contents
+ * (e.g. SIGNED_IN when the tab regains focus). Keeping the previous object
+ * when nothing a consumer reads has changed stops those events from
+ * re-rendering the whole app shell. */
+function keepIfUnchanged(previous: Session, next: Session): Session {
+  const same =
+    previous.status === next.status &&
+    previous.accessToken === next.accessToken &&
+    previous.user?.id === next.user?.id &&
+    previous.user?.email === next.user?.email &&
+    previous.user?.displayName === next.user?.displayName;
+  return same ? previous : next;
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session>(computeInitialSession);
 
@@ -110,19 +124,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     supabase.auth.getSession().then(({ data }) => {
       if (cancelled) return;
-      setSession(
-        data.session
-          ? { status: "authenticated", user: toSessionUser(data.session), accessToken: data.session.access_token, signOut }
-          : { status: "unauthenticated", user: null, accessToken: null, signOut },
-      );
+      const next: Session = data.session
+        ? { status: "authenticated", user: toSessionUser(data.session), accessToken: data.session.access_token, signOut }
+        : { status: "unauthenticated", user: null, accessToken: null, signOut };
+      setSession((previous) => keepIfUnchanged(previous, next));
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(
-        newSession
-          ? { status: "authenticated", user: toSessionUser(newSession), accessToken: newSession.access_token, signOut }
-          : { status: "unauthenticated", user: null, accessToken: null, signOut },
-      );
+      const next: Session = newSession
+        ? { status: "authenticated", user: toSessionUser(newSession), accessToken: newSession.access_token, signOut }
+        : { status: "unauthenticated", user: null, accessToken: null, signOut };
+      setSession((previous) => keepIfUnchanged(previous, next));
     });
 
     return () => {

@@ -11,9 +11,12 @@
  * next_status_check_at).
  */
 
+import type { PlatformId, PlatformIdValue } from "@/lib/domain/publishing";
+
 export type PlatformPostStatus = "pending" | "publishing" | "published" | "failed";
 
-export type Platform = "tiktok";
+/** Milestone 3.15: an alias of the domain platform id (lib/domain/publishing.ts). */
+export type Platform = PlatformIdValue;
 
 export type VideoStatus = "processing" | "ready" | "needs_review" | "failed";
 
@@ -65,7 +68,7 @@ export interface CurrentUser {
 }
 
 export interface TikTokConnectionStatus {
-  platform: "tiktok";
+  platform: typeof PlatformId.TIKTOK;
   connected: boolean;
   status: string;
   account_label: string | null;

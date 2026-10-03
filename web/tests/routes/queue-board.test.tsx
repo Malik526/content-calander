@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import QueuePage from "@/app/app/queue/page";
 import type { CaptionResponse } from "@/lib/api/types";
+import { renderWithProviders } from "@/tests/test-utils";
 
 /**
  * Queue's real "Queue" section (Milestone 3.9: Queue + Calendar
@@ -117,7 +118,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [OPEN_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText(/Oct/)).toBeInTheDocument());
     expect(screen.getByText("Open")).toBeInTheDocument();
@@ -127,7 +128,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [ASSIGNED_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText("clip.mp4")).toBeInTheDocument());
     expect(screen.getByText("Scheduled")).toBeInTheDocument();
@@ -138,7 +139,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [PUBLISHED_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText("posted.mp4")).toBeInTheDocument());
     expect(screen.getByText("Published")).toBeInTheDocument();
@@ -149,7 +150,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [] });
     videosApi.listVideos.mockResolvedValue({ videos: [UNASSIGNED_VIDEO] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText("raw.mp4")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Assign to next available slot" })).toBeInTheDocument();
@@ -160,7 +161,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     videosApi.listVideos.mockResolvedValue({ videos: [UNASSIGNED_VIDEO] });
     queueApi.assignNextOpenSlot.mockResolvedValue({ ...OPEN_SLOT, status: "ASSIGNED", display_status: "SCHEDULED", assigned_video: { id: 10, original_filename: "raw.mp4", caption: captionFor(10, null) } });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Assign to next available slot" })).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -174,7 +175,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     videosApi.listVideos.mockResolvedValue({ videos: [UNASSIGNED_VIDEO] });
     queueApi.assignVideoToSlot.mockResolvedValue({ ...OPEN_SLOT, status: "ASSIGNED" });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("combobox", { name: /video to assign/i })).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -189,7 +190,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     videosApi.listVideos.mockResolvedValue({ videos: [] });
     queueApi.unassignSlot.mockResolvedValue({ ...ASSIGNED_SLOT, status: "OPEN", display_status: "OPEN", assigned_video: null });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Remove from schedule" })).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -209,7 +210,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [{ ...ASSIGNED_SLOT, scheduled_at: inCurrentMonth }] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Calendar" })).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -227,7 +228,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [ASSIGNED_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByLabelText("Caption")).toHaveValue("Saved caption"));
     expect(screen.getByText("Written by you")).toBeInTheDocument();
@@ -238,7 +239,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     videosApi.listVideos.mockResolvedValue({ videos: [] });
     captionsApi.saveCaption.mockResolvedValue(captionFor(5, "New caption #fyp"));
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByLabelText("Caption")).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -256,7 +257,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [PUBLISHED_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByLabelText("Caption")).toHaveValue("Posted caption"));
     expect(screen.getByLabelText("Caption")).toHaveAttribute("readonly");
@@ -267,7 +268,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [FAILED_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText("Failed")).toBeInTheDocument());
     expect(screen.getByText("TikTok connection needs to be renewed. Reconnect your account in Settings.")).toBeInTheDocument();
@@ -280,7 +281,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [ATTENTION_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText("Needs attention")).toBeInTheDocument());
     expect(screen.getByText("Publishing status could not be confirmed.")).toBeInTheDocument();
@@ -290,7 +291,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [PUBLISHED_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText(/^Published .+/)).toBeInTheDocument());
   });
@@ -299,7 +300,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [{ ...ATTENTION_SLOT, display_status: "SOMETHING_NEW", message: null }] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText("Needs attention")).toBeInTheDocument());
     expect(screen.queryByText("SOMETHING_NEW")).not.toBeInTheDocument();
@@ -311,7 +312,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [{ ...FAILED_SLOT, scheduled_at: inCurrentMonth }] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByText("Failed")).toBeInTheDocument());
     const listMessage = screen.getByText(FAILED_SLOT.message).textContent;
 
@@ -330,7 +331,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValueOnce({ slots: [] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText("Could not reach the server.")).toBeInTheDocument());
 
@@ -352,7 +353,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     queueApi.listQueueSlots.mockResolvedValue({ slots: [FAILED_SLOT, PUBLISHED_SLOT, ASSIGNED_SLOT] });
     videosApi.listVideos.mockResolvedValue({ videos: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByText("failed.mp4")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
@@ -365,7 +366,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     videosApi.listVideos.mockResolvedValue({ videos: [] });
     queueApi.retrySlotPublication.mockResolvedValue({});
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -381,7 +382,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
     videosApi.listVideos.mockResolvedValue({ videos: [] });
     queueApi.retrySlotPublication.mockResolvedValue({});
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -406,7 +407,7 @@ describe("QueuePage — Queue (list/calendar, assign/unassign)", () => {
       new ApiError("This post changed while retrying. Refresh and try again.", { status: 409, reasonCode: "CONCURRENT_UPDATE" }),
     );
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument());
     await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
 

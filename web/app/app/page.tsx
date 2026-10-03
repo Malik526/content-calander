@@ -1,23 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
+import { ErrorState } from "@/components/ui/ErrorState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Spinner } from "@/components/ui/Spinner";
-import { getTikTokConnection } from "@/lib/api/platforms";
-import { getCadence } from "@/lib/api/cadence";
-import { listVideos } from "@/lib/api/videos";
+import { useCadence } from "@/hooks/useCadence";
+import { useTikTokConnection } from "@/hooks/useTikTokConnection";
+import { useVideos } from "@/hooks/useVideos";
 import { connectedAccountName } from "@/lib/tiktokAccount";
-import { ApiError } from "@/lib/api/client";
-import { useSession } from "@/lib/session";
-import type { TikTokConnectionStatus, CadenceResponse, VideoResponse } from "@/lib/api/types";
-
-interface HomeData {
-  tiktok: TikTokConnectionStatus;
-  cadence: CadenceResponse;
-  videos: VideoResponse[];
-}
 
 /**
  * /app — Activation / status home (Milestone 3.14 UX cleanup, replacing
@@ -26,73 +17,45 @@ interface HomeData {
  * configured anything sees what to do next with links to each section; a
  * fully-configured user sees a live summary of their pipeline.
  *
- * Graceful degradation: if the APIs fail or there's no accessToken (dev-
- * mock session), falls back to the old quick-link grid so the page is
- * never blank or broken.
+ * Milestone 3.15: reads the shared server-state cache (useTikTokConnection,
+ * useCadence, useVideos — the same entries Settings, Queue and Library
+ * use), so a revisit renders immediately from cache while stale entries
+ * refresh in the background. The spinner shows only when nothing is
+ * cached yet. A load failure is now shown with Retry instead of silently
+ * falling back to quick links, which hid real errors.
  *
  * This is a usability baseline, not the final UI/UX design — a larger
  * professional redesign informed by real user feedback is future scope.
  */
 export default function AppHomePage() {
-  const { accessToken } = useSession();
-  const [data, setData] = useState<HomeData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const tiktokQuery = useTikTokConnection();
+  const cadenceQuery = useCadence();
+  const videosQuery = useVideos();
+  const queries = [tiktokQuery, cadenceQuery, videosQuery];
 
-  useEffect(() => {
-    if (!accessToken) {
-      // No real backend to call — settle immediately to the fallback view
-      // (quick-link grid) rather than spinning forever. Same reasoning as
-      // lib/session.tsx's own null-accessToken handling in QueueScheduling
-      // and library/page.tsx: setState called synchronously here is the
-      // correct terminal state, not a cascading-render concern.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLoading(false);
-      return;
-    }
-    void (async () => {
-      try {
-        const [tiktok, cadence, { videos }] = await Promise.all([
-          getTikTokConnection(accessToken),
-          getCadence(accessToken),
-          listVideos(accessToken),
-        ]);
-        setData({ tiktok, cadence, videos });
-      } catch (err) {
-        // Any API error degrades to the fallback quick-link view — the
-        // home page is not critical infrastructure, so a load failure
-        // should never strand the user.
-        if (!(err instanceof ApiError)) throw err;
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [accessToken]);
+  const tiktok = tiktokQuery.data;
+  const cadence = cadenceQuery.data;
+  const videos = videosQuery.data;
 
-  if (loading) {
+  if (!tiktok || !cadence || !videos) {
+    const failed = queries.find((query) => query.isError && query.data === undefined);
     return (
       <>
         <PageHeader title="Home" />
-        <Card>
-          <Spinner label="Loading…" />
-        </Card>
+        {failed ? (
+          <ErrorState
+            message="Could not load your setup status."
+            onRetry={() => queries.forEach((query) => void query.refetch())}
+          />
+        ) : (
+          <Card>
+            <Spinner label="Loading…" />
+          </Card>
+        )}
       </>
     );
   }
 
-  if (!data) {
-    return (
-      <>
-        <PageHeader title="Home" description="Your posting workflow at a glance." />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <QuickLinkCard href="/app/library" title="Library" description="Videos you've batched, ready to schedule." />
-          <QuickLinkCard href="/app/queue" title="Queue" description="What's scheduled and what's already gone out." />
-          <QuickLinkCard href="/app/settings" title="Settings" description="Your account and connected platforms." />
-        </div>
-      </>
-    );
-  }
-
-  const { tiktok, cadence, videos } = data;
   const accountLabel = connectedAccountName(tiktok);
   const scheduledCount = videos.filter((v) => v.assigned_slot_id !== null).length;
 
@@ -168,16 +131,5 @@ export default function AppHomePage() {
         </ul>
       </Card>
     </>
-  );
-}
-
-function QuickLinkCard({ href, title, description }: { href: string; title: string; description: string }) {
-  return (
-    <Link href={href} className="block">
-      <Card className="h-full transition-colors hover:border-accent/40">
-        <h2 className="text-sm font-semibold text-ink">{title}</h2>
-        <p className="mt-1 text-sm text-ink-muted">{description}</p>
-      </Card>
-    </Link>
   );
 }

@@ -10,6 +10,7 @@
  */
 
 import type { PlatformPostStatus } from "@/lib/api/types";
+import { PublishStatus } from "@/lib/domain/publishing";
 
 export type StatusTone = "pending" | "progress" | "success" | "danger" | "attention";
 
@@ -51,8 +52,8 @@ export type LibraryFilter = "all" | "unscheduled" | "scheduled" | "published";
  * (Scheduled, Publishing, Failed, Needs attention); the badge shows which.
  */
 export function libraryFilterFor(publishStatus: string): Exclude<LibraryFilter, "all"> {
-  if (publishStatus === "UNSCHEDULED") return "unscheduled";
-  if (publishStatus === "PUBLISHED") return "published";
+  if (publishStatus === PublishStatus.UNSCHEDULED) return "unscheduled";
+  if (publishStatus === PublishStatus.PUBLISHED) return "published";
   return "scheduled";
 }
 
@@ -63,7 +64,7 @@ export function libraryFilterFor(publishStatus: string): Exclude<LibraryFilter, 
  * field render as "Needs attention".
  */
 export function libraryPublishStatus(video: { publish_status?: string; assigned_slot_id: number | null }): string {
-  return video.publish_status ?? (video.assigned_slot_id === null ? "UNSCHEDULED" : "SCHEDULED");
+  return video.publish_status ?? (video.assigned_slot_id === null ? PublishStatus.UNSCHEDULED : PublishStatus.SCHEDULED);
 }
 
 /** Advisory next steps for a backend action_hint (Milestone 3.11). There is

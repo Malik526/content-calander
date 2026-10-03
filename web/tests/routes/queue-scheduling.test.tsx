@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import QueuePage from "@/app/app/queue/page";
+import { renderWithProviders } from "@/tests/test-utils";
 
 /**
  * Queue's "Posting rhythm" section (Milestones 3.8/3.8.1) —
@@ -73,7 +74,7 @@ describe("QueuePage — posting rhythm", () => {
       posting_times: [{ weekday: "monday", posting_time: "09:00" }],
     });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
 
     await waitFor(() => expect(screen.getByRole("checkbox", { name: "Monday" })).toBeChecked());
     expect(screen.getByText("9:00 AM")).toBeInTheDocument();
@@ -85,7 +86,7 @@ describe("QueuePage — posting rhythm", () => {
   it("enables a weekday with zero committed times and no 09:00", async () => {
     cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("checkbox", { name: "Wednesday" })).not.toBeChecked());
 
     const user = userEvent.setup();
@@ -101,7 +102,7 @@ describe("QueuePage — posting rhythm", () => {
   it("opens the draft picker from Add posting time without committing its value", async () => {
     cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("checkbox", { name: "Monday" })).not.toBeChecked());
 
     const user = userEvent.setup();
@@ -120,7 +121,7 @@ describe("QueuePage — posting rhythm", () => {
       configured: true, timezone: "America/New_York", is_active: false, posting_times: [],
     });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("checkbox", { name: "Monday" })).not.toBeChecked());
 
     const user = userEvent.setup();
@@ -143,7 +144,7 @@ describe("QueuePage — posting rhythm", () => {
       posting_times: [{ weekday: "monday", posting_time: "18:00" }],
     });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("checkbox", { name: "Monday" })).not.toBeChecked());
 
     const user = userEvent.setup();
@@ -174,7 +175,7 @@ describe("QueuePage — posting rhythm", () => {
       posting_times: [{ weekday: "friday", posting_time: "18:00" }],
     });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByRole("checkbox", { name: "Friday" })).toBeChecked());
     expect(screen.getByText("6:00 PM")).toBeInTheDocument();
 
@@ -194,7 +195,7 @@ describe("QueuePage — posting rhythm", () => {
       posting_times: [{ weekday: "monday", posting_time: "09:00" }],
     });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByText("9:00 AM")).toBeInTheDocument());
 
     // Draft input must NOT be visible until the user clicks "+ Add posting time".
@@ -207,7 +208,7 @@ describe("QueuePage — posting rhythm", () => {
       posting_times: [{ weekday: "monday", posting_time: "09:00" }],
     });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByText("9:00 AM")).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -229,7 +230,7 @@ describe("QueuePage — posting rhythm", () => {
       posting_times: [{ weekday: "monday", posting_time: "09:00" }],
     });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByText("9:00 AM")).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -250,7 +251,7 @@ describe("QueuePage — posting rhythm", () => {
       ],
     });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByText("6:00 PM")).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -273,7 +274,7 @@ describe("QueuePage — posting rhythm", () => {
       ],
     });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByText("9:00 AM")).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -312,7 +313,7 @@ describe("QueuePage — posting rhythm", () => {
     });
     queueApi.listQueueSlots.mockResolvedValueOnce({ slots: [] }).mockResolvedValue({ slots: [generatedSlot] });
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(screen.getByText("No slots in this window yet.")).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -330,10 +331,10 @@ describe("QueuePage — posting rhythm", () => {
     cadenceApi.getCadence.mockResolvedValue({ configured: false, timezone: null, is_active: false, posting_times: [] });
     cadenceApi.saveCadence.mockRejectedValue(new ApiError("Invalid timezone."));
 
-    render(<QueuePage />);
+    renderWithProviders(<QueuePage />);
     await waitFor(() => expect(queueApi.listQueueSlots).toHaveBeenCalledTimes(1));
 
-    await userEvent.setup().click(screen.getByRole("button", { name: /save schedule/i }));
+    await userEvent.setup().click(await screen.findByRole("button", { name: /save schedule/i }));
 
     await waitFor(() => expect(screen.getByText("Invalid timezone.")).toBeInTheDocument());
     expect(queueApi.listQueueSlots).toHaveBeenCalledTimes(1);

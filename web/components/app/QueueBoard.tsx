@@ -1,17 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { QueueCalendarMonth } from "@/components/app/QueueCalendarMonth";
 import { QueueList } from "@/components/app/QueueList";
 import { QueueSlotCard } from "@/components/app/QueueSlotCard";
 import { Card } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Spinner } from "@/components/ui/Spinner";
+import { useQueueActions } from "@/hooks/useQueueActions";
+import { useQueueSlots } from "@/hooks/useQueueSlots";
+import { useVideos } from "@/hooks/useVideos";
 import { ApiError } from "@/lib/api/client";
-import { generateCaption, saveCaption } from "@/lib/api/captions";
-import { assignNextOpenSlot, assignVideoToSlot, listQueueSlots, retrySlotPublication, unassignSlot } from "@/lib/api/queue";
-import { listVideos } from "@/lib/api/videos";
-import type { CaptionResponse, QueueSlotResponse, VideoResponse } from "@/lib/api/types";
+import { usePersistentUiState } from "@/lib/ui-state";
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
@@ -60,54 +60,43 @@ function monthWindow(monthCursor: Date): { from: string; to: string } {
  *     after a cadence save, which regenerates slots server-side).
  *   Retry — a FAILED/UNKNOWN slot's recovery action (POST .../retry); the
  *     confirmation step lives in QueueSlotCard.
+ *
+ * Milestone 3.15: slots (per month) and videos come from the shared cache
+ * (useQueueSlots, useVideos — the same videos entry Library and Home
+ * use), and every action goes through useQueueActions, which refreshes
+ * the Queue and the Library's statuses together. The refreshKey prop is
+ * gone: a cadence save invalidates the cached Queue itself. Revisits and
+ * month changes keep the current slots on screen while fresh data loads;
+ * a failed background refresh shows a Retry notice above them. The
+ * list/calendar choice and the displayed month survive navigation.
  */
-export function QueueBoard({ accessToken, refreshKey = 0 }: { accessToken: string | null; refreshKey?: number }) {
-  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
-  const [monthCursor, setMonthCursor] = useState(() => new Date());
-  const [slots, setSlots] = useState<QueueSlotResponse[] | null>(null);
-  const [videos, setVideos] = useState<VideoResponse[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
+export function QueueBoard() {
+  const [viewMode, setViewMode] = usePersistentUiState<"list" | "calendar">("queue.viewMode", "list");
+  const [monthCursor, setMonthCursor] = usePersistentUiState("queue.month", () => new Date());
+  const { from, to } = monthWindow(monthCursor);
+  const slotsQuery = useQueueSlots(from, to);
+  const videosQuery = useVideos();
+  const actions = useQueueActions();
+  const slots = slotsQuery.data ?? null;
+  const videos = videosQuery.data ?? [];
   const [selectedSlotId, setSelectedSlotId] = useState<number | null>(null);
   const [busySlotId, setBusySlotId] = useState<number | null>(null);
   const [busyVideoId, setBusyVideoId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  async function load() {
-    setLoadError(null);
-    try {
-      const { from, to } = monthWindow(monthCursor);
-      const [slotsResult, videosResult] = await Promise.all([
-        listQueueSlots(accessToken, from, to),
-        listVideos(accessToken),
-      ]);
-      setSlots(slotsResult.slots);
-      setVideos(videosResult.videos);
-    } catch (error) {
-      setLoadError(error instanceof ApiError ? error.message : "Could not load your queue.");
-    }
-  }
-
-  useEffect(() => {
-    if (!accessToken) {
-      // No real backend to call at all in this case (dev-mock session —
-      // see components/app/QueueScheduling.tsx's identical handling).
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSlots([]);
-      return;
-    }
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, monthCursor, refreshKey]);
-
   const unassignedVideos = videos.filter((video) => video.assigned_slot_id === null);
   const selectedSlot = slots?.find((slot) => slot.id === selectedSlotId) ?? null;
+
+  function retryLoad() {
+    void slotsQuery.refetch();
+    void videosQuery.refetch();
+  }
 
   async function handleAssign(slotId: number, videoId: number) {
     setActionError(null);
     setBusySlotId(slotId);
     try {
-      await assignVideoToSlot(accessToken, slotId, videoId);
-      await load();
+      await actions.assign(slotId, videoId);
     } catch (error) {
       setActionError(error instanceof ApiError ? error.message : "Could not assign that video.");
     } finally {
@@ -119,8 +108,7 @@ export function QueueBoard({ accessToken, refreshKey = 0 }: { accessToken: strin
     setActionError(null);
     setBusyVideoId(videoId);
     try {
-      await assignNextOpenSlot(accessToken, videoId);
-      await load();
+      await actions.assignNext(videoId);
     } catch (error) {
       setActionError(error instanceof ApiError ? error.message : "Could not assign that video to the next open slot.");
     } finally {
@@ -132,8 +120,7 @@ export function QueueBoard({ accessToken, refreshKey = 0 }: { accessToken: strin
     setActionError(null);
     setBusySlotId(slotId);
     try {
-      await unassignSlot(accessToken, slotId);
-      await load();
+      await actions.unassign(slotId);
     } catch (error) {
       setActionError(error instanceof ApiError ? error.message : "Could not remove this video from the schedule.");
     } finally {
@@ -145,39 +132,27 @@ export function QueueBoard({ accessToken, refreshKey = 0 }: { accessToken: strin
     setActionError(null);
     setBusySlotId(slotId);
     try {
-      await retrySlotPublication(accessToken, slotId, { confirmNotPublished });
-      await load();
+      await actions.retry(slotId, confirmNotPublished);
     } catch (error) {
       // The backend's 409 messages are written for users (scheduling/manual_recovery.py).
       setActionError(error instanceof ApiError ? error.message : "Could not retry this post.");
-      if (error instanceof ApiError && error.reasonCode === "CONCURRENT_UPDATE") await load();
+      if (error instanceof ApiError && error.reasonCode === "CONCURRENT_UPDATE") await actions.refresh();
     } finally {
       setBusySlotId(null);
     }
   }
 
   // Caption errors propagate to CaptionEditor, which shows them inline.
-  function applyCaption(result: CaptionResponse): CaptionResponse {
-    setSlots((current) =>
-      current?.map((slot) =>
-        slot.assigned_video?.id === result.video_id
-          ? { ...slot, assigned_video: { ...slot.assigned_video, caption: result } }
-          : slot,
-      ) ?? current,
+  const handleSaveCaption = actions.saveCaption;
+  const handleGenerateCaption = actions.generateCaption;
+
+  const loadFailed = slotsQuery.isError || videosQuery.isError;
+  const loadError = slotsQuery.error ?? videosQuery.error;
+
+  if (loadFailed && slots === null) {
+    return (
+      <ErrorState message={loadError instanceof ApiError ? loadError.message : "Could not load your queue."} onRetry={retryLoad} />
     );
-    return result;
-  }
-
-  async function handleSaveCaption(videoId: number, text: string): Promise<CaptionResponse> {
-    return applyCaption(await saveCaption(accessToken, videoId, text));
-  }
-
-  async function handleGenerateCaption(videoId: number, overwrite: boolean): Promise<CaptionResponse> {
-    return applyCaption(await generateCaption(accessToken, videoId, overwrite));
-  }
-
-  if (loadError) {
-    return <ErrorState message={loadError} onRetry={load} />;
   }
 
   if (slots === null) {
@@ -190,6 +165,9 @@ export function QueueBoard({ accessToken, refreshKey = 0 }: { accessToken: strin
 
   return (
     <div className="flex flex-col gap-4">
+      {loadFailed ? (
+        <ErrorState message="Couldn't refresh your queue. Showing the last schedule loaded." onRetry={retryLoad} />
+      ) : null}
       {actionError ? <ErrorState message={actionError} /> : null}
 
       <section aria-labelledby="unscheduled-videos-heading">

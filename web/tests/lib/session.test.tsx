@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionProvider, useSession } from "@/lib/session";
 
@@ -116,5 +116,43 @@ describe("SessionProvider — Supabase configured", () => {
 
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("unauthenticated"));
     expect(screen.getByTestId("email")).toHaveTextContent("");
+  });
+
+  // Milestone 3.15: Supabase re-emits SIGNED_IN with the same session when
+  // the tab regains focus. That must not hand consumers a new session
+  // object (which re-renders the whole app shell); a real change must.
+  it("keeps the same session object for a repeated identical auth event", async () => {
+    vi.stubEnv("NODE_ENV", "test");
+    mockState.configured = true;
+    const supabaseSession = { user: { id: "u1", email: "creator@example.com" }, access_token: "real-access-token" };
+    let emit: (event: string, session: unknown) => void = () => {};
+    const onAuthStateChange = vi.fn((callback) => {
+      emit = callback;
+      return { data: { subscription: { unsubscribe: vi.fn() } } };
+    });
+    vi.mocked(getSupabaseClient).mockReturnValue({
+      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: supabaseSession } }), onAuthStateChange, signOut: vi.fn() },
+    } as unknown as ReturnType<typeof getSupabaseClient>);
+
+    const seen: unknown[] = [];
+    function Recorder() {
+      const session = useSession();
+      if (seen[seen.length - 1] !== session) seen.push(session);
+      return <span data-testid="token">{session.accessToken ?? ""}</span>;
+    }
+    render(
+      <SessionProvider>
+        <Recorder />
+      </SessionProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("token")).toHaveTextContent("real-access-token"));
+    const settled = seen.length;
+
+    act(() => emit("SIGNED_IN", { ...supabaseSession, user: { ...supabaseSession.user } }));
+    expect(seen).toHaveLength(settled);
+
+    act(() => emit("TOKEN_REFRESHED", { ...supabaseSession, access_token: "rotated-token" }));
+    expect(screen.getByTestId("token")).toHaveTextContent("rotated-token");
+    expect(seen).toHaveLength(settled + 1);
   });
 });

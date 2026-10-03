@@ -1,8 +1,8 @@
 import { AppAuthGate } from "@/components/app/AppAuthGate";
+import { AppDataProviders } from "@/components/app/AppDataProviders";
 import { AppHeader } from "@/components/app/AppHeader";
 import { AppBottomNav, AppSideNav } from "@/components/app/AppNav";
 import { SessionProvider } from "@/lib/session";
-import { UploadProvider } from "@/lib/uploads";
 
 /**
  * Product app shell layout — everything under `/app/*` (Milestone 3.5).
@@ -23,11 +23,17 @@ import { UploadProvider } from "@/lib/uploads";
  * upload's state survives the user navigating to Queue/Settings and back,
  * instead of being owned only by the Library page component. See
  * lib/uploads.tsx.
+ *
+ * Milestone 3.15: AppDataProviders (TanStack Query cache, in-memory UI
+ * state, uploads) replaces the bare UploadProvider. Because this layout
+ * stays mounted across /app/* navigations, server data loaded on one
+ * screen is still cached on the next — see
+ * docs/decisions/0017-client-server-state-cache.md.
  */
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <SessionProvider>
-      <UploadProvider>
+      <AppDataProviders>
         <AppAuthGate>
           <div className="flex min-h-full flex-col">
             <AppHeader />
@@ -38,7 +44,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <AppBottomNav />
           </div>
         </AppAuthGate>
-      </UploadProvider>
+      </AppDataProviders>
     </SessionProvider>
   );
 }

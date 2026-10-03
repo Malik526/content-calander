@@ -5,7 +5,7 @@ import LibraryPage from "@/app/app/library/page";
 import QueuePage from "@/app/app/queue/page";
 import SettingsPage from "@/app/app/settings/page";
 import { SessionProvider } from "@/lib/session";
-import { UploadProvider } from "@/lib/uploads";
+import { AppDataProviders } from "@/components/app/AppDataProviders";
 
 /**
  * The four /app/* product routes (Milestone 3.5). Each renders its real,
@@ -18,65 +18,45 @@ import { UploadProvider } from "@/lib/uploads";
  */
 
 describe("/app product routes", () => {
-  it("renders /app (Home) with links to the other sections", () => {
-    // AppHomePage is now a client component using useSession() — requires
-    // SessionProvider. In the test environment (no Supabase configured) the
-    // provider supplies the DEV_MOCK_SESSION with accessToken=null, so the
-    // home page settles to the quick-link fallback state without making any
-    // API calls, which is the correct terminal behaviour for that case.
-    render(
+  // Milestone 3.15: every page reads server state through the shared cache,
+  // so each renders inside SessionProvider + AppDataProviders like the real
+  // layout. With no Supabase configured here the dev-mock session has no
+  // accessToken, so the hooks resolve their empty defaults without calling
+  // any backend — asynchronously, hence findBy*.
+  function renderInApp(page: React.ReactElement) {
+    return render(
       <SessionProvider>
-        <AppHomePage />
+        <AppDataProviders>{page}</AppDataProviders>
       </SessionProvider>,
     );
+  }
+
+  it("renders /app (Home) with a setup checklist linking to the other sections", async () => {
+    renderInApp(<AppHomePage />);
     expect(screen.getByRole("heading", { level: 1, name: "Home" })).toBeInTheDocument();
-    // fallback quick-links shown when no real session data is available
-    expect(screen.getByRole("link", { name: /library/i })).toHaveAttribute("href", "/app/library");
-    expect(screen.getByRole("link", { name: /queue/i })).toHaveAttribute("href", "/app/queue");
-    expect(screen.getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/app/settings");
+    expect(await screen.findByRole("link", { name: /upload in library/i })).toHaveAttribute("href", "/app/library");
+    expect(screen.getByRole("link", { name: /set up in queue/i })).toHaveAttribute("href", "/app/queue");
+    expect(screen.getByRole("link", { name: /connect in settings/i })).toHaveAttribute("href", "/app/settings");
   });
 
-  it("renders /app/library in its real empty state", () => {
-    // The dev-mock session (no Supabase configured in this test env) has
-    // no real accessToken, so this never calls the real backend — it
-    // shows the same "no videos yet" state a genuinely empty account
-    // would, which is the honest outcome either way (see the page's own
-    // comment). settings-tiktok.test.tsx/library.test.tsx cover the real,
-    // backend-connected states with a mocked session + mocked API.
-    render(
-      <SessionProvider>
-        <UploadProvider>
-          <LibraryPage />
-        </UploadProvider>
-      </SessionProvider>,
-    );
+  it("renders /app/library in its real empty state", async () => {
+    renderInApp(<LibraryPage />);
     expect(screen.getByRole("heading", { level: 1, name: "Library" })).toBeInTheDocument();
-    expect(screen.getByText(/no videos yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no videos yet/i)).toBeInTheDocument();
   });
 
-  it("renders /app/queue in its real empty state", () => {
-    // Same dev-mock-session reasoning as /app/library above — no real
-    // accessToken means no real backend call, so both sections settle
-    // straight to their own empty states (see
-    // components/app/QueueScheduling.tsx and components/app/QueueBoard.tsx).
-    render(
-      <SessionProvider>
-        <QueuePage />
-      </SessionProvider>,
-    );
+  it("renders /app/queue in its real empty state", async () => {
+    renderInApp(<QueuePage />);
     expect(screen.getByRole("heading", { level: 1, name: "Queue" })).toBeInTheDocument();
-    expect(screen.getByText("No unscheduled videos — upload one in Library.")).toBeInTheDocument();
+    expect(await screen.findByText("No unscheduled videos — upload one in Library.")).toBeInTheDocument();
     expect(screen.getByText("No slots in this window yet.")).toBeInTheDocument();
   });
 
-  it("renders /app/settings with the current session's account details", () => {
-    render(
-      <SessionProvider>
-        <SettingsPage />
-      </SessionProvider>,
-    );
+  it("renders /app/settings with the current session's account details", async () => {
+    renderInApp(<SettingsPage />);
     expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(screen.getByText("Local Creator")).toBeInTheDocument();
     expect(screen.getByText("local@pickle-batch.local")).toBeInTheDocument();
+    expect(await screen.findByText("Not connected")).toBeInTheDocument();
   });
 });

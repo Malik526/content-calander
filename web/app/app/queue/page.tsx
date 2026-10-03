@@ -1,10 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { QueueBoard } from "@/components/app/QueueBoard";
 import { QueueScheduling } from "@/components/app/QueueScheduling";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { useSession } from "@/lib/session";
 
 /**
  * /app/queue (Milestone 3.8/3.8.1/3.9). Two sections:
@@ -31,10 +29,11 @@ import { useSession } from "@/lib/session";
  * server-side, so the Queue must reload right after — queueVersion is
  * bumped by QueueScheduling's onSaved and QueueBoard reloads whenever it
  * changes (before this, new slots only appeared after a browser refresh).
+ * Milestone 3.15 replaces that version counter: useSaveCadence invalidates
+ * the cached Queue directly (lib/query, hooks/), so this page holds no
+ * state of its own.
  */
 export default function QueuePage() {
-  const { accessToken } = useSession();
-  const [queueVersion, setQueueVersion] = useState(0);
 
   return (
     <>
@@ -44,14 +43,14 @@ export default function QueuePage() {
           <h2 id="posting-rhythm-heading" className="mb-3 text-sm font-semibold text-ink">
             Posting rhythm
           </h2>
-          <QueueScheduling accessToken={accessToken} onSaved={() => setQueueVersion((v) => v + 1)} />
+          <QueueScheduling />
         </section>
 
         <section aria-labelledby="queue-heading">
           <h2 id="queue-heading" className="mb-3 text-sm font-semibold text-ink">
             Queue
           </h2>
-          <QueueBoard accessToken={accessToken} refreshKey={queueVersion} />
+          <QueueBoard />
         </section>
       </div>
     </>

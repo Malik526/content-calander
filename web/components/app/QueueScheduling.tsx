@@ -1,14 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Spinner } from "@/components/ui/Spinner";
 import { WeeklyRhythmEditor } from "@/components/app/WeeklyRhythmEditor";
+import { useCadence } from "@/hooks/useCadence";
+import { useSaveCadence } from "@/hooks/useSaveCadence";
 import { ApiError } from "@/lib/api/client";
-import { getCadence, saveCadence } from "@/lib/api/cadence";
 import type { CadenceResponse, PostingTime } from "@/lib/api/types";
+import { usePersistentUiState } from "@/lib/ui-state";
+
+/** The editable form values; null in UI state means "no unsaved edits". */
+interface CadenceDraft {
+  timezone: string;
+  isActive: boolean;
+  postingTimes: PostingTime[];
+}
 
 // A short curated list, not a full IANA database — Milestone 3.8 kept this
 // minimal per its own brief ("keep styling minimal"); any real IANA name
@@ -64,23 +73,25 @@ function getDetectedTimezone(): string {
  *   accessToken — threaded through exactly like every other lib/api/*
  *     caller (see lib/api/platforms.ts), not read from useSession() itself.
  *   onSaved — called after a successful save (not after a failed one).
+ *
+ * Milestone 3.15: the saved cadence comes from the shared cache
+ * (useCadence, also read by Home) and saving goes through useSaveCadence,
+ * which updates that cache and invalidates the cached Queue so the
+ * regenerated slots appear — onSaved/refreshKey are gone. Unsaved edits
+ * are an in-memory draft (usePersistentUiState) over the saved cadence,
+ * so leaving Queue and coming back keeps them; saving clears the draft.
+ * With no draft, the form always shows the latest saved cadence.
  */
-export function QueueScheduling({
-  accessToken,
-  onSaved,
-}: {
-  accessToken: string | null;
-  onSaved?: () => void;
-}) {
-  const [cadence, setCadence] = useState<CadenceResponse | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [timezone, setTimezone] = useState(TIMEZONE_OPTIONS[0]);
-  const [isActive, setIsActive] = useState(true);
-  const [postingTimes, setPostingTimes] = useState<PostingTime[]>([]);
-
-  const [saving, setSaving] = useState(false);
+export function QueueScheduling() {
+  const cadenceQuery = useCadence();
+  const saveMutation = useSaveCadence();
+  const cadence = cadenceQuery.data ?? null;
+  const [draft, setDraft] = usePersistentUiState<CadenceDraft | null>("queue.cadenceDraft", null);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const form: CadenceDraft = draft ?? draftFrom(cadence);
+  const { timezone, isActive, postingTimes } = form;
+  const editForm = (changes: Partial<CadenceDraft>) => setDraft({ ...form, ...changes });
 
   // Always include the current timezone value in the select options — if the
   // browser-detected or previously-saved timezone isn't in the curated list
@@ -90,52 +101,24 @@ export function QueueScheduling({
     return [...TIMEZONE_OPTIONS, timezone];
   }, [timezone]);
 
-  async function load() {
-    setLoadError(null);
-    try {
-      const result = await getCadence(accessToken);
-      setCadence(result);
-      // Use the saved timezone when present; fall back to the browser-detected
-      // IANA timezone so a new user sees a sensible default without having to
-      // know the right string. An existing saved value is never overwritten.
-      setTimezone(result.timezone ?? getDetectedTimezone());
-      setIsActive(result.configured ? result.is_active : true);
-      setPostingTimes(result.posting_times);
-    } catch (error) {
-      setLoadError(error instanceof ApiError ? error.message : "Could not load your posting schedule.");
-    }
-  }
-
-  useEffect(() => {
-    if (!accessToken) {
-      // No real backend to call at all in this case (dev-mock session —
-      // see lib/session.tsx and library/page.tsx's identical handling) —
-      // settling straight to "not configured" is the correct terminal
-      // state here, not an indefinite spinner.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCadence({ configured: false, timezone: null, is_active: false, posting_times: [] });
-      return;
-    }
-    // load is async — its setState calls happen after a real await, not
-    // synchronously in this effect body — see settings/page.tsx's own
-    // identical pattern/comment for loadStatus.
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken]);
-
   async function handleSave() {
     setSaveError(null);
-    setSaving(true);
     try {
-      const result = await saveCadence(accessToken, { timezone, is_active: isActive, posting_times: postingTimes });
-      setCadence(result);
-      onSaved?.();
+      await saveMutation.mutateAsync({ timezone, is_active: isActive, posting_times: postingTimes });
+      setDraft(null);
     } catch (error) {
       setSaveError(error instanceof ApiError ? error.message : "Could not save your posting schedule.");
-    } finally {
-      setSaving(false);
     }
   }
+
+  const saving = saveMutation.isPending;
+  const loadError =
+    cadenceQuery.isError && cadence === null
+      ? cadenceQuery.error instanceof ApiError
+        ? cadenceQuery.error.message
+        : "Could not load your posting schedule."
+      : null;
+  const load = () => void cadenceQuery.refetch();
 
   if (loadError) {
     return <ErrorState message={loadError} onRetry={load} />;
@@ -161,7 +144,7 @@ export function QueueScheduling({
           <select
             id="cadence-timezone"
             value={timezone}
-            onChange={(event) => setTimezone(event.target.value)}
+            onChange={(event) => editForm({ timezone: event.target.value })}
             className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink"
           >
             {timezoneOptions.map((tz) => (
@@ -174,7 +157,7 @@ export function QueueScheduling({
 
         <div className="flex flex-col gap-1">
           <label className="flex items-center gap-2 text-sm font-medium text-ink">
-            <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} />
+            <input type="checkbox" checked={isActive} onChange={(event) => editForm({ isActive: event.target.checked })} />
             Posting schedule enabled
           </label>
           <p className="ml-5 text-xs text-ink-muted">
@@ -183,7 +166,7 @@ export function QueueScheduling({
         </div>
       </div>
 
-      <WeeklyRhythmEditor postingTimes={postingTimes} onChange={setPostingTimes} />
+      <WeeklyRhythmEditor postingTimes={postingTimes} onChange={(next) => editForm({ postingTimes: next })} />
 
       <div>
         <Button type="button" onClick={() => void handleSave()} disabled={saving}>
@@ -192,4 +175,14 @@ export function QueueScheduling({
       </div>
     </Card>
   );
+}
+
+/** Form values for a saved cadence: its saved timezone, or the browser's
+ * own for a new user (an existing saved value is never overwritten). */
+function draftFrom(cadence: CadenceResponse | null): CadenceDraft {
+  return {
+    timezone: cadence?.timezone ?? getDetectedTimezone(),
+    isActive: cadence?.configured ? cadence.is_active : true,
+    postingTimes: cadence?.posting_times ?? [],
+  };
 }

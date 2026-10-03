@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UploadProvider, useUploadManager } from "@/lib/uploads";
+import { useUploadManager } from "@/lib/uploads";
+import { renderWithProviders } from "@/tests/test-utils";
 
 /**
  * lib/uploads.tsx in isolation (Milestone 3.7 follow-up — navigation/
@@ -12,6 +13,16 @@ import { UploadProvider, useUploadManager } from "@/lib/uploads";
 
 const videosApi = vi.hoisted(() => ({ uploadVideos: vi.fn() }));
 vi.mock("@/lib/api/videos", () => videosApi);
+
+// Milestone 3.15: UploadProvider refreshes the user's cached videos after a
+// batch, so it reads the session's user id.
+const mockSession = vi.hoisted(() => ({
+  user: { id: "u1", email: "creator@example.com", displayName: "Creator" },
+  accessToken: "real-token",
+  status: "authenticated" as const,
+  signOut: vi.fn(),
+}));
+vi.mock("@/lib/session", () => ({ useSession: () => mockSession }));
 
 function Probe() {
   const { uploading, lastResults, error, upload } = useUploadManager();
@@ -42,11 +53,7 @@ describe("useUploadManager", () => {
     let resolveUpload: (value: { results: unknown[] }) => void;
     videosApi.uploadVideos.mockReturnValue(new Promise((resolve) => (resolveUpload = resolve)));
 
-    render(
-      <UploadProvider>
-        <Probe />
-      </UploadProvider>,
-    );
+    renderWithProviders(<Probe />);
     expect(screen.getByTestId("uploading")).toHaveTextContent("false");
 
     screen.getByRole("button", { name: "upload" }).click();
@@ -62,11 +69,7 @@ describe("useUploadManager", () => {
     const { ApiError } = await import("@/lib/api/client");
     videosApi.uploadVideos.mockRejectedValue(new ApiError("Could not upload your videos."));
 
-    render(
-      <UploadProvider>
-        <Probe />
-      </UploadProvider>,
-    );
+    renderWithProviders(<Probe />);
 
     screen.getByRole("button", { name: "upload" }).click();
 
@@ -77,11 +80,11 @@ describe("useUploadManager", () => {
   it("state set by one consumer is visible to a second, sibling consumer under the same provider", async () => {
     videosApi.uploadVideos.mockResolvedValue({ results: [{ filename: "x.mp4", success: true, video: null, error: null }] });
 
-    render(
-      <UploadProvider>
+    renderWithProviders(
+      <>
         <Probe />
         <Probe />
-      </UploadProvider>,
+      </>,
     );
 
     const buttons = screen.getAllByRole("button", { name: "upload" });

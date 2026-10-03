@@ -7,9 +7,9 @@ import { Card } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Spinner } from "@/components/ui/Spinner";
-import { connectTikTok, disconnectTikTok, getTikTokConnection } from "@/lib/api/platforms";
+import { useTikTokActions } from "@/hooks/useTikTokActions";
+import { useTikTokConnection } from "@/hooks/useTikTokConnection";
 import { ApiError } from "@/lib/api/client";
-import type { TikTokConnectionStatus } from "@/lib/api/types";
 import { useSession } from "@/lib/session";
 import { connectedAccountName } from "@/lib/tiktokAccount";
 
@@ -31,6 +31,12 @@ import { connectedAccountName } from "@/lib/tiktokAccount";
  * docs/decisions/0011-real-authentication-and-tiktok-connection.md
  * "Deferred") — recorded as a gap, not fabricated.
  *
+ * Milestone 3.15: connection status comes from the shared cache
+ * (useTikTokConnection, also read by Home), so revisiting Settings shows
+ * the last status at once. Disconnect writes its result into that cache.
+ * A failed background refresh keeps the last status on screen with a
+ * Retry notice; only a first-load failure replaces the card.
+ *
  * Milestone 3.8.1: the posting-cadence editor that briefly lived here
  * (Milestone 3.8's "Scheduling" section) moved to /app/queue
  * (components/app/QueueScheduling.tsx) so it sits with the upcoming-slots
@@ -38,34 +44,12 @@ import { connectedAccountName } from "@/lib/tiktokAccount";
  * config rather than two. This page never reads or writes cadence data.
  */
 export default function SettingsPage() {
-  const { user, accessToken } = useSession();
-  const [connection, setConnection] = useState<TikTokConnectionStatus | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const { user } = useSession();
+  const connectionQuery = useTikTokConnection();
+  const { startConnect, disconnect } = useTikTokActions();
+  const connection = connectionQuery.data ?? null;
   const [connecting, setConnecting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  async function loadStatus() {
-    setLoadError(null);
-    try {
-      const status = await getTikTokConnection(accessToken);
-      setConnection(status);
-    } catch (error) {
-      setLoadError(error instanceof ApiError ? error.message : "Could not load your TikTok connection.");
-    }
-  }
-
-  useEffect(() => {
-    if (!accessToken) return;
-    // loadStatus is async — its setState calls happen after a real
-    // `await getTikTokConnection(...)`, not synchronously in this effect
-    // body, exactly the "subscribe, then setState in a callback once
-    // external state resolves" shape react-hooks/set-state-in-effect
-    // itself endorses; the lint rule's static analysis just can't see
-    // through the function call to confirm that.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken]);
 
   useEffect(() => {
     // window.location is only available after mount (this is a static
@@ -93,8 +77,9 @@ export default function SettingsPage() {
     setActionError(null);
     setConnecting(true);
     try {
-      const { authorization_url } = await connectTikTok(accessToken);
-      window.location.href = authorization_url;
+      // Web adapter: open the platform's authorization page by navigating.
+      // The OAuth return is a full page load, so the cache starts fresh.
+      window.location.href = await startConnect();
     } catch (error) {
       setConnecting(false);
       setActionError(error instanceof ApiError ? error.message : "Could not start connecting TikTok.");
@@ -104,8 +89,7 @@ export default function SettingsPage() {
   async function handleDisconnect() {
     setActionError(null);
     try {
-      const status = await disconnectTikTok(accessToken);
-      setConnection(status);
+      await disconnect();
     } catch (error) {
       setActionError(error instanceof ApiError ? error.message : "Could not disconnect TikTok.");
     }
@@ -147,8 +131,20 @@ export default function SettingsPage() {
             </div>
           ) : null}
 
-          {loadError ? (
-            <ErrorState message={loadError} onRetry={loadStatus} />
+          {connectionQuery.isError && connection !== null ? (
+            <div className="mb-3">
+              <ErrorState
+                message="Couldn't refresh your connection status. Showing the last status loaded."
+                onRetry={() => void connectionQuery.refetch()}
+              />
+            </div>
+          ) : null}
+
+          {connectionQuery.isError && connection === null ? (
+            <ErrorState
+              message={connectionQuery.error instanceof ApiError ? connectionQuery.error.message : "Could not load your TikTok connection."}
+              onRetry={() => void connectionQuery.refetch()}
+            />
           ) : connection === null ? (
             <Card>
               <Spinner label="Loading connection status…" />

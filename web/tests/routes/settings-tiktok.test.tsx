@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import SettingsPage from "@/app/app/settings/page";
+import { renderWithProviders } from "@/tests/test-utils";
 
 /**
  * Settings' real TikTok connection wiring (Milestone 3.6) — lib/api/platforms.ts
@@ -37,7 +38,7 @@ describe("SettingsPage — TikTok connection", () => {
       platform: "tiktok", connected: false, status: "DISCONNECTED", account_label: null,
     });
 
-    render(<SettingsPage />);
+    renderWithProviders(<SettingsPage />);
 
     await waitFor(() => expect(screen.getByText("Not connected")).toBeInTheDocument());
     expect(platformsApi.getTikTokConnection).toHaveBeenCalledWith("real-token");
@@ -49,7 +50,7 @@ describe("SettingsPage — TikTok connection", () => {
       platform: "tiktok", connected: true, status: "ACTIVE", account_label: "my_tiktok_handle",
     });
 
-    render(<SettingsPage />);
+    renderWithProviders(<SettingsPage />);
 
     await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
     expect(screen.getByText("my_tiktok_handle")).toBeInTheDocument();
@@ -63,7 +64,7 @@ describe("SettingsPage — TikTok connection", () => {
       creator_username: "pickle.creator", creator_nickname: "Pickle Creator", creator_avatar_url: null,
     });
 
-    render(<SettingsPage />);
+    renderWithProviders(<SettingsPage />);
 
     await waitFor(() => expect(screen.getByTestId("tiktok-connected-as")).toHaveTextContent("Connected as @pickle.creator"));
     expect(screen.getByText("Connected")).toBeInTheDocument();
@@ -75,7 +76,7 @@ describe("SettingsPage — TikTok connection", () => {
       creator_username: null, creator_nickname: "Pickle Creator", creator_avatar_url: null,
     });
 
-    render(<SettingsPage />);
+    renderWithProviders(<SettingsPage />);
 
     await waitFor(() => expect(screen.getByTestId("tiktok-connected-as")).toHaveTextContent("Connected as Pickle Creator"));
   });
@@ -86,7 +87,7 @@ describe("SettingsPage — TikTok connection", () => {
       creator_username: null, creator_nickname: null, creator_avatar_url: null,
     });
 
-    render(<SettingsPage />);
+    renderWithProviders(<SettingsPage />);
 
     await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
     expect(screen.queryByTestId("tiktok-connected-as")).not.toBeInTheDocument();
@@ -100,7 +101,7 @@ describe("SettingsPage — TikTok connection", () => {
       platform: "tiktok", connected: false, status: "DISCONNECTED", account_label: null,
     });
 
-    render(<SettingsPage />);
+    renderWithProviders(<SettingsPage />);
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Could not reach the server."));
 
@@ -116,7 +117,7 @@ describe("SettingsPage — TikTok connection", () => {
     });
     platformsApi.connectTikTok.mockReturnValue(new Promise(() => {})); // never resolves — just prove it was called
 
-    render(<SettingsPage />);
+    renderWithProviders(<SettingsPage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -133,7 +134,7 @@ describe("SettingsPage — TikTok connection", () => {
       platform: "tiktok", connected: false, status: "DISCONNECTED", account_label: "handle",
     });
 
-    render(<SettingsPage />);
+    renderWithProviders(<SettingsPage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument());
 
     const user = userEvent.setup();
@@ -149,7 +150,7 @@ describe("SettingsPage — TikTok connection", () => {
       platform: "tiktok", connected: false, status: "DISCONNECTED", account_label: null,
     });
 
-    render(<SettingsPage />);
+    renderWithProviders(<SettingsPage />);
 
     await waitFor(() => expect(screen.getByText(/denied or cancelled/i)).toBeInTheDocument());
     expect(window.location.search).toBe("");
