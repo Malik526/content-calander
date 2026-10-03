@@ -676,4 +676,18 @@ STATUS_CHECK_BACKOFF_SECONDS = [
     if s.strip()
 ]
 
+# Milestone 3.13 (reconciliation + recovery): the cap on the "never give up"
+# rule above. A submission TikTok accepted but that has still not reached a
+# terminal status after this many checks (~24h at the default backoff — the
+# last interval repeats) is parked as UNKNOWN for manual recovery instead of
+# being shown as "Publishing…" forever. Nothing is resubmitted either way.
+STATUS_CHECK_MAX_ATTEMPTS = int(os.getenv("CONTENT_CALENDAR_STATUS_CHECK_MAX_ATTEMPTS", "150"))
+
+# Milestone 3.13: how long a hosted worker waits for another process that is
+# already refreshing the same TikTok connection's token (Postgres advisory
+# lock — publishing/tiktok/credential_store.py) before giving up with a
+# retryable CREDENTIAL_REFRESH_BUSY. Comfortably above auth.py's own refresh
+# request timeout, so a healthy concurrent refresh always finishes first.
+CREDENTIAL_REFRESH_LOCK_TIMEOUT_SECONDS = int(os.getenv("CONTENT_CALENDAR_CREDENTIAL_REFRESH_LOCK_TIMEOUT_SECONDS", "45"))
+
 # ---------------------------------------------------------------------------

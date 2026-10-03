@@ -76,3 +76,7 @@ running hosted unchanged.
 - Unresolved until 3.13: a crash after TikTok issued a publish ID but before it was persisted
   is indistinguishable from "never submitted". Crash recovery then requeues it (existing
   2.1.5 semantics), which can duplicate a post.
+
+> **3.13 update:** both open items above are resolved — the submission checkpoint closes the
+> crash-after-publish-ID duplicate risk, and a per-connection advisory lock closes the token-refresh
+> race, so multiple replicas are supported. See ADR-0016.

@@ -48,6 +48,21 @@ What it does:
   docs/evaluations/scheduling/milestone-2.1.10-asynchronous-publish-reconciliation.md
   "Worker Integration".
 
+  Milestone 3.13 (reconciliation + recovery) — no outcome without evidence:
+    - A terminal error while *checking* status (most notably
+      REAUTHORIZATION_REQUIRED) used to mark the row FAILED. But TikTok had
+      already accepted this submission and may well have published it; we
+      only lost the ability to ask. Such rows are now parked as status
+      UNKNOWN (failure_code = the error's reason_code, so the UI can still
+      say "Reconnect TikTok"), and the manual retry API re-checks — never
+      resubmits — once the account is reconnected.
+    - The "poll forever" rule gains a cap: a submission still not terminal
+      after config.STATUS_CHECK_MAX_ATTEMPTS checks is parked as UNKNOWN
+      (failure_code STATUS_UNRESOLVED) instead of showing "Publishing…"
+      indefinitely.
+    FAILED is now written here only when TikTok itself reports FAILED.
+    Every decision is logged as one structured event (ids/codes only).
+
 Run (Milestone 3.0: thin CLI entry point at cli/reconciliation.py):
   python3 cli/reconciliation.py
   python3 cli/reconciliation.py --platform tiktok
@@ -61,10 +76,12 @@ Dependencies:
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from content_automation.config import STATUS_CHECK_MAX_ATTEMPTS
 from content_automation.persistence.content_store import ContentStore
 from content_automation.publishing.publisher import PublishError, Publisher
 from content_automation.scheduling import retry_classification
 from content_automation.scheduling.publish_tiktok import _next_status_check_at, _resolve_poll_outcome
+from content_automation.scheduling.worker import log_event
 
 
 def _now_iso() -> str:
@@ -77,6 +94,7 @@ class ReconciliationSummary:
     published: int = 0
     failed: int = 0
     still_processing: int = 0
+    unknown: int = 0
     errors: list = field(default_factory=list)
 
 
@@ -107,16 +125,11 @@ def reconcile_pending_status_checks_once(
         it stuck at its old (now-elapsed) next_status_check_at forever.
       - terminal (TikTokReauthorizationRequiredError's
         REAUTHORIZATION_REQUIRED — the refresh token is expired, revoked,
-        or was never issued): the row is marked FAILED immediately with
-        the actionable reconnect message as failure_reason, and no
-        further check is scheduled. A row that genuinely needs a human to
-        re-run `tiktok_auth.py --authorize` must not sit PUBLISHING and
-        get silently re-polled forever — nothing about waiting longer
-        ever resolves it, exactly the same reasoning
-        retry_classification.py already applies to a publishing attempt
-        that hits this error. No new lifecycle status was introduced:
-        this is the same FAILED every other terminal outcome already
-        uses.
+        or was never issued): polling stops. Milestone 3.13: the row is
+        parked as UNKNOWN (failure_code = the error's reason_code), not
+        FAILED — TikTok accepted the submission, so whether it published is
+        unknown, and waiting longer resolves nothing. The manual retry API
+        re-checks it after the account is reconnected.
 
     Neither branch ever resubmits — get_status() is the only TikTok call
     reconciliation ever makes.
@@ -138,6 +151,7 @@ def reconcile_pending_status_checks_once(
     summary.discovered = len(rows)
 
     for record in rows:
+        ids = {"platform_post_row_id": record.id, "video_id": record.video_id, "platform": record.platform}
         try:
             status_result = publisher.get_status(record.platform_post_id)
         except PublishError as exc:
@@ -147,22 +161,30 @@ def reconcile_pending_status_checks_once(
                     next_status_check_at=_next_status_check_at(record.status_check_count, now),
                     status_check_count=record.status_check_count + 1,
                 )
+                log_event("reconciliation_check_rescheduled", **ids, failure_code=exc.reason_code)
             else:
                 # Terminal — most notably REAUTHORIZATION_REQUIRED. Stop
-                # polling: mark FAILED with the actionable message, never
-                # schedule another check. No new lifecycle status.
-                updated = store.update_platform_post_if_unchanged(
-                    record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), user_id=user_id,
-                    status="FAILED", failure_reason=str(exc), failure_code=exc.reason_code,
-                )
-                if updated:
-                    summary.failed += 1
+                # polling, but don't claim FAILED: the submission was
+                # accepted and its outcome is unknown, not failed
+                # (Milestone 3.13). Park it for manual recovery.
+                if _park_unknown(store, record, user_id, failure_code=exc.reason_code, failure_reason=str(exc)):
+                    summary.unknown += 1
+                    log_event("reconciliation_unknown", **ids, failure_code=exc.reason_code)
             summary.errors.append(str(exc))
             continue
 
         outcome, fields = _resolve_poll_outcome(status_result)
 
         if outcome == "PROCESSING":
+            if record.status_check_count + 1 >= STATUS_CHECK_MAX_ATTEMPTS:
+                if _park_unknown(
+                    store, record, user_id, failure_code="STATUS_UNRESOLVED",
+                    failure_reason=f"Still {status_result.status} after {record.status_check_count + 1} status checks.",
+                ):
+                    summary.unknown += 1
+                    log_event("reconciliation_unknown", **ids, failure_code="STATUS_UNRESOLVED",
+                              status_check_count=record.status_check_count + 1)
+                continue
             fields = {
                 "next_status_check_at": _next_status_check_at(record.status_check_count, now),
                 "status_check_count": record.status_check_count + 1,
@@ -182,5 +204,15 @@ def reconcile_pending_status_checks_once(
                 summary.published += 1
             else:
                 summary.failed += 1
+            log_event("reconciliation_resolved", **ids, outcome=outcome, failure_code=fields.get("failure_code"))
 
     return summary
+
+
+def _park_unknown(store, record, user_id, *, failure_code: str, failure_reason: str) -> bool:
+    """Move an accepted-but-unresolvable submission to UNKNOWN (Milestone
+    3.13). platform_post_id is kept, so manual recovery can re-check it."""
+    return store.update_platform_post_if_unchanged(
+        record.id, expected_updated_at=record.updated_at, updated_at=_now_iso(), user_id=user_id,
+        status="UNKNOWN", failure_code=failure_code, failure_reason=failure_reason, next_status_check_at=None,
+    )

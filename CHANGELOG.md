@@ -1,5 +1,57 @@
 # Content Automation — Changelog
 
+## 2026-10-02
+
+### Milestone 3.13 — Reconciliation + Recovery
+
+Hardens the hosted worker against ambiguous and partial failures without a new state machine.
+See ADR-0016 and `docs/evaluations/productization/milestone-3.13-reconciliation-recovery.md`.
+
+- **Submission checkpoint (duplicate-publish fix):**
+  - `platform_posts.submission_state`/`submission_started_at` are written before publishing.
+  - `TikTokPublisher` hands back its `publish_id` before the upload PUT, and it is persisted
+    there. With `FILE_UPLOAD` nothing posts until the upload completes.
+  - This closes two duplicate paths: a crash between submission and persistence, and an
+    upload that timed out after TikTok had the bytes (previously retried as a fresh
+    submission).
+  - Errors after the id is persisted go to reconciliation only.
+- **Crash recovery** splits stale unsubmitted claims by checkpoint:
+  - never submitted → requeue
+  - interrupted before an id (no media sent) → bounded retry (`SUBMISSION_INTERRUPTED`)
+  - unknowable → new status `UNKNOWN`
+- **Reconciliation:**
+  - A terminal status-check error (e.g. reauth) now parks the post as `UNKNOWN` (code and
+    id kept) instead of marking it FAILED without evidence.
+  - Checks are capped at `CONTENT_CALENDAR_STATUS_CHECK_MAX_ATTEMPTS` (150) →
+    `UNKNOWN`/`STATUS_UNRESOLVED`.
+- **Manual retry API:** `POST /api/queue/slots/{id}/retry` (`scheduling/manual_recovery.py`).
+  - Owner only, atomic (CAS).
+  - FAILED → PENDING.
+  - UNKNOWN with an id → status re-check.
+  - UNKNOWN without an id → requires `confirm_not_published`.
+  - PENDING/PUBLISHING/PUBLISHED → 409.
+  - Queue slots gain `can_retry`/`retry_requires_confirmation`; UNKNOWN shows as
+    NEEDS_ATTENTION / `OUTCOME_UNKNOWN`.
+- **Token refresh:** per-connection Postgres advisory lock
+  (`PostgresContentStore.credential_refresh_lock`).
+  - One refresh per expiry; waiters reuse the result.
+  - The lock is released on rollback or process death.
+  - Bounded wait → retryable `CREDENTIAL_REFRESH_BUSY`.
+  - SQLite/CLI behavior unchanged.
+  - Multiple worker replicas are now supported.
+- **Media metadata:** publish-time ffprobe of hosted uploads is persisted to the video row and
+  reused by retries. The write is best-effort, and nothing is transcoded.
+- **Silent videos:** allowed on the publish path (`inspect_media(require_audio=False)`).
+  TikTok's documented media requirements contain no audio requirement. Local ingestion still
+  requires audio.
+- **Schema:** Postgres migration `0010`; SQLite additive columns; status value `UNKNOWN`.
+- **Logging:** structured recovery/reconciliation/retry/credential events, IDs and codes only.
+- **Verification:**
+  - Backend 1119 passed, 0 skipped (was 1063), including real-Postgres concurrency tests:
+    6 refreshers → 1 refresh; 5 concurrent retries → 1 applied.
+  - The lock test was confirmed to fail with the lock disabled.
+  - No `web/` change, no deploy, no real TikTok call.
+
 ## 2026-09-30
 
 ### Milestone 3.12 — Hosted Scheduler + Worker Execution

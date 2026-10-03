@@ -51,6 +51,10 @@ _RETRYABLE_REASON_CODES = frozenset({
     # class as NETWORK_ERROR; STORAGE_HTTP_ERROR is left to the http_status
     # fallback below, like HTTP_ERROR.
     "STORAGE_NETWORK_ERROR",
+    # Milestone 3.13: another process held this connection's token-refresh
+    # lock past the timeout (publishing/tiktok/credential_store.py) — it
+    # will have finished by the next attempt.
+    "CREDENTIAL_REFRESH_BUSY",
 })
 
 # Always terminal regardless of http_status — local validation, account/

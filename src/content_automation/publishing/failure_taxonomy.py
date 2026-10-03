@@ -65,6 +65,11 @@ _SHARED_CODE_CATEGORIES: dict[str, str] = {
     "NETWORK_ERROR": "NETWORK_ERROR",
     "UPLOAD_NETWORK_ERROR": "NETWORK_ERROR",
     "MALFORMED_RESPONSE": "TEMPORARY_PLATFORM_ERROR",
+    # Milestone 3.13 (reconciliation + recovery).
+    "CREDENTIAL_REFRESH_BUSY": "TEMPORARY_PLATFORM_ERROR",
+    # Crash after a submission started but before the platform issued an id
+    # (nothing was sent — see scheduling/crash_recovery.py).
+    "SUBMISSION_INTERRUPTED": "TEMPORARY_PLATFORM_ERROR",
     "UPLOAD_FAILED": "TEMPORARY_PLATFORM_ERROR",
     # HTTP_ERROR / PUBLISH_FAILED / TIKTOK_API_ERROR / PRECONDITION_FAILED
     # are deliberately unlisted: without the HTTP status (not persisted)

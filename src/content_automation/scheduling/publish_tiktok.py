@@ -45,6 +45,34 @@ Idempotency:
   from "submission succeeded but post-processing/status came back FAILED",
   which is left as a terminal FAILED record rather than silently retried.
 
+Submission checkpoint (Milestone 3.13 — closes the crash-during-request
+duplicate-publish window ADR-0015 left open):
+  Before 3.13 the publish_id was persisted only after publisher.publish()
+  returned, i.e. after the media upload. A crash in between, or an upload
+  PUT that timed out after TikTok had the bytes (UPLOAD_NETWORK_ERROR,
+  classified retryable), left a row with no platform_post_id that was then
+  requeued and resubmitted — a possible duplicate post. TikTok's API has no
+  idempotency key and no way to look a submission up without its
+  publish_id, so the fix has to be ordering, not lookup:
+
+    1. platform_posts.submission_state is written immediately before
+       publisher.publish() (AWAITING_PLATFORM_ID for a publisher that
+       declares reports_platform_post_id_before_media_transfer — TikTok —
+       SUBMITTING for any other).
+    2. TikTokPublisher calls back with publish_id right after init and
+       BEFORE the upload; the callback persists it (status stays
+       PUBLISHING, submission_state cleared). With FILE_UPLOAD nothing is
+       posted until the upload completes, so every byte that could create a
+       post is sent only after the id is durable.
+    3. A PublishError after that point is NOT a pre-submission failure: the
+       row keeps its id and goes to reconciliation (status checks only) —
+       never _schedule_retry_or_fail, never resubmitted.
+
+  What crash recovery can then conclude (scheduling/crash_recovery.py):
+  id set -> poll; no id + AWAITING_PLATFORM_ID -> no media was sent, bounded
+  requeue; no id + SUBMITTING -> unknowable, parked as status UNKNOWN for
+  manual recovery; no id + NULL -> never submitted, requeue (unchanged).
+
 Run (Milestone 3.0: thin CLI entry point at cli/publish_tiktok.py):
   python3 cli/publish_tiktok.py --video-id 3
   python3 cli/publish_tiktok.py --video-id 3 --privacy-level SELF_ONLY
@@ -61,6 +89,7 @@ Dependencies:
   content_automation.media.inspection, config.py
 """
 
+import logging
 import sys
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -77,6 +106,18 @@ from content_automation.storage.protocol import StorageProtocol
 from content_automation.storage.supabase_storage import StorageError
 from content_automation.scheduling import retry_classification
 from content_automation.scheduling.slot_matcher import now_in_config_timezone
+
+# Milestone 3.13: platform_posts.submission_state values — see the module
+# docstring's "Submission checkpoint".
+AWAITING_PLATFORM_ID = "AWAITING_PLATFORM_ID"
+SUBMITTING = "SUBMITTING"
+
+# A video row's stable, file-level metadata (Milestone 3.13 — persisted
+# after the first successful publish-time inspection of a hosted upload).
+_PERSISTED_MEDIA_FIELDS = ("container", "video_codec", "audio_codec", "width", "height", "fps", "duration_seconds")
+
+
+logger = logging.getLogger(__name__)
 
 
 class PublishTikTokError(Exception):
@@ -102,7 +143,7 @@ def _slot_scheduled_at(store: ContentStore, video: VideoRecord) -> str | None:
     return slot.scheduled_at if slot else None
 
 
-def _validate_ready_to_publish(video: VideoRecord, media_path: Path) -> None:
+def _validate_ready_to_publish(store: ContentStore, video: VideoRecord, media_path: Path) -> None:
     """media_path is the real local file to validate — either
     video.canonical_media_path directly (legacy/local-direct, unchanged
     pre-3.4 behavior) or a temp path materialized from object storage
@@ -123,12 +164,16 @@ def _validate_ready_to_publish(video: VideoRecord, media_path: Path) -> None:
         # bytes only — see api/routes/videos.py), so probe the materialized
         # file itself. Read-only ffprobe; the file is never altered. A
         # locally ingested video keeps using its stored inspection result.
+        # Milestone 3.13: audio is not required to publish (see
+        # inspection.inspect_media), and a successful probe is persisted so
+        # retries and later attempts use the stored result.
         try:
-            info = media.inspect_media(media_path)
+            info = media.inspect_media(media_path, require_audio=False)
         except media.MediaError as exc:
             raise PublishTikTokError(
                 f"Video {video.id} failed media inspection: {exc}", reason_code=exc.reason_code,
             ) from exc
+        _persist_media_metadata(store, video, info)
     else:
         info = media.MediaInfo(
             path=media_path, container=video.container, video_codec=video.video_codec,
@@ -138,6 +183,22 @@ def _validate_ready_to_publish(video: VideoRecord, media_path: Path) -> None:
     compatible, reason = media.is_tiktok_compatible(info)
     if not compatible:
         raise PublishTikTokError(f"Video {video.id} is not TikTok-compatible: {reason}", reason_code="MEDIA_INCOMPATIBLE")
+
+
+def _persist_media_metadata(store: ContentStore, video: VideoRecord, info: media.MediaInfo) -> None:
+    """Write a fresh inspection back to the video row (Milestone 3.13), so
+    the next attempt for this video (a retry, a manual retry, a re-claim
+    after a crash) reads it instead of probing again. Metadata only — the
+    file is never re-encoded. Best-effort: these fields are a cache of
+    facts about immutable bytes, so failing to save them must not fail a
+    publish that is otherwise ready; the next attempt simply probes again."""
+    fields = {name: getattr(info, name) for name in _PERSISTED_MEDIA_FIELDS}
+    if video.file_size_bytes is None:
+        fields["file_size_bytes"] = info.file_size_bytes
+    try:
+        store.update_video(video.id, **fields)
+    except Exception:  # noqa: BLE001 — cache write only, see docstring
+        logger.warning("event=media_metadata_persist_failed video_id=%s", video.id)
 
 
 def _schedule_retry_or_fail(store: ContentStore, record: PlatformPostRecord, error: PublishError) -> None:
@@ -166,12 +227,13 @@ def _schedule_retry_or_fail(store: ContentStore, record: PlatformPostRecord, err
         store.update_platform_post(
             record.id, updated_at=_now_iso(), status="PENDING",
             retry_count=record.retry_count + 1, next_retry_at=next_retry_at,
-            failure_reason=str(error), failure_code=error.reason_code,
+            failure_reason=str(error), failure_code=error.reason_code, submission_state=None,
         )
         print(f"Retryable failure ({error.reason_code}) — retry {record.retry_count + 1}/{MAX_RETRY_ATTEMPTS} at {next_retry_at}.")
     else:
         store.update_platform_post(
             record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(error), failure_code=error.reason_code,
+            submission_state=None,
         )
 
 
@@ -276,32 +338,69 @@ def _resolved_media_path(store: ContentStore, video: VideoRecord, storage: Stora
 def _validate_and_submit(
     store: ContentStore, video: VideoRecord, record: PlatformPostRecord, media_path: Path, publisher: Publisher,
 ) -> None:
-    """The actual validate -> submit -> persist -> poll sequence, factored
-    out so execute_claimed_platform_post can run it identically whether
-    media_path came straight from video.canonical_media_path (legacy) or
-    from a Milestone 3.4 object-storage materialization — this function
-    has no idea which, and doesn't need to."""
+    """The actual validate -> checkpoint -> submit -> persist -> poll
+    sequence, factored out so execute_claimed_platform_post can run it
+    identically whether media_path came straight from
+    video.canonical_media_path (legacy) or from a Milestone 3.4
+    object-storage materialization — this function has no idea which, and
+    doesn't need to. See the module docstring's "Submission checkpoint"
+    (Milestone 3.13) for the ordering guarantees."""
     try:
-        _validate_ready_to_publish(video, media_path)
+        _validate_ready_to_publish(store, video, media_path)
     except PublishTikTokError as exc:
         store.update_platform_post(
             record.id, updated_at=_now_iso(), status="FAILED", failure_reason=str(exc), failure_code=exc.reason_code,
         )
         raise
 
+    checkpointed = bool(getattr(publisher, "reports_platform_post_id_before_media_transfer", False))
+    store.update_platform_post(
+        record.id, updated_at=_now_iso(), submission_state=AWAITING_PLATFORM_ID if checkpointed else SUBMITTING,
+        submission_started_at=_now_iso(),
+    )
+
+    def persist_platform_post_id(platform_post_id: str) -> None:
+        # Raising here (e.g. the database is unreachable) aborts the publish
+        # before any media is sent — see Publisher's checkpoint contract.
+        store.update_platform_post(
+            record.id, updated_at=_now_iso(), status="PUBLISHING", platform_post_id=platform_post_id,
+            submission_state=None,
+        )
+
+    caption = resolve_publish_caption(video, "tiktok")
     try:
-        result = publisher.publish(media_path, resolve_publish_caption(video, "tiktok"))
+        if checkpointed:
+            result = publisher.publish(media_path, caption, on_platform_post_id=persist_platform_post_id)
+        else:
+            result = publisher.publish(media_path, caption)
     except PublishError as exc:
+        current = store.get_platform_post(video.id, record.platform)
+        if current is not None and current.platform_post_id:
+            # The platform issued an id and the media transfer may have
+            # reached it (e.g. an upload that timed out after TikTok got
+            # the bytes). Never resubmit: hand off to reconciliation, which
+            # only ever checks this id's status.
+            store.update_platform_post(
+                record.id, updated_at=_now_iso(), next_status_check_at=_now_iso(),
+            )
+            logger.info(
+                "event=submission_outcome_pending_reconciliation platform_post_row_id=%s video_id=%s "
+                "failure_code=%s", record.id, video.id, exc.reason_code,
+            )
+            raise PublishTikTokError(
+                f"Submission outcome unconfirmed (publish_id={current.platform_post_id}): {exc}",
+                reason_code=exc.reason_code,
+            ) from exc
         _schedule_retry_or_fail(store, record, exc)
         raise PublishTikTokError(f"Submission failed: {exc}") from exc
 
-    # Persist the publish_id immediately, separately from the eventual
-    # status outcome — this is what makes a crash between submission and
-    # polling safe: the next run sees platform_post_id set and only polls,
-    # never resubmits.
-    store.update_platform_post(
-        record.id, updated_at=_now_iso(), status="PUBLISHING", platform_post_id=result.platform_post_id
-    )
+    if not checkpointed or store.get_platform_post(video.id, record.platform).platform_post_id is None:
+        # Publishers without the checkpoint (and, defensively, one that
+        # declared it but never called back) — persist the id now, as
+        # before Milestone 3.13. A crash between submission and polling is
+        # still safe from here on: the next run sees platform_post_id set
+        # and only polls, never resubmits.
+        persist_platform_post_id(result.platform_post_id)
     print(f"Submitted to TikTok: publish_id={result.platform_post_id}")
 
     refreshed = store.get_platform_post(video.id, record.platform)
@@ -442,7 +541,7 @@ def publish_video(
         # supplied — same "nothing to clean up" guarantee extended to the
         # object-storage case.
         with _resolved_media_path(store, video, storage) as media_path:
-            _validate_ready_to_publish(video, media_path)
+            _validate_ready_to_publish(store, video, media_path)
         record = store.insert_platform_post(
             video_id, "tiktok", created_at=_now_iso(), scheduled_at=_slot_scheduled_at(store, video)
         )

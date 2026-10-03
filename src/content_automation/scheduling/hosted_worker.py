@@ -9,7 +9,9 @@ What it does:
   (publishing/tiktok/hosted_publisher.py):
 
     1. crash_recovery.recover_stale_posts_once   (2.1.5 — requeue a stale
-       claim that never reached TikTok; poll, never resubmit, one that did)
+       claim that never reached TikTok; poll, never resubmit, one that did;
+       3.13 — bounded retry for a submission interrupted before TikTok
+       issued an id, UNKNOWN for one whose outcome can't be determined)
     2. reconciliation.reconcile_pending_status_checks_once   (2.1.10 —
        status checks for accepted-but-unfinished posts)
     3. worker.run_due_posts_once with hosted_due_selection's timezone-exact
@@ -74,11 +76,12 @@ class HostedCycleSummary:
     retry_scheduled: int = 0
     recovered: int = 0
     reconciled: int = 0
+    unknown: int = 0  # Milestone 3.13: rows parked as UNKNOWN this cycle
     user_errors: list[int] = field(default_factory=list)
 
     @property
     def did_work(self) -> bool:
-        return any((self.claimed, self.recovered, self.reconciled, self.user_errors))
+        return any((self.claimed, self.recovered, self.reconciled, self.unknown, self.user_errors))
 
 
 def run_hosted_cycle(
@@ -106,15 +109,17 @@ def run_hosted_cycle(
             publisher = publisher_factory(store, user_id)
 
             recovery = recover_stale_posts_once(store, publisher, platform=PLATFORM, now=now_utc, user_id=user_id)
-            summary.recovered += recovery.requeued + recovery.published + recovery.failed
+            summary.recovered += recovery.requeued + recovery.retry_scheduled + recovery.published + recovery.failed
 
             reconciliation = reconcile_pending_status_checks_once(
                 store, publisher, platform=PLATFORM, now=now_utc, user_id=user_id,
             )
             summary.reconciled += reconciliation.published + reconciliation.failed
+            summary.unknown += recovery.unknown + reconciliation.unknown
 
             # Recovery may have requeued a stale claim; re-select so it can
-            # run this cycle rather than waiting for the next one.
+            # run this cycle rather than waiting for the next one. (A
+            # retry_scheduled row waits for its backoff, so it isn't due yet.)
             if recovery.requeued:
                 due_posts = get_hosted_due_posts(store, PLATFORM, user_id, now_utc)
 
@@ -156,7 +161,8 @@ def run_worker_loop(
                 log_event(
                     "poll_cycle", users=summary.users, due=summary.due, claimed=summary.claimed,
                     published=summary.published, failed=summary.failed, retry_scheduled=summary.retry_scheduled,
-                    recovered=summary.recovered, reconciled=summary.reconciled, user_errors=len(summary.user_errors),
+                    recovered=summary.recovered, reconciled=summary.reconciled, unknown=summary.unknown,
+                    user_errors=len(summary.user_errors),
                 )
         except Exception as exc:  # noqa: BLE001 — e.g. database unreachable; retry next cycle
             log_event("poll_cycle_error", error_type=type(exc).__name__)

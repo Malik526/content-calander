@@ -89,6 +89,12 @@ class ContentStoreProtocol(Protocol):
 
     def update_platform_post(self, post_id: int, updated_at: str, **fields) -> None: ...
 
+    # Milestone 3.13 (manual recovery) — the existing optimistic-concurrency
+    # write (Milestones 2.1.5/3.3), now also consumed through the Protocol.
+    def update_platform_post_if_unchanged(
+        self, post_id: int, expected_updated_at: str, updated_at: str, user_id: int, **fields
+    ) -> bool: ...
+
     # -- Milestone 3.7 follow-up (Delete Video) — media/media_storage.py's
     # delete_video consumes this through the Protocol like every other
     # method below Milestone 3.6's.
@@ -131,6 +137,10 @@ class ContentStoreProtocol(Protocol):
     ) -> bool: ...
 
     def delete_platform_credential(self, platform_connection_id: int) -> None: ...
+
+    # Milestone 3.13: a context manager serializing token refreshes for one
+    # connection (Postgres advisory lock; no-op on SQLite).
+    def credential_refresh_lock(self, platform_connection_id: int): ...
 
     def create_oauth_state(
         self, user_id: int, platform: str, state: str, code_verifier: str, redirect_uri: str,

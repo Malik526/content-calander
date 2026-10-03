@@ -43,7 +43,11 @@ What it does:
 
 Future media intelligence (Milestone 3.7 follow-up — deliberately not
 built here; see this module's own guardrail against synchronous probing
-in the upload path):
+in the upload path). Milestone 3.13 update: the hosted worker now writes
+these columns at first publish (scheduling/publish_tiktok.py
+_persist_media_metadata), so a video is inspected at most once on the
+publish path. The upload path still never probes, and an upload-time
+enrichment job as described below remains unbuilt:
   A video created by create_video_from_upload has every media-metadata
   column NULL — container, video_codec, audio_codec, width, height, fps,
   duration_seconds — exactly like a freshly-`insert_video`'d row from the

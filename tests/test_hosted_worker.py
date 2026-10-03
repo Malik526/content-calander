@@ -188,8 +188,9 @@ def test_due_post_is_claimed_materialized_and_published(store, storage, video_fi
     assert final.status == "PUBLISHED"
     assert final.platform_post_id == "pub_1"
     assert final.published_at is not None
-    # Hosted upload was never inspected; the worker validated it without writing metadata.
-    assert store.get_video(post.video_id).container is None
+    # Hosted upload was never inspected at upload time; since Milestone 3.13
+    # the worker's publish-time inspection is persisted (see test_hosted_recovery.py).
+    assert store.get_video(post.video_id).container is not None
 
 
 def test_future_post_is_not_executed(store, storage, video_file, tmp_path):

@@ -495,6 +495,22 @@ _PLATFORM_POSTS_MIGRATION_COLUMNS = {
     # taxonomy (publishing/failure_taxonomy.py) keys off this instead.
     # NULL for every row written before 3.11.
     "failure_code": "TEXT",
+    # Milestone 3.13 (reconciliation + recovery): a submission checkpoint,
+    # written immediately before publisher.publish() and cleared once the
+    # outcome is known (platform_post_id persisted, or a pre-submission
+    # failure recorded). A stale PUBLISHING row with platform_post_id NULL
+    # tells crash recovery which of three cases it is in:
+    #   NULL                  — claimed, never reached the platform (requeue)
+    #   AWAITING_PLATFORM_ID  — submission started by a publisher that hands
+    #                           over its platform id before transferring any
+    #                           media (TikTokPublisher); no id persisted means
+    #                           no media was sent (bounded requeue)
+    #   SUBMITTING            — any other publisher; the outcome is unknowable
+    #                           (parked as UNKNOWN for manual recovery)
+    # See scheduling/publish_tiktok.py "Submission checkpoint".
+    "submission_state": "TEXT",
+    # Aware UTC, when the most recent submission attempt began. Diagnostic.
+    "submission_started_at": "TEXT",
 }
 
 
@@ -897,6 +913,9 @@ class PlatformPostRecord:
     status_check_count: int
     user_id: int | None
     failure_code: str | None
+    # Milestone 3.13 — see _PLATFORM_POSTS_MIGRATION_COLUMNS.
+    submission_state: str | None = None
+    submission_started_at: str | None = None
 
 
 @dataclass
@@ -2037,6 +2056,16 @@ class ContentStore:
         )
         return cur.rowcount > 0
 
+    @contextmanager
+    def credential_refresh_lock(self, platform_connection_id: int):
+        """Milestone 3.13: serialize token refreshes for one connection
+        across processes. A no-op on SQLite — the local/single-process
+        backend has no second worker to coordinate with, and the local CLI
+        never uses this path (auth.py's own token file + fcntl lock). The
+        CAS in update_platform_credential_if_unchanged still guards the
+        write. See PostgresContentStore.credential_refresh_lock."""
+        yield
+
     def delete_platform_credential(self, platform_connection_id: int) -> None:
         """Used by disconnect (Phase 20) — removes only the credential
         secret, never the platform_connections row itself (which retains
@@ -2183,6 +2212,12 @@ class OwnershipMismatchError(Exception):
     """Raised by assign_slot() (Milestone 3.2) when a video and the
     content_slot it's being assigned to are both explicitly owned by
     different users. See assign_slot's docstring."""
+
+
+class CredentialRefreshLockTimeout(Exception):
+    """Raised by credential_refresh_lock() (Milestone 3.13, Postgres only)
+    when another process held the connection's refresh lock for longer
+    than config.CREDENTIAL_REFRESH_LOCK_TIMEOUT_SECONDS."""
 
 
 class PlatformPostInProgressError(Exception):

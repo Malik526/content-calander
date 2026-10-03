@@ -33,6 +33,14 @@ What it does:
                             with no video.
       NOT_SET_UP_TO_PUBLISH assigned video with no platform_posts row at
                             all (nothing would ever publish it).
+      OUTCOME_UNKNOWN       platform_posts.status UNKNOWN (Milestone 3.13):
+                            recovery could not determine whether it was
+                            published. RECONNECT_ACCOUNT hint when the cause
+                            was an auth failure while checking.
+
+  Milestone 3.13: can_retry / retry_requires_confirmation mirror the manual
+  retry API's guards (post_can_retry / post_retry_requires_confirmation —
+  scheduling.manual_recovery uses the same two functions).
 
   Multiple platforms: each post resolves independently (publications), and
   the slot shows the most urgent: NEEDS_ATTENTION > FAILED > PUBLISHING >
@@ -42,7 +50,7 @@ What it does:
   (media.caption_editing.post_locks_caption) — never suggest an action the
   API would refuse.
 
-  Read-only: nothing here writes, retries or reconciles (Milestone 3.13).
+  Read-only: nothing here writes, retries or reconciles.
   content_slots.status is still never written past ASSIGNED (ADR-0013).
 
 Dependencies:
@@ -57,7 +65,12 @@ from zoneinfo import ZoneInfo
 from content_automation.config import PLATFORM_POST_STALE_MINUTES, PUBLISH_OVERDUE_GRACE_MINUTES, TIMEZONE
 from content_automation.media.caption_editing import post_locks_caption
 from content_automation.persistence.content_store import PlatformPostRecord, SlotRecord
-from content_automation.publishing.failure_taxonomy import EDIT_CAPTION, describe_failure, platform_label
+from content_automation.publishing.failure_taxonomy import (
+    EDIT_CAPTION,
+    RECONNECT_ACCOUNT,
+    describe_failure,
+    platform_label,
+)
 
 OPEN = "OPEN"
 SCHEDULED = "SCHEDULED"
@@ -74,7 +87,21 @@ _ATTENTION_MESSAGES = {
     "PUBLISH_UNCONFIRMED": "Publishing status could not be confirmed.",
     "STATE_INCONSISTENT": "Publishing status is unclear.",
     "NOT_SET_UP_TO_PUBLISH": "This video isn't set up to publish to any platform.",
+    "OUTCOME_UNKNOWN": "We couldn't confirm whether this was published.",
 }
+
+# Milestone 3.13 — the statuses the manual retry API accepts.
+RETRYABLE_POST_STATUSES = ("FAILED", "UNKNOWN")
+
+
+def post_can_retry(post: PlatformPostRecord) -> bool:
+    return post.status in RETRYABLE_POST_STATUSES
+
+
+def post_retry_requires_confirmation(post: PlatformPostRecord) -> bool:
+    """Retrying could duplicate a post that may already exist, and there is
+    no platform id to check first."""
+    return post.status == "UNKNOWN" and post.platform_post_id is None
 
 
 @dataclass(frozen=True)
@@ -99,6 +126,9 @@ class SlotPublishStatus:
     # Mirrors ContentStore.unassign_slot's guard: only while every post is PENDING.
     can_unassign: bool = False
     publications: list[PublicationStatus] = field(default_factory=list)
+    # Milestone 3.13: mirror the manual retry API (see post_can_retry).
+    can_retry: bool = False
+    retry_requires_confirmation: bool = False
 
 
 def _parse(iso: str | None) -> datetime | None:
@@ -178,6 +208,18 @@ def resolve_publication_status(
             reason_code=description.category, message=description.message, action_hint=hint,
         )
 
+    if post.status == "UNKNOWN":
+        auth = describe_failure(post.platform, post.failure_code).category == "AUTH_REQUIRED"
+        return PublicationStatus(
+            platform=post.platform, display_status=NEEDS_ATTENTION, platform_post_status=post.status,
+            published_at=None, reason_code="OUTCOME_UNKNOWN",
+            message=(
+                f"We couldn't confirm whether this was published. Reconnect {platform_label(post.platform)}, "
+                "then retry to check again." if auth else _ATTENTION_MESSAGES["OUTCOME_UNKNOWN"]
+            ),
+            action_hint=RECONNECT_ACCOUNT if auth else None,
+        )
+
     return _attention(post, "STATE_INCONSISTENT")
 
 
@@ -204,6 +246,8 @@ def resolve_slot_publish_status(
         for post in posts
     ]
     can_unassign = all(post.status == "PENDING" for post in posts)
+    can_retry = any(post_can_retry(post) for post in posts)
+    needs_confirmation = any(post_retry_requires_confirmation(post) for post in posts)
 
     for status in _URGENCY[:-1]:
         driver = next((p for p in publications if p.display_status == status), None)
@@ -211,6 +255,7 @@ def resolve_slot_publish_status(
             return SlotPublishStatus(
                 display_status=status, reason_code=driver.reason_code, message=driver.message,
                 action_hint=driver.action_hint, can_unassign=can_unassign, publications=publications,
+                can_retry=can_retry, retry_requires_confirmation=needs_confirmation,
             )
 
     # Every post is PUBLISHED.

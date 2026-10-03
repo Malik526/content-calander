@@ -390,7 +390,7 @@ def test_worker_publish_silently_refreshes_and_all_calls_use_new_token(monkeypat
 
     monkeypatch.setattr(tp.requests, "post", _fake_post)
     monkeypatch.setattr(tp.requests, "put", _fake_put)
-    monkeypatch.setattr(tp.media, "inspect_media", lambda path: tp.media.MediaInfo(
+    monkeypatch.setattr(tp.media, "inspect_media", lambda path, **_kw: tp.media.MediaInfo(
         path=None, container="mp4", video_codec="h264", audio_codec="aac",
         width=576, height=1024, fps=30.0, duration_seconds=20.0, file_size_bytes=1000,
     ))
@@ -417,7 +417,7 @@ def test_worker_revoked_refresh_token_ends_failed_not_retried(monkeypatch, store
     monkeypatch.setattr(
         tp.requests, "post", lambda *a, **k: _FakeResponse({"error": "invalid_request"}, status_code=401)
     )
-    monkeypatch.setattr(tp.media, "inspect_media", lambda path: tp.media.MediaInfo(
+    monkeypatch.setattr(tp.media, "inspect_media", lambda path, **_kw: tp.media.MediaInfo(
         path=None, container="mp4", video_codec="h264", audio_codec="aac",
         width=576, height=1024, fps=30.0, duration_seconds=20.0, file_size_bytes=1000,
     ))
@@ -451,7 +451,7 @@ def test_worker_transient_refresh_failure_schedules_retry_not_immediate_failure(
         raise requests.ConnectionError("temporary DNS failure")
 
     monkeypatch.setattr(tp.requests, "post", _raise)
-    monkeypatch.setattr(tp.media, "inspect_media", lambda path: tp.media.MediaInfo(
+    monkeypatch.setattr(tp.media, "inspect_media", lambda path, **_kw: tp.media.MediaInfo(
         path=None, container="mp4", video_codec="h264", audio_codec="aac",
         width=576, height=1024, fps=30.0, duration_seconds=20.0, file_size_bytes=1000,
     ))

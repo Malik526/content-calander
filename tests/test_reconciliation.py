@@ -346,7 +346,7 @@ def test_token_refresh_can_happen_during_reconciliation(monkeypatch, store, tmp_
     assert "Bearer stale_access" not in bearer_tokens_seen
 
 
-def test_reauthorization_required_marks_failed_and_stops_polling(monkeypatch, store, tmp_path):
+def test_reauthorization_required_parks_unknown_and_stops_polling(monkeypatch, store, tmp_path):
     from content_automation.publishing.tiktok import auth as ta
     from content_automation.publishing.tiktok import publisher as tp
 
@@ -380,16 +380,20 @@ def test_reauthorization_required_marks_failed_and_stops_polling(monkeypatch, st
 
     final = store.get_platform_post(row.video_id, "tiktok")
     assert len(summary.errors) == 1
-    assert summary.failed == 1
     # Terminal — a human must reconnect TikTok; must not sit PUBLISHING and
     # get silently re-polled forever. Never resubmitted either way.
-    assert final.status == "FAILED"
+    # Milestone 3.13: parked as UNKNOWN, not FAILED — TikTok accepted the
+    # submission, so whether it published is unknown, not failed; the id is
+    # kept so manual recovery can re-check it after reconnecting.
+    assert summary.unknown == 1 and summary.failed == 0
+    assert final.status == "UNKNOWN"
+    assert final.failure_code == "REAUTHORIZATION_REQUIRED"
     assert "tiktok_auth.py --authorize" in final.failure_reason
     assert final.platform_post_id == row.platform_post_id
 
 
 def test_reauthorization_required_does_not_schedule_another_check(monkeypatch, store, tmp_path):
-    """A row marked FAILED for this reason must never be selected by
+    """A row parked (UNKNOWN since Milestone 3.13) for this reason must never be selected by
     reconciliation again — it leaves PUBLISHING entirely, so
     get_reconcilable_platform_posts excludes it structurally regardless of
     next_status_check_at, exactly like any other terminal outcome."""
@@ -561,7 +565,7 @@ def test_terminal_status_check_error_persists_its_reason_code(store):
     recon.reconcile_pending_status_checks_once(store, publisher, now=NOW)
 
     final = store.get_platform_post(row.video_id, "tiktok")
-    assert final.status == "FAILED"
+    assert final.status == "UNKNOWN"  # Milestone 3.13 — accepted, outcome unknown
     assert final.failure_code == "REAUTHORIZATION_REQUIRED"
 
 

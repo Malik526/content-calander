@@ -46,7 +46,7 @@ def fake_media_inspect(monkeypatch):
     against the account's capabilities — default to a well-formed short
     video so tests not specifically about media inspection don't need a
     real ffmpeg-synthesized file."""
-    monkeypatch.setattr(tp.media, "inspect_media", lambda path: _fake_media_info())
+    monkeypatch.setattr(tp.media, "inspect_media", lambda path, **_kw: _fake_media_info())
 
 
 @pytest.fixture
@@ -406,7 +406,7 @@ def test_caption_text_is_never_mutated_by_validation(video_file):
 # ---------------------------------------------------------------------------
 
 def test_publish_rejects_video_exceeding_account_max_duration(monkeypatch, video_file):
-    monkeypatch.setattr(tp.media, "inspect_media", lambda path: _fake_media_info(duration=120.0))
+    monkeypatch.setattr(tp.media, "inspect_media", lambda path, **_kw: _fake_media_info(duration=120.0))
     monkeypatch.setattr(
         tp.requests, "post",
         lambda url, **k: _FakeResponse(_ok_body({"privacy_level_options": ["SELF_ONLY"], "max_video_post_duration_sec": 60})),
@@ -417,7 +417,7 @@ def test_publish_rejects_video_exceeding_account_max_duration(monkeypatch, video
 
 
 def test_publish_accepts_video_within_account_max_duration(monkeypatch, video_file):
-    monkeypatch.setattr(tp.media, "inspect_media", lambda path: _fake_media_info(duration=30.0))
+    monkeypatch.setattr(tp.media, "inspect_media", lambda path, **_kw: _fake_media_info(duration=30.0))
     monkeypatch.setattr(
         tp.requests, "post",
         lambda url, **k: (
@@ -436,7 +436,7 @@ def test_publish_skips_duration_check_when_capability_not_reported(monkeypatch, 
     """No max_video_post_duration_sec in creator_info at all must not be
     treated as "reject everything" — only a reported, exceeded limit
     blocks publishing."""
-    monkeypatch.setattr(tp.media, "inspect_media", lambda path: _fake_media_info(duration=99999.0))
+    monkeypatch.setattr(tp.media, "inspect_media", lambda path, **_kw: _fake_media_info(duration=99999.0))
     monkeypatch.setattr(
         tp.requests, "post",
         lambda url, **k: (
@@ -451,7 +451,7 @@ def test_publish_skips_duration_check_when_capability_not_reported(monkeypatch, 
 
 
 def test_publish_raises_when_media_inspection_fails(monkeypatch, video_file):
-    def raise_media_error(path):
+    def raise_media_error(path, **_kw):
         raise media.CorruptMediaError("corrupt")
 
     monkeypatch.setattr(tp.media, "inspect_media", raise_media_error)

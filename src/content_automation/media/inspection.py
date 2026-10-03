@@ -100,12 +100,18 @@ def file_hash(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
-def inspect_media(path: Path) -> MediaInfo:
+def inspect_media(path: Path, *, require_audio: bool = True) -> MediaInfo:
     """Run ffprobe against `path` and return structured MediaInfo.
 
     Raises CorruptMediaError if ffprobe cannot parse the file, NoAudioStreamError
     if there is no audio stream, UnsupportedCodecError if ffprobe cannot name a
     video or audio codec for an existing stream.
+
+    require_audio (Milestone 3.13): local ingestion needs an audio stream to
+    transcribe, so it keeps the default. Publishing does not — TikTok's
+    documented media requirements (format, codec, frame rate, size,
+    duration) include no audio track — so the publish path passes False and
+    a silent video comes back with audio_codec=None instead of raising.
     """
     try:
         result = subprocess.run(
@@ -141,12 +147,12 @@ def inspect_media(path: Path) -> MediaInfo:
 
     if video_stream is None:
         raise CorruptMediaError(f"{path} has no video stream")
-    if audio_stream is None:
+    if audio_stream is None and require_audio:
         raise NoAudioStreamError(f"{path} has no audio stream")
 
     video_codec = video_stream.get("codec_name")
-    audio_codec = audio_stream.get("codec_name")
-    if not video_codec or not audio_codec:
+    audio_codec = audio_stream.get("codec_name") if audio_stream is not None else None
+    if not video_codec or (audio_stream is not None and not audio_codec):
         raise UnsupportedCodecError(
             f"{path} has a stream ffprobe could not name a codec for "
             f"(video={video_codec}, audio={audio_codec})"

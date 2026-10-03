@@ -39,18 +39,20 @@ Dependencies:
   content_automation.persistence.content_store (shared dataclasses/exceptions).
 """
 
+from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
 
-from content_automation.config import DATABASE_URL, POSTGRES_SCHEMA
+from content_automation.config import CREDENTIAL_REFRESH_LOCK_TIMEOUT_SECONDS, DATABASE_URL, POSTGRES_SCHEMA
 from content_automation.persistence import postgres_migrate
 from content_automation.persistence.content_store import (
     AuthIdentityRecord,
     CadenceRecord,
     CadenceTimeRecord,
+    CredentialRefreshLockTimeout,
     OAuthStateRecord,
     OwnershipMismatchError,
     PlatformConnectionRecord,
@@ -291,6 +293,38 @@ class PostgresContentStore:
             (encrypted_payload, new_updated_at, platform_connection_id, expected_updated_at),
         )
         return cur.rowcount > 0
+
+    @contextmanager
+    def credential_refresh_lock(self, platform_connection_id: int):
+        """Milestone 3.13: hold a transaction-scoped advisory lock keyed to
+        (schema, platform_connection_id) for the duration of the block, so
+        only one process at a time can refresh a given connection's TikTok
+        token — the same pg_advisory_xact_lock(hashtext(...)) convention
+        postgres_migrate uses, scoped per connection instead of per schema.
+        Other connections (other users) are never blocked.
+
+        Transaction-scoped, so it is released on commit, on rollback when
+        the block raises (a failed refresh), and if this process dies
+        (Postgres ends the session) — never leaked. Safe behind Supabase's
+        transaction-pooling pooler for the same reason. Every statement the
+        block runs on this store (re-reading the credential, the CAS write)
+        joins the transaction. Waiting is bounded by lock_timeout:
+        CredentialRefreshLockTimeout is raised instead of hanging a worker."""
+        timeout_ms = int(CREDENTIAL_REFRESH_LOCK_TIMEOUT_SECONDS * 1000)
+        with self._conn.transaction():
+            self._conn.execute(f"SET LOCAL lock_timeout = {timeout_ms}")
+            try:
+                self._conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext("
+                    "'content_automation.platform_credential_refresh:' || current_schema() || ':' || %s))",
+                    (str(platform_connection_id),),
+                )
+            except psycopg.errors.LockNotAvailable as exc:
+                raise CredentialRefreshLockTimeout(
+                    f"platform_connection {platform_connection_id}: refresh lock not acquired within "
+                    f"{CREDENTIAL_REFRESH_LOCK_TIMEOUT_SECONDS}s"
+                ) from exc
+            yield
 
     def delete_platform_credential(self, platform_connection_id: int) -> None:
         self._conn.execute(

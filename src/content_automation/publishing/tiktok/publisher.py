@@ -120,6 +120,13 @@ class TikTokPublisher(Publisher):
     level must appear in privacy_level_options" check instead.
     """
 
+    # Milestone 3.13: publish() reports publish_id (from init) before the
+    # upload PUT. With FILE_UPLOAD, TikTok starts posting only once the
+    # upload completes ("TikTok will start the posting process" after the
+    # final chunk — Content Posting API media transfer guide), so nothing
+    # can be posted before the caller has persisted the id.
+    reports_platform_post_id_before_media_transfer = True
+
     def __init__(
         self, privacy_level: str = TIKTOK_DEFAULT_PRIVACY_LEVEL, unaudited: bool = True,
         access_token_provider: Callable[[], str] | None = None,
@@ -162,7 +169,9 @@ class TikTokPublisher(Publisher):
             raise PublishError(f"Could not reach TikTok creator_info endpoint: {exc}", reason_code="NETWORK_ERROR") from exc
         return _parse_response(response)
 
-    def publish(self, video_path: Path, caption: str) -> PublishResult:
+    def publish(
+        self, video_path: Path, caption: str, on_platform_post_id: Callable[[str], None] | None = None,
+    ) -> PublishResult:
         video_path = Path(video_path)
         if not video_path.exists():
             raise PublishError(f"Local video not found: {video_path}", reason_code="LOCAL_FILE_MISSING")
@@ -189,7 +198,9 @@ class TikTokPublisher(Publisher):
             )
 
         try:
-            info = media.inspect_media(video_path)
+            # Milestone 3.13: TikTok's documented media requirements include
+            # no audio track, so a silent video is valid here.
+            info = media.inspect_media(video_path, require_audio=False)
         except media.MediaError as exc:
             raise PublishError(
                 f"Local video failed media inspection: {exc}",
@@ -253,6 +264,12 @@ class TikTokPublisher(Publisher):
                 f"TikTok init response missing publish_id/upload_url: {init_data!r}",
                 reason_code="MALFORMED_RESPONSE",
             )
+
+        # Submission checkpoint (Milestone 3.13): hand the id to the caller
+        # to persist before a single byte is uploaded. If that raises, we
+        # stop here — the init is abandoned, never uploaded, never posted.
+        if on_platform_post_id is not None:
+            on_platform_post_id(publish_id)
 
         with video_path.open("rb") as f:
             video_bytes = f.read()

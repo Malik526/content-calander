@@ -15,6 +15,15 @@ What it does:
   POST /api/queue/assign-next              — automatic/FIFO assignment:
                                               {video_id}.
   POST /api/queue/slots/{slot_id}/unassign — "Remove from schedule."
+  POST /api/queue/slots/{slot_id}/retry    — Milestone 3.13: retry/recover
+                                              the slot's FAILED or UNKNOWN
+                                              platform post
+                                              ({platform, confirm_not_published};
+                                              scheduling.manual_recovery has
+                                              the rules). 409 for a post that
+                                              is PENDING/PUBLISHING/PUBLISHED,
+                                              needs confirmation, or changed
+                                              concurrently.
 
   Milestone 3.11: display_status (and the sanitized reason/message/
   action_hint/published_at/can_unassign/publications fields) now comes from
@@ -67,6 +76,7 @@ from content_automation.api.schemas.queue import (
     QueueSlotListResponse,
     QueueSlotResponse,
     QueueVideoSummary,
+    RetryPublishRequest,
 )
 from content_automation.persistence.content_store import (
     OwnershipMismatchError,
@@ -77,6 +87,7 @@ from content_automation.persistence.content_store import (
 )
 from content_automation.persistence.protocol import ContentStoreProtocol
 from content_automation.publishing.publish_status import resolve_slot_publish_status
+from content_automation.scheduling.manual_recovery import RetryRejectedError, retry_platform_post
 from content_automation.scheduling.queue_assignment import (
     NoOpenSlotAvailableError,
     VideoAlreadyScheduledError,
@@ -110,6 +121,7 @@ def _to_queue_slot_response(store: ContentStoreProtocol, slot: SlotRecord) -> Qu
         status=slot.status, display_status=publish.display_status,
         reason_code=publish.reason_code, message=publish.message, action_hint=publish.action_hint,
         published_at=publish.published_at, can_unassign=publish.can_unassign,
+        can_retry=publish.can_retry, retry_requires_confirmation=publish.retry_requires_confirmation,
         assigned_video=assigned_video,
         # Single-platform in practice today (config.TARGET_PUBLISHING_PLATFORMS
         # defaults to just "tiktok"); publications carries every platform.
@@ -189,4 +201,23 @@ def unassign_slot(
         raise HTTPException(status_code=409, detail=str(exc))
     except PlatformPostInProgressError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    return _to_queue_slot_response(store, store.get_slot(slot_id))
+
+
+@router.post("/queue/slots/{slot_id}/retry", response_model=QueueSlotResponse)
+def retry_slot_publication(
+    slot_id: int,
+    body: RetryPublishRequest | None = None,
+    user: UserRecord = Depends(get_current_user),
+    store: ContentStoreProtocol = Depends(get_store),
+) -> QueueSlotResponse:
+    body = body or RetryPublishRequest()
+    slot = _get_owned_slot(store, slot_id, user.id)
+    post = store.get_platform_post(slot.assigned_video_id, body.platform) if slot.assigned_video_id else None
+    if post is None or post.user_id != user.id:
+        raise HTTPException(status_code=404, detail="No platform post to retry for this slot.")
+    try:
+        retry_platform_post(store, post, user_id=user.id, confirm_not_published=body.confirm_not_published)
+    except RetryRejectedError as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
     return _to_queue_slot_response(store, store.get_slot(slot_id))

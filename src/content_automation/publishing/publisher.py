@@ -21,6 +21,7 @@ Dependencies:
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,14 +72,29 @@ class PublishStatusResult:
 
 
 class Publisher(ABC):
+    # Milestone 3.13 (reconciliation + recovery) — the submission checkpoint
+    # contract. A publisher that sets this True accepts an
+    # on_platform_post_id callback in publish() and guarantees to call it
+    # with the platform's id BEFORE transferring any media (the step that
+    # can make a post exist), and to transfer nothing if the callback
+    # raises. The caller persists the id there, so "no id persisted" then
+    # provably means "no media sent" — see scheduling/publish_tiktok.py
+    # "Submission checkpoint". Publishers that leave it False are called
+    # with (video_path, caption) only, and a crash mid-submission with them
+    # is recorded as an unknown outcome rather than retried.
+    reports_platform_post_id_before_media_transfer: bool = False
+
     @abstractmethod
-    def publish(self, video_path: Path, caption: str) -> PublishResult:
+    def publish(
+        self, video_path: Path, caption: str, on_platform_post_id: Callable[[str], None] | None = None,
+    ) -> PublishResult:
         """Upload video_path and submit it for publishing with caption.
         Raises PublishError on any failure — missing file, auth, upload,
         or a malformed/error platform response. Must not silently retry an
         ambiguous result as a brand-new submission; that policy lives in
         the caller (publish_tiktok.py), which owns idempotency via
-        content_store.get_platform_post()."""
+        content_store.get_platform_post(). on_platform_post_id: see
+        reports_platform_post_id_before_media_transfer above."""
 
     @abstractmethod
     def get_status(self, platform_post_id: str) -> PublishStatusResult:

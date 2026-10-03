@@ -49,10 +49,15 @@ class QueueSlotResponse(BaseModel):
     reason_code: str | None
     message: str | None
     # RECONNECT_ACCOUNT | EDIT_CAPTION | TRY_AGAIN_LATER | null — advisory
-    # only; no retry endpoint exists (Milestone 3.13).
+    # only; the retry action itself is POST .../retry (Milestone 3.13).
     action_hint: str | None
     published_at: str | None  # aware UTC, set only when PUBLISHED
     can_unassign: bool  # mirrors unassign_slot's guard (every post still PENDING)
+    # Milestone 3.13: mirror POST /api/queue/slots/{id}/retry's guards — a
+    # post is FAILED or UNKNOWN; confirmation is needed when one is UNKNOWN
+    # with nothing to check (scheduling.manual_recovery).
+    can_retry: bool
+    retry_requires_confirmation: bool
     assigned_video: QueueVideoSummary | None
     platform_post_status: str | None
     publications: list[PublicationStatusResponse]
@@ -68,3 +73,12 @@ class AssignToSlotRequest(BaseModel):
 
 class AssignNextRequest(BaseModel):
     video_id: int
+
+
+class RetryPublishRequest(BaseModel):
+    """Milestone 3.13. confirm_not_published: the user checked the platform
+    and the post isn't there — required to resubmit a post whose outcome is
+    UNKNOWN with no platform id (see scheduling.manual_recovery)."""
+
+    platform: str = "tiktok"
+    confirm_not_published: bool = False

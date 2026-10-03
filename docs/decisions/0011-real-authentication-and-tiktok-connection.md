@@ -244,3 +244,7 @@ the same backend.
 - No FastAPI backend hosting provider was selected — `src/content_automation/api/` runs locally
   (`cli/run_api.py`) for now; `hosted-product-boundary.md` §14's "API hosting: deferred" row is still
   accurate.
+
+> **Milestone 3.13 update:** the residual concurrent-refresh limitation documented above is closed:
+> hosted refreshes now run under a per-connection Postgres advisory lock (one refresh per expiry;
+> waiters reuse it). See `publishing/tiktok/credential_store.py` and ADR-0016.
