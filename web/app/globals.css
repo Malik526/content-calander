@@ -75,6 +75,46 @@ body {
   color: var(--color-ink);
 }
 
+/* Touch targets (Milestone 3.15 follow-up). On touch screens (pointer:
+   coarse), `tap-target` gives an element an invisible hit area of at least
+   44×44px, centered on it, without changing how it looks. Mouse/desktop is
+   untouched. Native form controls can't carry ::after, so they use
+   `pointer-coarse:min-h-11` instead. `tap-target-dot` is for the Queue
+   calendar's slot dots: full 44px when a day has one slot, otherwise 44px
+   tall and as wide as its share of the row, so neighbours never overlap. */
+@utility tap-target {
+  @media (pointer: coarse) {
+    position: relative;
+    &::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      transform: translate(-50%, -50%);
+    }
+  }
+}
+
+@utility tap-target-dot {
+  @media (pointer: coarse) {
+    position: relative;
+    &::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: calc(100% + 0.25rem);
+      height: 44px;
+      transform: translate(-50%, -50%);
+    }
+    &:only-child::after {
+      width: 44px;
+    }
+  }
+}
+
 /* Minimal legal-document typography for /privacy and /terms — no
    typography plugin installed, so this is the one centralized place
    heading/paragraph/list spacing for those two pages is defined. */

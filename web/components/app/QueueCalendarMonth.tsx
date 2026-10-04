@@ -67,7 +67,7 @@ export function QueueCalendarMonth({
           type="button"
           onClick={onPrevMonth}
           aria-label="Previous month"
-          className="rounded-lg border border-border px-2.5 py-1 text-sm text-ink hover:border-accent/40 hover:text-accent"
+          className="tap-target rounded-lg border border-border px-2.5 py-1 text-sm text-ink hover:border-accent/40 hover:text-accent"
         >
           ‹
         </button>
@@ -78,7 +78,7 @@ export function QueueCalendarMonth({
           type="button"
           onClick={onNextMonth}
           aria-label="Next month"
-          className="rounded-lg border border-border px-2.5 py-1 text-sm text-ink hover:border-accent/40 hover:text-accent"
+          className="tap-target rounded-lg border border-border px-2.5 py-1 text-sm text-ink hover:border-accent/40 hover:text-accent"
         >
           ›
         </button>
@@ -105,7 +105,7 @@ export function QueueCalendarMonth({
                     onClick={() => onSelectSlot(slot.id)}
                     aria-label={`Slot on ${month.toLocaleString(undefined, { month: "long" })} ${cell.day}, ${presentQueueStatus(slot.display_status).label.toLowerCase()}`}
                     aria-pressed={selectedSlotId === slot.id}
-                    className={`h-2.5 w-2.5 rounded-full ${presentQueueStatus(slot.display_status).dotClass} ${
+                    className={`tap-target-dot h-2.5 w-2.5 rounded-full ${presentQueueStatus(slot.display_status).dotClass} ${
                       selectedSlotId === slot.id ? "ring-2 ring-offset-1 ring-accent" : ""
                     }`}
                   />

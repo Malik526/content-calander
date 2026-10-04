@@ -2,6 +2,23 @@
 
 ## 2026-10-04
 
+### Milestone 3.15 Follow-up — 44px Mobile Tap Targets
+
+- New `tap-target` utility (`web/app/globals.css`): on touch screens only (`pointer: coarse`),
+  an invisible centered `::after` hit box of at least 44×44 px. Applied to the `Button` and
+  `ErrorState` primitives and to every small control in the `/app` screens: header links, Home
+  step links, Library tabs and Delete/Confirm/Cancel, cadence day labels, Remove, Add posting time
+  and the picker's Add/Cancel, Queue assign and List/Calendar, calendar month arrows, slot-card
+  actions and hint links, and caption buttons.
+- Native controls (timezone select, time picker, slot picker, file input) get
+  `pointer-coarse:min-h-11`. That's the only visible change, and only on touch devices.
+- `tap-target-dot` for calendar slot dots: 44×44 px for a single slot per day. With several
+  slots, each is 44 px tall and as wide as its own column, so they never overlap.
+- Verified (Chromium, touch emulation, 390 px, including confirm/picker/calendar states): every
+  control has an effective hit area of at least 44 px except multi-slot calendar dots. No
+  horizontal overflow. Screenshots with the hit boxes on and off are pixel-identical. Desktop is
+  unchanged. Frontend 176/176, eslint, `tsc --noEmit`, `next build`.
+
 ### Autobuild — Validation Commands and Checkpoint Commits
 
 Configuration only. No application, backend or `web/` change.

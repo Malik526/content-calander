@@ -106,14 +106,14 @@ export function CaptionEditor({
             type="button"
             disabled={busy !== null}
             onClick={() => void run("generate", () => onGenerate(true))}
-            className="rounded-lg border border-status-danger px-3 py-1.5 text-xs font-medium text-status-danger"
+            className="tap-target rounded-lg border border-status-danger px-3 py-1.5 text-xs font-medium text-status-danger"
           >
             Replace caption
           </button>
           <button
             type="button"
             onClick={() => setConfirmingReplace(false)}
-            className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-ink-muted"
+            className="tap-target rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-ink-muted"
           >
             Cancel
           </button>
@@ -125,7 +125,7 @@ export function CaptionEditor({
               type="button"
               disabled={busy !== null}
               onClick={handleGenerateClick}
-              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
+              className="tap-target rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
             >
               {busy === "generate" ? "Generating…" : hasText ? "Regenerate" : "Generate"}
             </button>
@@ -134,7 +134,7 @@ export function CaptionEditor({
             type="button"
             disabled={!dirty || busy !== null}
             onClick={() => void run("save", () => onSave(draft))}
-            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
+            className="tap-target rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
           >
             {busy === "save" ? "Saving…" : "Save caption"}
           </button>

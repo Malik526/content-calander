@@ -122,7 +122,7 @@ export default function AppHomePage() {
               {step.done ? (
                 <span className="shrink-0 text-sm text-ink-muted">{step.doneDetail}</span>
               ) : (
-                <Link href={step.href} className="shrink-0 text-sm font-medium text-accent hover:underline">
+                <Link href={step.href} className="tap-target shrink-0 text-sm font-medium text-accent hover:underline">
                   {step.cta} →
                 </Link>
               )}

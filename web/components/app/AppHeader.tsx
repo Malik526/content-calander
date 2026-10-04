@@ -14,7 +14,7 @@ export function AppHeader() {
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-surface/90 backdrop-blur">
       <div className="flex h-14 items-center justify-between px-4 md:px-6">
-        <Link href="/app" className="text-sm font-semibold tracking-tight text-accent">
+        <Link href="/app" className="tap-target text-sm font-semibold tracking-tight text-accent">
           Pickle Batch
         </Link>
         {user ? (
@@ -29,7 +29,7 @@ export function AppHeader() {
             <button
               type="button"
               onClick={() => void signOut()}
-              className="rounded-md px-2 py-1 text-xs font-medium text-ink-muted hover:text-ink"
+              className="tap-target rounded-md px-2 py-1 text-xs font-medium text-ink-muted hover:text-ink"
             >
               Sign out
             </button>

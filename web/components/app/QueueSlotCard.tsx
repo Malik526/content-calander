@@ -98,7 +98,7 @@ export function QueueSlotCard({
           {slot.message ? <p className="mt-1 text-xs text-ink">{slot.message}</p> : null}
           {hint ? (
             hint.href ? (
-              <Link href={hint.href} className="mt-0.5 inline-block text-xs font-medium text-accent hover:underline">
+              <Link href={hint.href} className="tap-target mt-0.5 inline-block text-xs font-medium text-accent hover:underline">
                 {hint.label}
               </Link>
             ) : (
@@ -119,7 +119,7 @@ export function QueueSlotCard({
                   value={pendingVideoId}
                   onChange={(event) => setPendingVideoId(event.target.value)}
                   aria-label={`Video to assign to ${formatSlotDateTime(slot.scheduled_at)}`}
-                  className="rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-ink"
+                  className="rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-ink pointer-coarse:min-h-11"
                 >
                   <option value="">Choose a video…</option>
                   {unassignedVideos.map((video) => (
@@ -132,7 +132,7 @@ export function QueueSlotCard({
                   type="button"
                   disabled={!pendingVideoId || busy}
                   onClick={() => onAssign(Number(pendingVideoId))}
-                  className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
+                  className="tap-target rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
                 >
                   Assign
                 </button>
@@ -143,7 +143,7 @@ export function QueueSlotCard({
               type="button"
               disabled={busy}
               onClick={onRemove}
-              className="text-xs font-medium text-ink-muted hover:text-status-danger disabled:opacity-60"
+              className="tap-target text-xs font-medium text-ink-muted hover:text-status-danger disabled:opacity-60"
             >
               Remove from schedule
             </button>
@@ -152,7 +152,7 @@ export function QueueSlotCard({
               type="button"
               disabled={busy}
               onClick={() => (slot.retry_requires_confirmation ? setConfirmingRetry(true) : onRetry(false))}
-              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
+              className="tap-target rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
             >
               {busy ? "Retrying…" : "Retry"}
             </button>
@@ -174,14 +174,14 @@ export function QueueSlotCard({
                 setConfirmingRetry(false);
                 onRetry(true);
               }}
-              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
+              className="tap-target rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
             >
               It isn&apos;t posted — retry
             </button>
             <button
               type="button"
               onClick={() => setConfirmingRetry(false)}
-              className="text-xs font-medium text-ink-muted hover:text-ink"
+              className="tap-target text-xs font-medium text-ink-muted hover:text-ink"
             >
               Cancel
             </button>

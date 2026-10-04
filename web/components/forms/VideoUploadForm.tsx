@@ -62,7 +62,7 @@ export function VideoUploadForm({ accessToken }: { accessToken: string | null })
           accept="video/mp4,video/quicktime,.mp4,.mov"
           onChange={(e) => handleFilesSelected(e.target.files)}
           disabled={uploading}
-          className="text-sm text-ink-muted file:mr-3 file:rounded-lg file:border file:border-border file:bg-surface file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-ink hover:file:border-accent/40"
+          className="text-sm text-ink-muted pointer-coarse:min-h-11 file:mr-3 file:rounded-lg file:border file:border-border file:bg-surface file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-ink hover:file:border-accent/40"
         />
         {selectedFiles.length > 0 ? (
           <p className="text-xs text-ink-muted">

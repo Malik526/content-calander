@@ -127,7 +127,7 @@ export function WeeklyRhythmEditor({
 
         return (
           <div key={key} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:gap-4">
-            <label className="flex w-32 shrink-0 items-center gap-2 text-sm font-medium text-ink">
+            <label className="tap-target flex w-32 shrink-0 items-center gap-2 text-sm font-medium text-ink">
               <input
                 type="checkbox"
                 checked={isActive}
@@ -151,7 +151,7 @@ export function WeeklyRhythmEditor({
                           type="button"
                           onClick={() => handleRemoveTime(key, entry.posting_time)}
                           aria-label={`Remove ${label} ${formatTimeLabel(entry.posting_time)}`}
-                          className="text-xs text-ink-muted hover:text-accent"
+                          className="tap-target text-xs text-ink-muted hover:text-accent"
                         >
                           Remove
                         </button>
@@ -168,13 +168,13 @@ export function WeeklyRhythmEditor({
                       value={draftTime}
                       onChange={(event) => setDraftTime(event.target.value)}
                       aria-label={`New time for ${label}`}
-                      className="rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-ink"
+                      className="rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-ink pointer-coarse:min-h-11"
                     />
                     <button
                       type="button"
                       onClick={() => handleConfirmAdd(key)}
                       aria-label={`Add time to ${label}`}
-                      className="inline-flex items-center justify-center rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
+                      className="tap-target inline-flex items-center justify-center rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
                     >
                       Add
                     </button>
@@ -182,7 +182,7 @@ export function WeeklyRhythmEditor({
                       type="button"
                       onClick={handleCancelAdd}
                       aria-label={`Cancel adding time to ${label}`}
-                      className="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink-muted transition-colors hover:text-ink"
+                      className="tap-target inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink-muted transition-colors hover:text-ink"
                     >
                       Cancel
                     </button>
@@ -192,7 +192,7 @@ export function WeeklyRhythmEditor({
                     type="button"
                     onClick={() => handleStartAdding(key)}
                     aria-label={`Add posting time for ${label}`}
-                    className="self-start text-sm font-medium text-accent hover:underline"
+                    className="tap-target self-start text-sm font-medium text-accent hover:underline"
                   >
                     + Add posting time
                   </button>

@@ -167,7 +167,7 @@ export default function LibraryPage() {
                   role="tab"
                   aria-selected={filter === tab}
                   onClick={() => setFilter(tab)}
-                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                  className={`tap-target rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
                     filter === tab
                       ? "bg-accent-soft text-accent"
                       : "text-ink-muted hover:bg-background hover:text-ink"
@@ -198,7 +198,7 @@ export default function LibraryPage() {
                               type="button"
                               onClick={() => void handleDelete(video.id)}
                               disabled={deletingId === video.id}
-                              className="text-xs font-medium text-status-danger hover:underline disabled:opacity-60"
+                              className="tap-target text-xs font-medium text-status-danger hover:underline disabled:opacity-60"
                             >
                               {deletingId === video.id ? "Deleting…" : "Confirm delete"}
                             </button>
@@ -206,7 +206,7 @@ export default function LibraryPage() {
                               type="button"
                               onClick={() => setConfirmingDeleteId(null)}
                               disabled={deletingId === video.id}
-                              className="text-xs font-medium text-ink-muted hover:text-ink disabled:opacity-60"
+                              className="tap-target text-xs font-medium text-ink-muted hover:text-ink disabled:opacity-60"
                             >
                               Cancel
                             </button>
@@ -215,7 +215,7 @@ export default function LibraryPage() {
                           <button
                             type="button"
                             onClick={() => setConfirmingDeleteId(video.id)}
-                            className="text-xs font-medium text-ink-muted hover:text-status-danger"
+                            className="tap-target text-xs font-medium text-ink-muted hover:text-status-danger"
                           >
                             Delete
                           </button>

@@ -145,7 +145,7 @@ export function QueueScheduling() {
             id="cadence-timezone"
             value={timezone}
             onChange={(event) => editForm({ timezone: event.target.value })}
-            className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink"
+            className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink pointer-coarse:min-h-11"
           >
             {timezoneOptions.map((tz) => (
               <option key={tz} value={tz}>
@@ -156,7 +156,7 @@ export function QueueScheduling() {
         </div>
 
         <div className="flex flex-col gap-1">
-          <label className="flex items-center gap-2 text-sm font-medium text-ink">
+          <label className="tap-target flex items-center gap-2 text-sm font-medium text-ink">
             <input type="checkbox" checked={isActive} onChange={(event) => editForm({ isActive: event.target.checked })} />
             Posting schedule enabled
           </label>

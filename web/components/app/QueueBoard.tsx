@@ -185,7 +185,7 @@ export function QueueBoard() {
                   type="button"
                   disabled={busyVideoId === video.id}
                   onClick={() => void handleAssignNext(video.id)}
-                  className="shrink-0 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
+                  className="tap-target shrink-0 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:border-accent/40 hover:text-accent disabled:opacity-60"
                 >
                   {busyVideoId === video.id ? "Assigning…" : "Assign to next available slot"}
                 </button>
@@ -200,7 +200,7 @@ export function QueueBoard() {
           type="button"
           onClick={() => setViewMode("list")}
           aria-pressed={viewMode === "list"}
-          className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
+          className={`tap-target rounded-lg border px-3 py-1.5 text-sm font-medium ${
             viewMode === "list" ? "border-accent text-accent" : "border-border text-ink-muted"
           }`}
         >
@@ -210,7 +210,7 @@ export function QueueBoard() {
           type="button"
           onClick={() => setViewMode("calendar")}
           aria-pressed={viewMode === "calendar"}
-          className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
+          className={`tap-target rounded-lg border px-3 py-1.5 text-sm font-medium ${
             viewMode === "calendar" ? "border-accent text-accent" : "border-border text-ink-muted"
           }`}
         >

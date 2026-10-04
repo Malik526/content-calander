@@ -13,7 +13,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
         <button
           type="button"
           onClick={onRetry}
-          className="rounded-lg border border-status-danger/30 px-4 py-2 text-sm font-medium text-status-danger hover:bg-status-danger-soft"
+          className="tap-target rounded-lg border border-status-danger/30 px-4 py-2 text-sm font-medium text-status-danger hover:bg-status-danger-soft"
         >
           Try again
         </button>

@@ -58,14 +58,32 @@ Additional browser checks on the after build (all passed):
 `tests/lib/session.test.tsx` covers the session-object stability fix (verified failing without
 it). Existing page tests run inside the real provider stack via `tests/test-utils.tsx`.
 
-## Remaining UX issues (deferred to the visual redesign)
+## Tap targets (fixed in the 3.15 follow-up)
 
-- Several tap targets are under 44 px at phone width: text-style Delete/Remove links (16 px),
-  filter tabs (32 px), header Sign out (24 px), Queue view toggles and slot pickers (30–34 px),
-  native checkboxes. The bottom nav is fine. These are styling decisions for the planned
-  design-system pass, not state bugs.
-- The first visit to a resource still shows a placeholder (no data to show yet), and a hard reload
-  starts with "Loading your account…" while the stored session is read.
+The first audit found many controls under 44 px at phone width: text-style Delete/Remove links
+(16 px), filter tabs (32 px), header links (20–24 px), Queue toggles and pickers (30–34 px),
+checkboxes, and buttons at 38–42 px. Fixed without changing their look:
+
+- **`tap-target`** (`web/app/globals.css`): on touch screens only (`pointer: coarse`), an
+  invisible centered `::after` hit box of at least 44×44 px. Added to the `Button` and
+  `ErrorState` primitives and to every small link/button in the `/app` screens. Checkboxes get it
+  through their wrapping `<label>`.
+- **Native controls** can't carry `::after`, so the timezone select, time picker, slot picker and
+  file input use `pointer-coarse:min-h-11`. That's 44 px tall on touch screens, same styling.
+  This is the only visible change, and only on touch devices.
+- **`tap-target-dot`** for calendar slot dots: a full 44×44 px when a day has one slot. When it
+  has several, each dot is 44 px tall but only as wide as its own column (14 px), so neighbours
+  never overlap. Making those dots 44 px wide would need a visual or interaction change; List
+  view remains the comfortable way to pick between same-day slots.
+
+Verified in Chromium with touch emulation at 390 px, including the delete confirmation, time
+picker and calendar/selected-slot states: every control has an effective hit area of at least
+44×44 px except the multi-slot calendar dots above, and there's no horizontal overflow.
+Screenshots with the hit boxes on and forced off are pixel-identical on all four routes. With a
+mouse (`pointer: fine`) nothing changes.
+
+Still present: the first visit to a resource shows a placeholder (no data yet), and a hard reload
+starts with "Loading your account…" while the stored session is read.
 
 ## Not verified
 
