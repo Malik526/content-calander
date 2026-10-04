@@ -1,5 +1,25 @@
 # Content Automation — Changelog
 
+## 2026-10-04
+
+### Autobuild — Validation Commands and Checkpoint Commits
+
+Configuration only. No application, backend or `web/` change.
+
+- `.autobuild/config.yaml` now defines the controller-owned validation that
+  harness autobuild 0.2 (`autobuild run`) runs in each run worktree:
+  `pytest`, using the shared `.venv` with `PYTHONPATH=${WORKTREE}/src` so the
+  worktree's code is tested rather than this checkout's editable install, and,
+  only when `web/` files change, `npm ci`, `npm run lint`, `npx tsc --noEmit`
+  and `npm test` in `web/`. `next build` is left out because it depends on
+  deployment environment variables.
+- `git.checkpoint_commits: true`: after validation passes, the controller
+  makes one commit on the run's `agent/` branch. It never pushes or merges.
+  `limits.implementer_timeout_seconds: 3600`.
+- Validation: every command passed against a clean export of `HEAD`
+  (pytest 1103 passed / 86 skipped; web install, lint, typecheck, test).
+  Confirmed `PYTHONPATH` makes tests import the worktree's `src/`.
+
 ## 2026-10-03
 
 ### Autobuild — Project Configuration

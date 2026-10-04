@@ -17,6 +17,7 @@ agents:                          # any registered provider may fill any role
 git:
   protected_branches: [main]
   branch_prefix: agent/
+  checkpoint_commits: true       # one controller commit on the run branch after validation passes; never pushed
 
 paths:
   roadmap: docs/roadmap          # created by the planner on first approved plan
@@ -27,10 +28,42 @@ paths:
 limits:
   max_review_cycles: 3
   max_consecutive_implementations: 5
+  implementer_timeout_seconds: 3600
 
 validation:
   browser_tool: playwright       # web/ has user-facing flows; browser QA arrives in phase 0.4
   require_clean_git_before_start: true
+  # Controller-owned validation, run in the run worktree after implementation.
+  # ${PROJECT_ROOT} = this checkout, ${WORKTREE} = the run worktree. The shared
+  # .venv's editable install points at this checkout's src/, so PYTHONPATH puts
+  # the worktree's src/ first; web/ gets its own node_modules via npm ci.
+  commands:
+    - name: pytest
+      kind: test
+      run: ${PROJECT_ROOT}/.venv/bin/python -m pytest -q
+      env: {PYTHONPATH: "${WORKTREE}/src"}
+      timeout_seconds: 1800
+    - name: web-install
+      kind: setup
+      cwd: web
+      run: npm ci --prefer-offline --no-audit --no-fund
+      paths: ["web/*"]
+      timeout_seconds: 900
+    - name: web-lint
+      kind: lint
+      cwd: web
+      run: npm run lint
+      paths: ["web/*"]
+    - name: web-typecheck
+      kind: typecheck
+      cwd: web
+      run: npx tsc --noEmit
+      paths: ["web/*"]
+    - name: web-test
+      kind: test
+      cwd: web
+      run: npm test
+      paths: ["web/*"]
 
 notifications:
   enabled: false                 # providers arrive in phase 0.6
