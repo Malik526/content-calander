@@ -37,6 +37,7 @@ const queueApi = vi.hoisted(() => ({
 vi.mock("@/lib/api/queue", () => queueApi);
 const platformsApi = vi.hoisted(() => ({
   getMe: vi.fn(), getTikTokConnection: vi.fn(), connectTikTok: vi.fn(), disconnectTikTok: vi.fn(),
+  getInstagramConnection: vi.fn(),
 }));
 vi.mock("@/lib/api/platforms", () => platformsApi);
 
@@ -66,6 +67,9 @@ beforeEach(() => {
   cadenceApi.getCadence.mockResolvedValue(CADENCE);
   queueApi.listQueueSlots.mockResolvedValue({ slots: [openSlot] });
   platformsApi.getTikTokConnection.mockResolvedValue(CONNECTED);
+  platformsApi.getInstagramConnection.mockResolvedValue({
+    platform: "instagram", connected: false, status: "DISCONNECTED", account_label: null, connect_available: false,
+  });
 });
 
 afterEach(() => {
@@ -163,7 +167,7 @@ describe("mutations update every view that shows the data", () => {
     platformsApi.disconnectTikTok.mockResolvedValue(DISCONNECTED);
     const app = renderWithProviders(<SettingsPage />);
     await userEvent.setup().click(await screen.findByRole("button", { name: "Disconnect" }));
-    await screen.findByText("Not connected");
+    await within(await screen.findByRole("group", { name: "tiktok connection" })).findByText("Not connected");
 
     app.rerenderWithProviders(<AppHomePage />);
     expect(await screen.findByRole("link", { name: /connect in settings/i })).toBeInTheDocument();

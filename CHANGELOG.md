@@ -2,6 +2,56 @@
 
 ## 2026-10-04
 
+### Milestone 4.0 — Instagram Integration Foundation
+
+No live Instagram connection or publishing yet. No schema change.
+
+- Platform registry (`publishing/platforms.py`): `tiktok` and `instagram`, with a minimal
+  capability model covering only real differences (`media_delivery` push_file/pull_url,
+  `requires_finalize_step`, `caption_max_chars`, `connection_available`, `publishing_available`).
+  Instagram's availability flags stay False until 4.1 and 4.2. Failure-taxonomy labels come from
+  the registry.
+- Materializer guard: `platform_posts` rows are created only for platforms with a hosted
+  publisher, so listing `instagram` in `CONTENT_CALENDAR_TARGET_PUBLISHING_PLATFORMS` early can't
+  create posts nothing publishes.
+- Instagram config contract (`config.py`, `publishing/instagram/configuration.py`):
+  `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `INSTAGRAM_REDIRECT_URI` (API service only),
+  optional `INSTAGRAM_GRAPH_API_VERSION` (v25.0) and `INSTAGRAM_MEDIA_URL_TTL_SECONDS` (3600,
+  bounded 300–86,400). Validation names problems without echoing values. Empty optional lines
+  fall back to defaults. Verified scopes: `instagram_business_basic`,
+  `instagram_business_content_publish`.
+- Signed media URLs: `StorageProtocol.create_signed_url`. `SupabaseStorage` uses
+  `/object/sign`; `LocalStorage` raises `SignedUrlUnsupportedError`. `storage/signed_urls.py`
+  handles lifetime bounds and log redaction. Verified against the real project: an
+  unauthenticated range request returns 206; tokenless and public-bucket paths are refused, so
+  the bucket stays private.
+- `GET /api/platforms/instagram/status`: platform-neutral `PlatformConnectionStatus` from the
+  shared tables, owner-scoped, no credential fields, `connect_available` False until 4.1.
+  TikTok endpoints are unchanged.
+- Web: `PlatformId.INSTAGRAM`, `PlatformConnectionStatus` type, `getInstagramConnection`,
+  `useInstagramConnection` (cached per user and platform), and `PlatformConnectionCard`
+  (extracted unchanged from the TikTok card, with an accessible group name). Settings shows
+  Instagram's real status with a "coming soon" note and no Connect button.
+- Tests: `test_platforms.py`, `test_instagram_configuration.py`, `test_signed_urls.py`,
+  `test_api_platforms_instagram.py`, the real-bucket signed URL round trip in
+  `test_storage_supabase.py`, and Settings Instagram-card and API-call tests. TikTok assertions
+  are scoped to the TikTok card.
+
+### Milestone 4.0 — Docs: ADR-0018, Meta Setup Checklist
+
+- `docs/decisions/0018-instagram-integration-architecture.md`:
+  - Instagram Login chosen over Facebook Login, with Meta requirements verified 2026-10-04;
+  - TikTok-specific assumptions found;
+  - shared-table design, signed-URL media delivery;
+  - container lifecycle mapped onto the 3.13 checkpoint/UNKNOWN rules;
+  - the 4.2 generic changes (media-source publisher input, finalize step,
+    `platform_media_id`);
+  - native-ready OAuth `return_target`.
+- `docs/evaluations/productization/milestone-4.0-instagram-foundation.md`: verification record,
+  manual Meta developer-console checklist (now vs before real users), 4.1 scope.
+- `PROJECT_STATE.md`, `AGENTS.md` (durable platform rules), `README.md`, `web/README.md`,
+  `.env.example`, `docs/architecture/native-ios-readiness.md`.
+
 ### Milestone 3.15 Follow-up — 44px Mobile Tap Targets
 
 - New `tap-target` utility (`web/app/globals.css`): on touch screens only (`pointer: coarse`),

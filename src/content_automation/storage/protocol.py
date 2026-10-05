@@ -50,6 +50,17 @@ class StorageProtocol(Protocol):
         convention, e.g. ContentStore.claim_platform_post)."""
         ...
 
+    def create_signed_url(self, key: str, expires_in_seconds: int) -> str:
+        """Milestone 4.0: a time-limited URL to key's bytes that an external
+        platform can fetch (Instagram's Reel video_url), so canonical media
+        never has to be public. Lifetime is bounded by
+        storage.signed_urls.validate_ttl. The URL is a bearer credential
+        until it expires: never store or log it unredacted
+        (storage.signed_urls.redact_signed_url). Raises
+        SignedUrlUnsupportedError where no externally reachable URL exists
+        (LocalStorage), and StorageObjectNotFoundError for a missing key."""
+        ...
+
     def materialize(self, key: str) -> AbstractContextManager[Path]:
         """Context manager yielding a real local filesystem Path containing
         key's bytes, for tools that require one (ffprobe, ffmpeg,

@@ -38,6 +38,7 @@ from typing import Iterator
 import requests
 
 from content_automation.config import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_STORAGE_BUCKET, SUPABASE_URL
+from content_automation.storage.signed_urls import validate_ttl
 from content_automation.storage.local import StorageObjectNotFoundError
 
 _REQUEST_TIMEOUT_SECONDS = 30
@@ -135,6 +136,35 @@ class SupabaseStorage:
                 f"Supabase Storage delete failed for key={key!r}: HTTP {response.status_code}: {response.text[:200]!r}",
                 reason_code="HTTP_ERROR", http_status=response.status_code,
             )
+
+    def create_signed_url(self, key: str, expires_in_seconds: int) -> str:
+        """A time-limited URL anyone holding it can GET this private object
+        with (Milestone 4.0, for platforms that pull media, e.g. Instagram).
+        POST /storage/v1/object/sign/{bucket}/{key} {"expiresIn": seconds}
+        returns a path relative to /storage/v1. The URL embeds a token:
+        log it only via storage.signed_urls.redact_signed_url."""
+        validate_ttl(expires_in_seconds)
+        try:
+            response = requests.post(
+                f"{self.base_url}/storage/v1/object/sign/{self.bucket}/{key}",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json={"expiresIn": expires_in_seconds},
+                timeout=_REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as exc:
+            raise StorageError(f"Could not reach Supabase Storage to sign key={key!r}: {exc}", reason_code="NETWORK_ERROR") from exc
+        if response.status_code == 404 or (response.status_code == 400 and "not found" in response.text.lower()):
+            raise StorageObjectNotFoundError(f"SupabaseStorage: no object at bucket={self.bucket!r} key={key!r}")
+        if response.status_code >= 400:
+            raise StorageError(
+                f"Supabase Storage signing failed for key={key!r}: HTTP {response.status_code}",
+                reason_code="HTTP_ERROR", http_status=response.status_code,
+            )
+        try:
+            signed_path = response.json()["signedURL"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise StorageError(f"Supabase Storage returned no signedURL for key={key!r}", reason_code="MALFORMED_RESPONSE") from exc
+        return f"{self.base_url}/storage/v1{signed_path}"
 
     @contextmanager
     def materialize(self, key: str) -> Iterator[Path]:

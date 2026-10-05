@@ -67,6 +67,20 @@ export interface CurrentUser {
   display_name: string | null;
 }
 
+/**
+ * Milestone 4.0 — the platform-neutral connection shape
+ * (api/schemas/platforms.py PlatformConnectionStatus), first used by
+ * Instagram. connect_available is false until that platform's connect flow
+ * exists and is configured on the server; never offer Connect otherwise.
+ */
+export interface PlatformConnectionStatus {
+  platform: PlatformIdValue;
+  connected: boolean;
+  status: string;
+  account_label: string | null;
+  connect_available: boolean;
+}
+
 export interface TikTokConnectionStatus {
   platform: typeof PlatformId.TIKTOK;
   connected: boolean;

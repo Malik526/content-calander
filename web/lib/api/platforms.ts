@@ -8,7 +8,7 @@
  */
 
 import { apiRequest } from "@/lib/api/client";
-import type { CurrentUser, TikTokConnectionStatus } from "@/lib/api/types";
+import type { CurrentUser, PlatformConnectionStatus, TikTokConnectionStatus } from "@/lib/api/types";
 
 export function getMe(accessToken: string | null): Promise<CurrentUser> {
   return apiRequest<CurrentUser>("/api/me", { accessToken });
@@ -30,4 +30,9 @@ export function disconnectTikTok(accessToken: string | null): Promise<TikTokConn
     method: "POST",
     accessToken,
   });
+}
+
+/** Milestone 4.0 — read-only until the 4.1 connect flow exists. */
+export function getInstagramConnection(accessToken: string | null): Promise<PlatformConnectionStatus> {
+  return apiRequest<PlatformConnectionStatus>("/api/platforms/instagram/status", { accessToken });
 }

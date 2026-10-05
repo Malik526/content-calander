@@ -1,6 +1,6 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsPage from "@/app/app/settings/page";
 import { renderWithProviders } from "@/tests/test-utils";
 
@@ -24,8 +24,17 @@ const platformsApi = vi.hoisted(() => ({
   getTikTokConnection: vi.fn(),
   connectTikTok: vi.fn(),
   disconnectTikTok: vi.fn(),
+  getInstagramConnection: vi.fn(),
 }));
 vi.mock("@/lib/api/platforms", () => platformsApi);
+
+const INSTAGRAM_NOT_CONNECTED = {
+  platform: "instagram", connected: false, status: "DISCONNECTED", account_label: null, connect_available: false,
+};
+
+beforeEach(() => {
+  platformsApi.getInstagramConnection.mockResolvedValue(INSTAGRAM_NOT_CONNECTED);
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -40,7 +49,7 @@ describe("SettingsPage — TikTok connection", () => {
 
     renderWithProviders(<SettingsPage />);
 
-    await waitFor(() => expect(screen.getByText("Not connected")).toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByRole("group", { name: "tiktok connection" })).getByText("Not connected")).toBeInTheDocument());
     expect(platformsApi.getTikTokConnection).toHaveBeenCalledWith("real-token");
     expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
   });
@@ -108,7 +117,7 @@ describe("SettingsPage — TikTok connection", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /try again/i }));
 
-    await waitFor(() => expect(screen.getByText("Not connected")).toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByRole("group", { name: "tiktok connection" })).getByText("Not connected")).toBeInTheDocument());
   });
 
   it("calls connectTikTok with the session's access token when Connect is clicked", async () => {
@@ -140,7 +149,7 @@ describe("SettingsPage — TikTok connection", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
 
-    await waitFor(() => expect(screen.getByText("Not connected")).toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByRole("group", { name: "tiktok connection" })).getByText("Not connected")).toBeInTheDocument());
     expect(platformsApi.disconnectTikTok).toHaveBeenCalledWith("real-token");
   });
 
@@ -154,5 +163,49 @@ describe("SettingsPage — TikTok connection", () => {
 
     await waitFor(() => expect(screen.getByText(/denied or cancelled/i)).toBeInTheDocument());
     expect(window.location.search).toBe("");
+  });
+});
+
+// Milestone 4.0: Instagram is shown with its real status, read-only.
+describe("SettingsPage — Instagram card", () => {
+  const TIKTOK_CONNECTED = { platform: "tiktok", connected: true, status: "ACTIVE", account_label: null };
+
+  it("shows Instagram as not connected, says connecting is coming, and offers no Instagram button", async () => {
+    platformsApi.getTikTokConnection.mockResolvedValue(TIKTOK_CONNECTED);
+    renderWithProviders(<SettingsPage />);
+
+    const instagramCard = within(await screen.findByRole("group", { name: "instagram connection" }));
+    expect(instagramCard.getByText("Not connected")).toBeInTheDocument();
+    expect(instagramCard.getByText("Connecting Instagram is coming soon.")).toBeInTheDocument();
+    expect(instagramCard.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /connect/i }).map((b) => b.textContent)).toEqual(["Disconnect"]);
+  });
+
+  it("keeps TikTok's card and actions unchanged next to Instagram", async () => {
+    platformsApi.getTikTokConnection.mockResolvedValue({ ...TIKTOK_CONNECTED, connected: false, status: "DISCONNECTED" });
+    renderWithProviders(<SettingsPage />);
+    expect(await screen.findByRole("button", { name: "Connect" })).toBeInTheDocument();
+    expect(await screen.findByText("Connecting Instagram is coming soon.")).toBeInTheDocument();
+    expect(screen.getAllByText("Not connected")).toHaveLength(2);
+  });
+
+  it("shows a connected Instagram account without the coming-soon note", async () => {
+    platformsApi.getTikTokConnection.mockResolvedValue(TIKTOK_CONNECTED);
+    platformsApi.getInstagramConnection.mockResolvedValue({
+      ...INSTAGRAM_NOT_CONNECTED, connected: true, status: "ACTIVE", account_label: "@picklebatch",
+    });
+    renderWithProviders(<SettingsPage />);
+    expect(await screen.findByText("@picklebatch")).toBeInTheDocument();
+    expect(screen.queryByText("Connecting Instagram is coming soon.")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Connected")).toHaveLength(2);
+  });
+
+  it("an Instagram load failure is shown with Retry and doesn't affect TikTok", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    platformsApi.getTikTokConnection.mockResolvedValue(TIKTOK_CONNECTED);
+    platformsApi.getInstagramConnection.mockRejectedValue(new ApiError("down", { status: 503 }));
+    renderWithProviders(<SettingsPage />);
+    expect(await screen.findByText("Could not load your Instagram connection.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
   });
 });

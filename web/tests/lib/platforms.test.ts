@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { connectTikTok, disconnectTikTok, getMe, getTikTokConnection } from "@/lib/api/platforms";
+import { connectTikTok, disconnectTikTok, getInstagramConnection, getMe, getTikTokConnection } from "@/lib/api/platforms";
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response;
@@ -42,6 +42,20 @@ describe("lib/api/platforms.ts", () => {
 
     expect(fetchMock.mock.calls[0][0]).toContain("/api/platforms/tiktok/status");
     expect(result.connected).toBe(false);
+  });
+
+  it("getInstagramConnection calls the Instagram status endpoint with the bearer token (Milestone 4.0)", async () => {
+    const fetchMock = fetchMockReturning({
+      platform: "instagram", connected: false, status: "DISCONNECTED", account_label: null, connect_available: false,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getInstagramConnection("token");
+
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/platforms/instagram/status");
+    const [, init = {}] = fetchMock.mock.calls[0];
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer token");
+    expect(result.connect_available).toBe(false);
   });
 
   it("connectTikTok POSTs to the connect endpoint and returns the authorization_url", async () => {

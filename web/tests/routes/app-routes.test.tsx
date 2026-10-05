@@ -57,6 +57,7 @@ describe("/app product routes", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(screen.getByText("Local Creator")).toBeInTheDocument();
     expect(screen.getByText("local@pickle-batch.local")).toBeInTheDocument();
-    expect(await screen.findByText("Not connected")).toBeInTheDocument();
+    // Milestone 4.0: TikTok and Instagram each show their own (dev-mock) status.
+    expect(await screen.findAllByText("Not connected")).toHaveLength(2);
   });
 });

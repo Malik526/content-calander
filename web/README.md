@@ -64,7 +64,7 @@ Anything server-only (a database URL, a service-role key, `SUPABASE_JWT_SECRET`,
 `tests/lib/no-secrets-in-client-bundle.test.ts`.
 
 **Server state (Milestone 3.15).** Screens read backend data through TanStack Query hooks in
-`hooks/` (`useVideos`, `useCadence`, `useQueueSlots`, `useTikTokConnection`), cached per user by
+`hooks/` (`useVideos`, `useCadence`, `useQueueSlots`, `useTikTokConnection`, `useInstagramConnection`), cached per user by
 `lib/query/`, and write through the mutation hooks/upload manager, which update or invalidate the
 affected cache entries. In-memory UI state that should survive navigation uses
 `lib/ui-state.tsx`. See `docs/decisions/0017-client-server-state-cache.md`; tests render screens

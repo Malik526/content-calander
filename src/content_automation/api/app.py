@@ -24,7 +24,7 @@ import re
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from content_automation.api.routes import cadence, captions, me, platforms_tiktok, queue, videos
+from content_automation.api.routes import cadence, captions, me, platforms_instagram, platforms_tiktok, queue, videos
 from content_automation.config import (
     API_CORS_ALLOWED_ORIGINS,
     STORAGE_BACKEND,
@@ -109,6 +109,7 @@ app.add_middleware(
 
 app.include_router(me.router, prefix="/api")
 app.include_router(platforms_tiktok.router, prefix="/api")
+app.include_router(platforms_instagram.router, prefix="/api")
 app.include_router(videos.router, prefix="/api")
 app.include_router(cadence.router, prefix="/api")
 app.include_router(queue.router, prefix="/api")

@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Spinner } from "@/components/ui/Spinner";
+import { PlatformConnectionCard } from "@/components/app/PlatformConnectionCard";
+import { useInstagramConnection } from "@/hooks/useInstagramConnection";
 import { useTikTokActions } from "@/hooks/useTikTokActions";
 import { useTikTokConnection } from "@/hooks/useTikTokConnection";
 import { ApiError } from "@/lib/api/client";
@@ -37,6 +38,11 @@ import { connectedAccountName } from "@/lib/tiktokAccount";
  * A failed background refresh keeps the last status on screen with a
  * Retry notice; only a first-load failure replaces the card.
  *
+ * Milestone 4.0: an Instagram card shows that platform's real connection
+ * status (useInstagramConnection) through the shared
+ * PlatformConnectionCard. It offers no Connect button until the backend
+ * reports connect_available (the 4.1 connect flow).
+ *
  * Milestone 3.8.1: the posting-cadence editor that briefly lived here
  * (Milestone 3.8's "Scheduling" section) moved to /app/queue
  * (components/app/QueueScheduling.tsx) so it sits with the upcoming-slots
@@ -48,6 +54,8 @@ export default function SettingsPage() {
   const connectionQuery = useTikTokConnection();
   const { startConnect, disconnect } = useTikTokActions();
   const connection = connectionQuery.data ?? null;
+  const instagramQuery = useInstagramConnection();
+  const instagram = instagramQuery.data ?? null;
   const [connecting, setConnecting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -150,31 +158,43 @@ export default function SettingsPage() {
               <Spinner label="Loading connection status…" />
             </Card>
           ) : (
-            <Card className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex flex-col gap-0.5">
-                <p className="text-sm font-medium capitalize text-ink">{connection.platform}</p>
-                {accountName ? (
-                  <p className="text-xs text-ink-muted" data-testid="tiktok-connected-as">
-                    Connected as <span className="font-medium text-ink">{accountName}</span>
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-3">
-                <Badge tone={connection.connected ? "success" : "pending"}>
-                  {connection.connected ? "Connected" : "Not connected"}
-                </Badge>
-                {connection.connected ? (
-                  <Button type="button" variant="secondary" onClick={() => void handleDisconnect()}>
-                    Disconnect
-                  </Button>
-                ) : (
-                  <Button type="button" variant="secondary" onClick={() => void handleConnect()} disabled={connecting}>
-                    {connecting ? "Connecting…" : "Connect"}
-                  </Button>
-                )}
-              </div>
-            </Card>
+            <PlatformConnectionCard
+              name={connection.platform}
+              connected={connection.connected}
+              accountName={accountName}
+              accountTestId="tiktok-connected-as"
+            >
+              {connection.connected ? (
+                <Button type="button" variant="secondary" onClick={() => void handleDisconnect()}>
+                  Disconnect
+                </Button>
+              ) : (
+                <Button type="button" variant="secondary" onClick={() => void handleConnect()} disabled={connecting}>
+                  {connecting ? "Connecting…" : "Connect"}
+                </Button>
+              )}
+            </PlatformConnectionCard>
           )}
+
+          {/* Milestone 4.0: Instagram's real status, read-only. A Connect
+              button appears only once the backend reports connect_available
+              (Milestone 4.1). */}
+          <div className="mt-3">
+            {instagramQuery.isError && instagram === null ? (
+              <ErrorState message="Could not load your Instagram connection." onRetry={() => void instagramQuery.refetch()} />
+            ) : instagram === null ? (
+              <Card>
+                <Spinner label="Loading connection status…" />
+              </Card>
+            ) : (
+              <PlatformConnectionCard
+                name={instagram.platform}
+                connected={instagram.connected}
+                accountName={instagram.account_label}
+                note={!instagram.connected && !instagram.connect_available ? "Connecting Instagram is coming soon." : undefined}
+              />
+            )}
+          </div>
         </section>
       </div>
     </>

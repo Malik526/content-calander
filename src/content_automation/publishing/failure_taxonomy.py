@@ -26,9 +26,11 @@ Dependencies:
 
 from dataclasses import dataclass
 
+from content_automation.publishing.platforms import PLATFORMS
 from content_automation.publishing.tiktok.failure_codes import TIKTOK_FAILURE_CATEGORIES
 
-PLATFORM_LABELS = {"tiktok": "TikTok"}
+# Milestone 4.0: labels come from the platform registry (publishing/platforms.py).
+PLATFORM_LABELS = {platform.id: platform.label for platform in PLATFORMS.values()}
 
 # Action hints are stable codes; the frontend owns their button/link text.
 RECONNECT_ACCOUNT = "RECONNECT_ACCOUNT"

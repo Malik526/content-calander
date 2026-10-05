@@ -44,6 +44,7 @@ Dependencies:
 
 from content_automation.persistence.content_store import ContentStore
 from content_automation.config import TARGET_PUBLISHING_PLATFORMS
+from content_automation.publishing.platforms import publishable
 
 
 def materialize_platform_posts_for_assignment(
@@ -67,7 +68,10 @@ def materialize_platform_posts_for_assignment(
     if slot is None:
         raise ValueError(f"content_slot {slot_id} not found — was assign_slot() called first?")
 
-    for platform in TARGET_PUBLISHING_PLATFORMS:
+    # Milestone 4.0: only platforms with a hosted publisher get a row —
+    # listing "instagram" before Milestone 4.2 must not create posts that
+    # nothing will ever publish (they'd surface as SCHEDULE_MISSED).
+    for platform in publishable(TARGET_PUBLISHING_PLATFORMS):
         store.insert_platform_post_if_missing(
             video_id, platform, scheduled_at=slot.scheduled_at, created_at=created_at, user_id=user_id
         )

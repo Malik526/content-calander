@@ -27,3 +27,19 @@ class TikTokConnectionStatus(BaseModel):
 
 class TikTokConnectStartResponse(BaseModel):
     authorization_url: str
+
+
+class PlatformConnectionStatus(BaseModel):
+    """Milestone 4.0: the platform-neutral connection shape, first used by
+    Instagram (TikTok keeps TikTokConnectionStatus, a superset with its
+    creator identity). Never carries a credential.
+
+    connect_available: the hosted connect flow exists AND is configured on
+    this server. False for Instagram until Milestone 4.1 ships, so clients
+    show the platform without offering a button that can't work."""
+
+    platform: str
+    connected: bool
+    status: str
+    account_label: str | None = None
+    connect_available: bool = False

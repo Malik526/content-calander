@@ -95,3 +95,25 @@ def test_large_ish_file_streams_without_loading_whole_object_into_memory(storage
     with storage.materialize(key) as materialized:
         assert materialized.stat().st_size == 5 * 1024 * 1024
         assert materialized.read_bytes() == src.read_bytes()
+
+
+def test_signed_url_serves_a_private_object_without_credentials_and_only_with_its_token(storage, tmp_path, cleanup_keys):
+    # Milestone 4.0: the mechanism Instagram's video_url will rely on.
+    import requests
+
+    key = "signed/clip.mp4"
+    cleanup_keys.append(key)
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(b"signed url bytes" * 64)
+    storage.put(key, src)
+
+    url = storage.create_signed_url(key, 300)
+    response = requests.get(url, timeout=30)  # no Authorization header, as Meta would fetch it
+    assert response.status_code == 200
+    assert response.content == src.read_bytes()
+    assert requests.get(url.split("?")[0], timeout=30).status_code >= 400  # the token is what grants access
+
+
+def test_signed_url_for_a_missing_object_raises_not_found(storage):
+    with pytest.raises(StorageObjectNotFoundError):
+        storage.create_signed_url("signed/does-not-exist.mp4", 300)

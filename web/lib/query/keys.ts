@@ -16,5 +16,7 @@ export const queryKeys = {
   /** All Queue windows; use for invalidation after any slot change. */
   queueSlotsAll: (userId: string) => ["user", userId, "queue-slots"] as const,
   queueSlots: (userId: string, from: string, to: string) => ["user", userId, "queue-slots", from, to] as const,
+  /** One connection status per user and platform (Milestone 4.0). */
+  platformConnection: (userId: string, platform: string) => ["user", userId, "platforms", platform] as const,
   tiktokConnection: (userId: string) => ["user", userId, "platforms", "tiktok"] as const,
 };

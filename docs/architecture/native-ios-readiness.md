@@ -97,6 +97,11 @@ deep-link/universal-link setup to test, and the web flow is validated in product
 client side is already separated: `useTikTokActions().startConnect()` returns the URL, and only
 the Settings page (web adapter) decides to navigate to it.
 
+**Instagram (Milestone 4.x):** the Instagram connect flow is designed native-ready from the start
+(ADR-0018 Decision 6). 4.1 adds a nullable, allowlisted `oauth_states.return_target`, chosen at
+connect time, and the Instagram callback redirects there (default: web Settings). Milestone 7 then
+only adds native return targets, and moves TikTok onto the same column.
+
 Platform registration note: TikTok redirect URIs must be HTTPS; native apps keep the backend
 callback and use a custom scheme or universal link only for the final hop back into the app.
 

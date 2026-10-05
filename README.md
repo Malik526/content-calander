@@ -348,6 +348,8 @@ Public routes: `/` (homepage), `/privacy`, `/terms` — real, stable public page
 
 **Hosted worker (Milestone 3.12):** `python3 cli/run_worker.py` — a separate long-running process (Railway service `railway.worker.json`) that publishes due hosted posts with each user's own TikTok connection. `--dry-run` logs due work without claiming anything; `--once` runs a single cycle. Requires Postgres (`DATABASE_URL`), `STORAGE_BACKEND=supabase`, `CREDENTIAL_ENCRYPTION_KEY`, and `ffprobe` on `PATH`. See `docs/decisions/0015-hosted-scheduler-worker.md`.
 
+**Instagram (Milestone 4.0 foundation):** Instagram API with Instagram Login (professional Business/Creator accounts, no Facebook Page). `GET /api/platforms/instagram/status` reports the real connection state; the connect flow (4.1) and Reels publishing (4.2) aren't built yet. Configuration contract (`.env.example`, "Instagram" section): the **API service** needs `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `INSTAGRAM_REDIRECT_URI` once 4.1 ships; the **worker** needs no Instagram secret (refresh and publishing use the user's stored token) but needs `STORAGE_BACKEND=supabase`, because Instagram fetches each Reel from a short-lived signed storage URL (`StorageProtocol.create_signed_url`). Nothing Instagram-related goes to Netlify. See `docs/decisions/0018-instagram-integration-architecture.md`.
+
 No real scheduling controls, real queue/calendar backend data, hosted workers, billing, or analytics exist yet — see `docs/decisions/0010-frontend-app-shell.md`/`0011-real-authentication-and-tiktok-connection.md` for the architecture decisions and `docs/architecture/hosted-product-boundary.md` §18 for how the frontend and backend boundaries line up.
 
 ## Calendar Ownership

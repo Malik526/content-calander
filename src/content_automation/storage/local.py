@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Iterator
 
 from content_automation.config import LOCAL_STORAGE_ROOT
+from content_automation.storage.signed_urls import SignedUrlUnsupportedError
 
 
 class StorageObjectNotFoundError(Exception):
@@ -49,6 +50,14 @@ class LocalStorage:
 
     def delete(self, key: str) -> None:
         self._path_for(key).unlink(missing_ok=True)
+
+    def create_signed_url(self, key: str, expires_in_seconds: int) -> str:
+        """Milestone 4.0: local files have no URL an external platform could
+        fetch, so pull-URL platforms (Instagram) need SupabaseStorage."""
+        raise SignedUrlUnsupportedError(
+            "LocalStorage can't issue a URL an external platform could fetch; "
+            "set STORAGE_BACKEND=supabase to publish to pull-URL platforms such as Instagram."
+        )
 
     @contextmanager
     def materialize(self, key: str) -> Iterator[Path]:

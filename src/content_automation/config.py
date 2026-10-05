@@ -501,6 +501,50 @@ TIKTOK_WEB_REDIRECT_URI = os.getenv("TIKTOK_WEB_REDIRECT_URI", "")
 OAUTH_STATE_TTL_SECONDS = int(os.getenv("OAUTH_STATE_TTL_SECONDS", "600"))
 
 # ---------------------------------------------------------------------------
+# Instagram (Milestone 4.0 — configuration contract only; the OAuth flow
+# arrives in 4.1 and Reels publishing in 4.2). Uses the Instagram API with
+# Instagram Login (Business Login for Instagram): Instagram professional
+# accounts (Business or Creator), no linked Facebook Page. See
+# docs/decisions/0018-instagram-integration-architecture.md.
+# ---------------------------------------------------------------------------
+
+# The Instagram app ID and secret from the Meta App Dashboard's
+# "Instagram > API setup with Instagram login" page — distinct from the
+# Meta (Facebook) app ID. Needed by the API process only (authorization
+# URL + code exchange). The worker never needs the secret: long-lived token
+# refresh and publishing use only the user's access token. Never committed;
+# empty by default so a missing setup fails clearly.
+INSTAGRAM_APP_ID = os.getenv("INSTAGRAM_APP_ID", "")
+INSTAGRAM_APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "")
+
+# The backend callback Instagram redirects to after authorization. Must be
+# https and match an entry under "Business login settings > OAuth redirect
+# URIs" exactly — same fixed-value reasoning as TIKTOK_WEB_REDIRECT_URI.
+INSTAGRAM_REDIRECT_URI = os.getenv("INSTAGRAM_REDIRECT_URI", "")
+
+# Instagram Login hosts (verified against Meta's docs, 2026-10-04):
+# authorization on www.instagram.com, code exchange on api.instagram.com,
+# long-lived token exchange/refresh and the Content Publishing API on
+# graph.instagram.com. Overridable for tests only.
+INSTAGRAM_AUTHORIZE_URL = os.getenv("CONTENT_CALENDAR_INSTAGRAM_AUTHORIZE_URL", "https://www.instagram.com/oauth/authorize")
+INSTAGRAM_TOKEN_URL = os.getenv("CONTENT_CALENDAR_INSTAGRAM_TOKEN_URL", "https://api.instagram.com/oauth/access_token")
+INSTAGRAM_GRAPH_BASE = os.getenv("CONTENT_CALENDAR_INSTAGRAM_GRAPH_BASE", "https://graph.instagram.com")
+# Pinned Graph API version for Content Publishing calls (Meta's current
+# examples use v25.0). Bump deliberately, not implicitly.
+INSTAGRAM_GRAPH_API_VERSION = os.getenv("INSTAGRAM_GRAPH_API_VERSION") or "v25.0"
+
+# Lifetime of the signed storage URL handed to Instagram as a Reel's
+# video_url. Meta fetches the video while the container is IN_PROGRESS,
+# normally minutes after creation; one hour leaves margin without leaving a
+# long-lived link to private media. If it expires before Meta finishes,
+# the container goes to ERROR and a retry creates a new container with a
+# fresh URL (an unpublished container never posts). Bounded to 5 min–24 h
+# by storage.signed_urls.
+# `or` (not a getenv default) so an empty line copied from .env.example
+# falls back instead of crashing int("") at import.
+INSTAGRAM_MEDIA_URL_TTL_SECONDS = int(os.getenv("INSTAGRAM_MEDIA_URL_TTL_SECONDS") or "3600")
+
+# ---------------------------------------------------------------------------
 # TikTok publishing (Milestone 2.0, corrected)
 # Added: September 2026 — proves one local MP4 can be published to a
 # dedicated TikTok test account via the real Content Posting API v2, using
