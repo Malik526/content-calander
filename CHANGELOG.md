@@ -1,5 +1,32 @@
 # Content Automation — Changelog
 
+## 2026-10-05
+
+### Tooling — Autobuild Configuration Repair
+
+- `.autobuild/config.yaml` now matches the current Autobuild contracts, where
+  validation runs sandboxed against a copy of the run's source, with no network
+  and no inherited environment.
+- Removed the `PYTHONPATH` injection, which the controller rejects as unsafe.
+  Its job (testing the run's `src/` rather than the checkout the `.venv`
+  editable install names) moved to `pytest.ini`: `pythonpath = src cli
+  tools/evaluation`. Local behavior is unchanged.
+- `.venv` and `web/node_modules` are mounted read-only from the checkout
+  (`validation.runtime_paths`). Commands are argv lists.
+- `web-install` (`npm ci`) became the offline `web-deps` (`npm ls --depth=0`).
+  Next's native packages exceed the sandbox's per-file write limit, so `npm ci`
+  can't run there. `npm ls` still fails on dependency drift.
+- `web-test` passes `--configLoader runner`, so vitest loads its config without
+  writing into `node_modules`.
+- Updated stale phase comments; `.autobuild/README.md` uses the `autobuild`
+  command.
+- Validation, through Autobuild's sandboxed validation of a clean snapshot: all
+  five commands PASS with no network.
+  - pytest: 1142 passed, 88 skipped. The skipped tests are the Postgres
+    integration tests, which need `DATABASE_URL` from the local `.env`;
+    Autobuild validation deliberately can't see it. Locally, 1230 pass.
+  - web: dependency check, lint, typecheck, and vitest 22 files / 181 tests.
+
 ## 2026-10-04
 
 ### Milestone 4.0 — Instagram Integration Foundation

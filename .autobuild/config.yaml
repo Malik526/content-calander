@@ -1,6 +1,6 @@
 # Autobuild project configuration for Content Automation / Pickle Batch.
 # Framework, schemas and policy: ~/.agents/autobuild (AI engineering harness).
-# Validate: ~/.agents/autobuild/bin/autobuild config ~/content-automation
+# Validate from this repository's root: autobuild config .   (see .autobuild/README.md)
 version: 1
 
 project:
@@ -31,44 +31,50 @@ limits:
   implementer_timeout_seconds: 3600
 
 validation:
-  browser_tool: playwright       # web/ has user-facing flows; browser QA arrives in phase 0.4
+  browser_tool: playwright       # declared tool; no browser_gates are configured yet, so no browser checks run
   require_clean_git_before_start: true
-  # Controller-owned validation, run in the run worktree after implementation.
-  # ${PROJECT_ROOT} = this checkout, ${WORKTREE} = the run worktree. The shared
-  # .venv's editable install points at this checkout's src/, so PYTHONPATH puts
-  # the worktree's src/ first; web/ gets its own node_modules via npm ci.
+  # Controller-owned validation runs in a disposable, sandboxed copy of the run's
+  # exact source snapshot (no network unless a command opts in, no inherited env).
+  # Ignored dependency trees are not in that snapshot, so they are mounted
+  # read-only from this checkout: the shared .venv, and web/node_modules (a fresh
+  # `npm ci` cannot run there: Next's native packages exceed the sandbox's 64 MiB
+  # per-file write limit). pytest.ini's `pythonpath = src ...` makes tests import
+  # the snapshot's src/ rather than the checkout the .venv's editable install names.
+  # Keep both trees current locally (`pip install -r requirements.txt`, `npm ci`).
+  runtime_paths: [.venv, web/node_modules]
   commands:
     - name: pytest
       kind: test
-      run: ${PROJECT_ROOT}/.venv/bin/python -m pytest -q
-      env: {PYTHONPATH: "${WORKTREE}/src"}
+      command: [.venv/bin/python, -m, pytest, -q]
       timeout_seconds: 1800
-    - name: web-install
+    - name: web-deps
       kind: setup
       cwd: web
-      run: npm ci --prefer-offline --no-audit --no-fund
+      command: [npm, ls, --depth=0]  # offline: fails if package.json needs packages the mounted tree lacks
       paths: ["web/*"]
-      timeout_seconds: 900
+      timeout_seconds: 300
     - name: web-lint
       kind: lint
       cwd: web
-      run: npm run lint
+      command: [npm, run, lint]
       paths: ["web/*"]
     - name: web-typecheck
       kind: typecheck
       cwd: web
-      run: npx tsc --noEmit
+      command: [npx, tsc, --noEmit]
       paths: ["web/*"]
     - name: web-test
       kind: test
       cwd: web
-      run: npm test
+      # --configLoader runner: load vitest.config.mts in place; the default bundler
+      # writes a temp file into node_modules, which is read-only in validation.
+      command: [npm, test, --, --configLoader, runner]
       paths: ["web/*"]
 
 notifications:
-  enabled: false                 # providers arrive in phase 0.6
+  enabled: false                 # console | file | email are available; see the harness NOTIFICATION_CONTRACT
   provider: console
 
 control:
-  remote_stop_enabled: false     # stop providers arrive in phase 0.6
+  remote_stop_enabled: false     # set true with provider: file to allow `autobuild stop <run>`
   provider: none
