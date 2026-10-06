@@ -2,6 +2,21 @@
 
 ## 2026-10-05
 
+### Tooling — Project Roadmap And Planner Handoff
+
+- Added `docs/roadmap/README.md` as the project-owned index for approved
+  Autobuild briefs, with briefs organized as
+  `docs/roadmap/<milestone>/<implementation-brief>.md`.
+- Documented the Claude Code/Codex planning flow: discuss and refine, wait for
+  explicit approval, write and validate the schema-compatible brief, then stop
+  for the human to review and commit the planning files before running
+  Autobuild (this project requires a clean Git tree).
+- Updated `.autobuild/config.yaml` and `.autobuild/README.md` to match the real
+  roadmap structure and show the validate → dry-run → run handoff. No fake
+  implementation brief was created.
+- `autobuild config .` and `autobuild agents .` pass with the new roadmap
+  directory present and no missing-path warning.
+
 ### Tooling — Autobuild Configuration Repair
 
 - `.autobuild/config.yaml` now matches the current Autobuild contracts, where

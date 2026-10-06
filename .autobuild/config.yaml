@@ -20,7 +20,7 @@ git:
   checkpoint_commits: true       # one controller commit on the run branch after validation passes; never pushed
 
 paths:
-  roadmap: docs/roadmap          # created by the planner on first approved plan
+  roadmap: docs/roadmap          # README index + <milestone>/<implementation-brief>.md
   project_state: PROJECT_STATE.md
   adr_directory: docs/decisions
   runs_directory: .autobuild/runs
