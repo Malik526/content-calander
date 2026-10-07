@@ -2,6 +2,53 @@
 
 ## 2026-10-06
 
+### Milestone 4.1 — Instagram OAuth Integration (M4.1A)
+
+Implemented and tested with mocked Meta responses only. **Live Meta OAuth is not verified**
+(M4.1B). Not deployed; migration `0011` has not been applied anywhere. No publishing.
+
+- Instagram connect flow: `POST /api/platforms/instagram/connect` (protected), public
+  `GET .../callback`, `POST .../disconnect`; status now shows `@username`. Callback binds only
+  through a single-use, expiring, Instagram-scoped server state (`code_verifier=''`), exchanges
+  with the stored redirect URI, stores only the encrypted long-lived token, records the current
+  Instagram account id (also on reconnect to a different account) and redirects to the attempt's
+  allowlisted target with `?instagram=connected|denied|invalid_state|expired_state|exchange_failed|unavailable`.
+- `publishing/instagram/`: `oauth.py` (authorization URL, short- → long-lived exchange, refresh,
+  `GET /me`; structured, secret-free errors), `credential_store.py` (refresh when ≥ 24 h old and
+  inside `INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS`, default 30 days, under the per-connection lock
+  with CAS), `identity.py` (live, best-effort username).
+- Shared `publishing/credential_encryption.py`. TikTok's credential store re-exports the same
+  helpers; TikTok behavior is unchanged.
+- OAuth state consumption is one atomic, platform-scoped update on both backends; a TikTok state
+  can't be used, or consumed, by the Instagram callback and vice versa.
+- `oauth_states.return_target` (nullable): SQLite fresh schema + additive migration, Postgres
+  migration `0011`, protocol and both stores. New `api/oauth_return_targets.py`: exact-match
+  server-owned allowlist (web Settings by default, plus optional `OAUTH_EXTRA_RETURN_TARGETS`).
+- New `update_platform_connection_external_account` on the protocol and both stores.
+- Access-log filter redacts `code`/`state` on both the TikTok and Instagram callback paths.
+- Registry: Instagram `connection_available=True`; `publishing_available` stays False.
+- Web: `connectInstagram`/`disconnectInstagram`, `useInstagramActions` (updates/invalidates the
+  user-scoped Instagram cache entry), `InstagramConnectionSection` in Settings with its own
+  progress, errors and callback handling (removes only the `instagram` parameter). TikTok's
+  Settings behavior is unchanged.
+- Manual takeover: the Autobuild run implemented this, then stopped before validation and
+  review because its filename guard flags any `.env.*` change. Here that was the tracked
+  `.env.example`, whose credential values are all empty: a false positive. The diff was reviewed
+  and finished by hand. Fixed: an empty `FRONTEND_BASE_URL` (as `.env.example` ships it) now
+  falls back to the first CORS origin instead of disabling Instagram Connect and sending TikTok's
+  callback to a host-relative path.
+- Validation:
+  - pytest, `DATABASE_URL` unset: **1312 passed, 92 skipped** (from 1142/88; 4 new Postgres tests
+    skip).
+  - pytest with `DATABASE_URL`, disposable test schema: **1393 passed, 11 skipped**. That
+    includes migration `0011` and platform-scoped consumption on Postgres. The skips are
+    Supabase Storage tests needing a service-role key.
+  - Web: deps OK, lint and `tsc --noEmit` clean, vitest **24 files / 205 tests** (from 22/181),
+    and `npm run build` passes with a real `node_modules`.
+
+  Evidence: `docs/evaluations/productization/milestone-4.1-instagram-oauth.md`; ADR-0018
+  addendum.
+
 ### Milestone 4.1 — Approved Autobuild Plan
 
 - Approved two implementation briefs under `docs/roadmap/milestone-4.1/`: GREEN

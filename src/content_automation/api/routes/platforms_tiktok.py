@@ -140,11 +140,13 @@ def tiktok_oauth_callback(
         return _settings_redirect("invalid_state")
 
     now = datetime.now(timezone.utc).isoformat()
-    consumed = store.consume_oauth_state(state, now)
+    # Milestone 4.1: scoped to TikTok — another platform's state is never
+    # consumed or accepted here.
+    consumed = store.consume_oauth_state(state, now, platform=PLATFORM)
     if consumed is None:
-        # Covers three distinct real cases identically (state never
-        # existed / already used / expired) — all mean the same thing to
-        # the caller: start over.
+        # Covers four distinct real cases identically (state never
+        # existed / already used / expired / belongs to another platform) —
+        # all mean the same thing to the caller: start over.
         return _settings_redirect("expired_state")
     if not code:
         return _settings_redirect("denied")

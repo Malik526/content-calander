@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { connectTikTok, disconnectTikTok, getInstagramConnection, getMe, getTikTokConnection } from "@/lib/api/platforms";
+import {
+  connectInstagram,
+  connectTikTok,
+  disconnectInstagram,
+  disconnectTikTok,
+  getInstagramConnection,
+  getMe,
+  getTikTokConnection,
+} from "@/lib/api/platforms";
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response;
@@ -79,5 +87,44 @@ describe("lib/api/platforms.ts", () => {
     const [url, init = {}] = fetchMock.mock.calls[0];
     expect(url).toContain("/api/platforms/tiktok/disconnect");
     expect(init.method).toBe("POST");
+  });
+
+  // Milestone 4.1
+  it("connectInstagram POSTs with the bearer token and no body by default", async () => {
+    const fetchMock = fetchMockReturning({ authorization_url: "https://www.instagram.com/oauth/authorize?x=1" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await connectInstagram("token");
+
+    const [url, init = {}] = fetchMock.mock.calls[0];
+    expect(url).toContain("/api/platforms/instagram/connect");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer token");
+    expect(result.authorization_url).toContain("instagram.com");
+  });
+
+  it("connectInstagram sends a requested return target as JSON", async () => {
+    const fetchMock = fetchMockReturning({ authorization_url: "https://www.instagram.com/oauth/authorize?x=1" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await connectInstagram("token", "https://app.example.com/app/settings");
+
+    const [, init = {}] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body as string)).toEqual({ return_target: "https://app.example.com/app/settings" });
+  });
+
+  it("disconnectInstagram POSTs to the Instagram disconnect endpoint", async () => {
+    const fetchMock = fetchMockReturning({
+      platform: "instagram", connected: false, status: "DISCONNECTED", account_label: null, connect_available: true,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await disconnectInstagram("token");
+
+    const [url, init = {}] = fetchMock.mock.calls[0];
+    expect(url).toContain("/api/platforms/instagram/disconnect");
+    expect(init.method).toBe("POST");
+    expect(result.connected).toBe(false);
   });
 });

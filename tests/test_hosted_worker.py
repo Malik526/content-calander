@@ -29,6 +29,7 @@ from content_automation.media.caption_editing import save_caption
 from content_automation.media.media_storage import create_video_from_upload
 from content_automation.persistence.content_store import ContentStore
 from content_automation.publishing.publisher import PublishError, PublishResult, PublishStatusResult
+from content_automation.publishing import credential_encryption
 from content_automation.publishing.tiktok import credential_store
 from content_automation.publishing.tiktok.hosted_publisher import (
     build_hosted_tiktok_publisher,
@@ -395,7 +396,7 @@ def test_disconnected_tiktok_fails_with_reconnect_code_before_any_network_call(s
 def test_hosted_token_provider_reads_that_users_stored_credential(store, monkeypatch):
     from cryptography.fernet import Fernet
 
-    monkeypatch.setattr(credential_store, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(credential_encryption, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     user = _hosted_user(store)
     other = _hosted_user(store, "other@example.com")
     connection = store.get_or_create_platform_connection(user.id, "tiktok")
@@ -410,7 +411,7 @@ def test_hosted_token_provider_reads_that_users_stored_credential(store, monkeyp
         hosted_access_token_provider(store, other.id)()
     assert other_error.value.reason_code == "REAUTHORIZATION_REQUIRED"
 
-    monkeypatch.setattr(credential_store, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())  # rotated key
+    monkeypatch.setattr(credential_encryption, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())  # rotated key
     with pytest.raises(TikTokAuthError) as rotated:
         hosted_access_token_provider(store, user.id)()
     assert rotated.value.reason_code == "CREDENTIAL_UNAVAILABLE"

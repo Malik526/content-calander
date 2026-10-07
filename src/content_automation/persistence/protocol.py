@@ -124,6 +124,12 @@ class ContentStoreProtocol(Protocol):
         self, user_id: int, platform: str, external_account_id: str | None = None,
     ) -> PlatformConnectionRecord: ...
 
+    # Milestone 4.1: which platform account the connection is authorized as
+    # (a reconnect may choose a different one).
+    def update_platform_connection_external_account(
+        self, connection_id: int, external_account_id: str | None, updated_at: str,
+    ) -> None: ...
+
     def update_platform_connection_status(self, connection_id: int, status: str, updated_at: str) -> None: ...
 
     def get_platform_credential(self, platform_connection_id: int) -> PlatformCredentialRecord | None: ...
@@ -142,12 +148,16 @@ class ContentStoreProtocol(Protocol):
     # connection (Postgres advisory lock; no-op on SQLite).
     def credential_refresh_lock(self, platform_connection_id: int): ...
 
+    # Milestone 4.1: return_target is an already-allowlisted post-callback
+    # destination (None keeps the platform's fixed redirect), and
+    # consumption is atomic and scoped to the platform whose callback is
+    # presenting the state.
     def create_oauth_state(
         self, user_id: int, platform: str, state: str, code_verifier: str, redirect_uri: str,
-        created_at: str, expires_at: str,
+        created_at: str, expires_at: str, return_target: str | None = None,
     ) -> OAuthStateRecord: ...
 
-    def consume_oauth_state(self, state: str, now: str) -> OAuthStateRecord | None: ...
+    def consume_oauth_state(self, state: str, now: str, *, platform: str) -> OAuthStateRecord | None: ...
 
     # -- Milestone 3.7 follow-up (upload performance instrumentation) —
     # the methods api/routes/videos.py consumes through this Protocol,

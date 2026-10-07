@@ -30,7 +30,9 @@ Encryption:
   transitive dependency of google-auth) with
   config.CREDENTIAL_ENCRYPTION_KEY — a symmetric key generated once and
   set in .env, never derived from anything guessable. Encrypts the token
-  dict's JSON serialization; ContentStore never sees plaintext. See
+  dict's JSON serialization; ContentStore never sees plaintext. Since
+  Milestone 4.1 the helpers live in publishing/credential_encryption.py
+  (shared with Instagram) and are re-exported here unchanged. See
   docs/decisions/0011-real-authentication-and-tiktok-connection.md
   "Credential Storage" for why this (not a KMS/secrets-manager
   integration) is the right-sized mechanism for this milestone.
@@ -62,60 +64,35 @@ Concurrency (Milestone 3.6 CAS; Milestone 3.13 per-connection lock):
   Logging: connection ids and outcomes only — never token values.
 
 Dependencies:
-  cryptography.fernet. content_automation.persistence.protocol.ContentStoreProtocol.
+  content_automation.publishing.credential_encryption.
+  content_automation.persistence.protocol.ContentStoreProtocol.
   content_automation.publishing.tiktok.auth (token refresh only).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from cryptography.fernet import Fernet, InvalidToken
-
-from content_automation.config import CREDENTIAL_ENCRYPTION_KEY, TIKTOK_TOKEN_REFRESH_SKEW_SECONDS
+from content_automation.config import TIKTOK_TOKEN_REFRESH_SKEW_SECONDS
 from content_automation.persistence.content_store import CredentialRefreshLockTimeout
 from content_automation.persistence.protocol import ContentStoreProtocol
+# Milestone 4.1: the Fernet helpers moved to the provider-neutral
+# publishing/credential_encryption.py (Instagram uses them too). Re-exported
+# under their original names so every existing TikTok caller is unchanged.
+from content_automation.publishing.credential_encryption import CredentialStoreError
+from content_automation.publishing.credential_encryption import decrypt_credential as decrypt_token
+from content_automation.publishing.credential_encryption import encrypt_credential as encrypt_token
 from content_automation.publishing.tiktok import auth as tiktok_auth
+
+__all__ = [
+    "CredentialStoreError", "decrypt_token", "encrypt_token", "get_hosted_tiktok_access_token",
+    "load_hosted_tiktok_token", "save_hosted_tiktok_token",
+]
 
 logger = logging.getLogger(__name__)
 
 _MAX_CAS_ATTEMPTS = 3
-
-
-class CredentialStoreError(Exception):
-    """Misconfiguration (no/invalid encryption key), a stored credential
-    that fails to decrypt (wrong/rotated key, corrupted data), or repeated
-    CAS contention refreshing a credential."""
-
-
-def _require_fernet() -> Fernet:
-    if not CREDENTIAL_ENCRYPTION_KEY:
-        raise CredentialStoreError(
-            "CREDENTIAL_ENCRYPTION_KEY is not set. Generate one with: python3 -c "
-            '"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" '
-            "and set it in .env. Never commit it."
-        )
-    try:
-        return Fernet(CREDENTIAL_ENCRYPTION_KEY.encode("ascii"))
-    except (ValueError, TypeError) as exc:
-        raise CredentialStoreError(f"CREDENTIAL_ENCRYPTION_KEY is not a valid Fernet key: {exc}") from exc
-
-
-def encrypt_token(token: dict) -> str:
-    return _require_fernet().encrypt(json.dumps(token).encode("utf-8")).decode("ascii")
-
-
-def decrypt_token(encrypted_payload: str) -> dict:
-    try:
-        raw = _require_fernet().decrypt(encrypted_payload.encode("ascii"))
-    except InvalidToken as exc:
-        raise CredentialStoreError(
-            "Stored TikTok credential could not be decrypted (wrong/rotated CREDENTIAL_ENCRYPTION_KEY, "
-            "or corrupted data)."
-        ) from exc
-    return json.loads(raw.decode("utf-8"))
 
 
 def save_hosted_tiktok_token(store: ContentStoreProtocol, platform_connection_id: int, token: dict) -> None:

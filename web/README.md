@@ -21,7 +21,7 @@ This directory is intentionally separate from the Python backend/CLI tooling at 
 | `/app` | Product home/dashboard — quick links into Library, Queue, Settings. Requires a real session. |
 | `/app/library` | Real batch video upload (Milestone 3.7) + your own videos, backend-verified (`GET/POST /api/videos`) — live validation with real video files against the deployed stack is still outstanding, see `docs/evaluations/productization/milestone-3.7-batch-upload-readiness.md`. |
 | `/app/queue` | What's scheduled/published (real empty state by default — real queue data is a future milestone's scope). |
-| `/app/settings` | Account (real session) + real, backend-verified TikTok connection status/connect/disconnect. |
+| `/app/settings` | Account (real session) + real, backend-verified TikTok connection status/connect/disconnect, and Instagram connect/disconnect/`@username` with callback outcomes (Milestone 4.1 — tested against mocked Meta responses only; not yet verified against Meta). |
 
 **`/app/*` requires a real signed-in session** (`lib/session.tsx`, real Supabase Auth as of Milestone
 3.6) — an unauthenticated visitor is redirected to `/login` client-side. See "Auth / Session" below.
@@ -55,7 +55,8 @@ remaining fallback — a loudly-marked `DEV_MOCK_USER` — only ever applies out
 `lib/api/client.ts`'s `apiRequest()` is the only place this app calls a backend HTTP endpoint — no
 component calls `fetch()` directly. As of Milestone 3.6 a real backend exists
 (`src/content_automation/api/`, repository root) and `lib/api/platforms.ts`'s typed functions
-(`getMe`, `getTikTokConnection`, `connectTikTok`, `disconnectTikTok`) call it, attaching the current
+(`getMe`, `getTikTokConnection`, `connectTikTok`, `disconnectTikTok`, and Instagram's
+`getInstagramConnection`, `connectInstagram`, `disconnectInstagram`) call it, attaching the current
 session's access token as `Authorization: Bearer <token>`. `NEXT_PUBLIC_API_BASE_URL` (see
 `.env.example`) is the backend's base URL; `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`
 are the only other backend-related environment variables this app reads — both meant to be public.

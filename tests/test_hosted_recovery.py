@@ -33,6 +33,7 @@ from content_automation.media.media_storage import create_video_from_upload
 from content_automation.persistence.content_store import ContentStore
 from content_automation.publishing.publisher import PublishError, PublishResult, PublishStatusResult
 from content_automation.publishing.tiktok import auth as tiktok_auth
+from content_automation.publishing import credential_encryption
 from content_automation.publishing.tiktok import credential_store
 from content_automation.publishing.tiktok import publisher as tp
 from content_automation.scheduling import publish_tiktok
@@ -634,7 +635,7 @@ def _fresh_token(n):
 def encryption_key(monkeypatch):
     from cryptography.fernet import Fernet
 
-    monkeypatch.setattr(credential_store, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(credential_encryption, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 
 def _connections(n_users):

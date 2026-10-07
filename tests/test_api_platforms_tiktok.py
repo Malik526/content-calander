@@ -66,9 +66,9 @@ def _fake_token(open_id="tiktok_open_id_1"):
 def credential_encryption_key(monkeypatch):
     from cryptography.fernet import Fernet
 
-    from content_automation.publishing.tiktok import credential_store as cs
+    from content_automation.publishing import credential_encryption
 
-    monkeypatch.setattr(cs, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setattr(credential_encryption, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
 
 
 @pytest.fixture(autouse=True)

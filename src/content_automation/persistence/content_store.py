@@ -266,6 +266,12 @@ CREATE TABLE IF NOT EXISTS platform_credentials (
 # already-used state a no-op rejection rather than a second successful
 # completion, and `expires_at` bounds how long an abandoned attempt stays
 # valid (config.OAUTH_STATE_TTL_SECONDS).
+#
+# Milestone 4.1: return_target (nullable) is where the callback sends the
+# browser afterwards, chosen at connect time from a server-owned allowlist
+# (api/oauth_return_targets.py). NULL for every TikTok row and every row
+# created before 4.1 — those callers keep their fixed Settings redirect.
+# Existing databases gain the column through _ensure_oauth_states_columns.
 SCHEMA_OAUTH_STATES = """
 CREATE TABLE IF NOT EXISTS oauth_states (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -276,7 +282,8 @@ CREATE TABLE IF NOT EXISTS oauth_states (
     redirect_uri TEXT NOT NULL,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
-    consumed_at TEXT
+    consumed_at TEXT,
+    return_target TEXT
 );
 """
 
@@ -512,6 +519,19 @@ _PLATFORM_POSTS_MIGRATION_COLUMNS = {
     # Aware UTC, when the most recent submission attempt began. Diagnostic.
     "submission_started_at": "TEXT",
 }
+
+
+# Milestone 4.1: additive, nullable — see SCHEMA_OAUTH_STATES.
+_OAUTH_STATES_MIGRATION_COLUMNS = {
+    "return_target": "TEXT",
+}
+
+
+def _ensure_oauth_states_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(oauth_states)").fetchall()}
+    for column, sql_type in _OAUTH_STATES_MIGRATION_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE oauth_states ADD COLUMN {column} {sql_type}")
 
 
 def _ensure_platform_posts_columns(conn: sqlite3.Connection) -> None:
@@ -969,6 +989,8 @@ class OAuthStateRecord:
     created_at: str
     expires_at: str
     consumed_at: str | None
+    # Milestone 4.1 — None for TikTok and pre-4.1 rows.
+    return_target: str | None = None
 
 
 @dataclass
@@ -1085,6 +1107,7 @@ class ContentStore:
         # REFERENCES clauses are meaningful from the first run.
         self._conn.executescript(SCHEMA_PLATFORM_CREDENTIALS)
         self._conn.executescript(SCHEMA_OAUTH_STATES)
+        _ensure_oauth_states_columns(self._conn)
         # Milestone 3.7 follow-up: created after users/videos so their
         # REFERENCES clauses are meaningful from the first run.
         self._conn.executescript(SCHEMA_UPLOAD_BATCHES)
@@ -1994,6 +2017,21 @@ class ContentStore:
         now = _utc_now_iso()
         return self.create_platform_connection(user_id, platform, external_account_id, "ACTIVE", now)
 
+    def update_platform_connection_external_account(
+        self, connection_id: int, external_account_id: str | None, updated_at: str,
+    ) -> None:
+        """Milestone 4.1: record which platform account a connection is
+        currently authorized as. A reconnect may pick a different account
+        (Instagram lets the user choose), and get_or_create_platform_connection
+        deliberately never rewrites an existing row, so the OAuth callback
+        calls this after every successful exchange. Unconditional, like
+        update_platform_connection_status — driven by one explicit user
+        action."""
+        self._conn.execute(
+            "UPDATE platform_connections SET external_account_id = ?, updated_at = ? WHERE id = ?",
+            (external_account_id, updated_at, connection_id),
+        )
+
     def update_platform_connection_status(self, connection_id: int, status: str, updated_at: str) -> None:
         """Used by the hosted OAuth connect/disconnect flow (Milestone
         3.6) — e.g. DISCONNECTED on disconnect, back to ACTIVE on a
@@ -2077,46 +2115,44 @@ class ContentStore:
 
     def create_oauth_state(
         self, user_id: int, platform: str, state: str, code_verifier: str, redirect_uri: str,
-        created_at: str, expires_at: str,
+        created_at: str, expires_at: str, return_target: str | None = None,
     ) -> OAuthStateRecord:
         """Raises sqlite3.IntegrityError on a state collision (UNIQUE) —
         astronomically unlikely (state is secrets.token_urlsafe-generated)
         but fails loudly rather than silently reusing another attempt's
-        row."""
+        row. return_target (Milestone 4.1) must already be allowlisted by
+        the caller; this layer stores it verbatim."""
         cur = self._conn.execute(
-            "INSERT INTO oauth_states (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at),
+            "INSERT INTO oauth_states "
+            "(user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at, return_target) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at, return_target),
         )
         row = self._conn.execute("SELECT * FROM oauth_states WHERE id = ?", (cur.lastrowid,)).fetchone()
         return _row_to_oauth_state(row)
 
-    def consume_oauth_state(self, state: str, now: str) -> OAuthStateRecord | None:
+    def consume_oauth_state(self, state: str, now: str, *, platform: str) -> OAuthStateRecord | None:
         """Atomically marks a pending OAuth state consumed and returns the
-        row that was consumed — or None if `state` doesn't exist, was
-        already consumed (replay), or is past expires_at. The read (to
-        return the row's user_id/code_verifier/redirect_uri/platform to the
-        caller) happens before the CAS write, but the write's own
-        `WHERE consumed_at IS NULL` clause is what actually prevents two
-        concurrent callback requests presenting the same state from both
-        succeeding — only one UPDATE can win; the loser gets rowcount=0 and
-        this returns None to it, exactly like
-        update_platform_credential_if_unchanged's race handling above."""
-        row = self._conn.execute("SELECT * FROM oauth_states WHERE state = ?", (state,)).fetchone()
-        if row is None:
-            return None
-        record = _row_to_oauth_state(row)
-        if record.consumed_at is not None:
-            return None
-        if now >= record.expires_at:
-            return None
+        row that was consumed — or None if `state` doesn't exist, belongs
+        to a different platform, was already consumed (replay), or is past
+        expires_at.
+
+        Milestone 4.1: one conditional UPDATE is the whole decision — every
+        condition (state, platform, not yet consumed, not expired) is in its
+        WHERE clause, so two concurrent callbacks presenting the same state
+        can't both win (the loser's UPDATE matches zero rows), and a state
+        created for one platform is never consumed, or even marked, by
+        another platform's callback. The row is read back only after this
+        call's write won."""
         cur = self._conn.execute(
-            "UPDATE oauth_states SET consumed_at = ? WHERE state = ? AND consumed_at IS NULL", (now, state)
+            "UPDATE oauth_states SET consumed_at = ? "
+            "WHERE state = ? AND platform = ? AND consumed_at IS NULL AND expires_at > ?",
+            (now, state, platform, now),
         )
         if cur.rowcount == 0:
             return None
-        record.consumed_at = now
-        return record
+        row = self._conn.execute("SELECT * FROM oauth_states WHERE state = ?", (state,)).fetchone()
+        return _row_to_oauth_state(row)
 
     # -- upload_batches / upload_attempts (Milestone 3.7 follow-up —
     # upload performance instrumentation; see SCHEMA_UPLOAD_BATCHES'

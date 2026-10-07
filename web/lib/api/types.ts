@@ -70,8 +70,11 @@ export interface CurrentUser {
 /**
  * Milestone 4.0 — the platform-neutral connection shape
  * (api/schemas/platforms.py PlatformConnectionStatus), first used by
- * Instagram. connect_available is false until that platform's connect flow
- * exists and is configured on the server; never offer Connect otherwise.
+ * Instagram. connect_available is false unless that platform's connect
+ * flow exists and is configured on the server; never offer Connect
+ * otherwise. Milestone 4.1: account_label is "@username" for a connected
+ * Instagram account when Instagram reported one, else null — never the
+ * numeric account id.
  */
 export interface PlatformConnectionStatus {
   platform: PlatformIdValue;
@@ -79,6 +82,12 @@ export interface PlatformConnectionStatus {
   status: string;
   account_label: string | null;
   connect_available: boolean;
+}
+
+/** Milestone 4.1 — a connect request's response (api/schemas/platforms.py
+ * ConnectStartResponse): the platform's authorization URL, nothing else. */
+export interface ConnectStartResponse {
+  authorization_url: string;
 }
 
 export interface TikTokConnectionStatus {

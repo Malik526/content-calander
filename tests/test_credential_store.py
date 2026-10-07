@@ -10,6 +10,7 @@ from cryptography.fernet import Fernet
 
 from content_automation.persistence.content_store import ContentStore
 from content_automation.publishing.tiktok import auth as tiktok_auth
+from content_automation.publishing import credential_encryption
 from content_automation.publishing.tiktok import credential_store as cs
 
 
@@ -28,7 +29,7 @@ def connection_id(store):
 
 @pytest.fixture(autouse=True)
 def encryption_key(monkeypatch):
-    monkeypatch.setattr(cs, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setattr(credential_encryption, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
 
 
 def _valid_token(now=None, access_ttl_minutes=60, refresh_ttl_days=300):
@@ -60,14 +61,14 @@ def test_encrypt_then_decrypt_roundtrips():
 
 
 def test_encrypt_without_key_configured_fails_closed(monkeypatch):
-    monkeypatch.setattr(cs, "CREDENTIAL_ENCRYPTION_KEY", "")
+    monkeypatch.setattr(credential_encryption, "CREDENTIAL_ENCRYPTION_KEY", "")
     with pytest.raises(cs.CredentialStoreError, match="CREDENTIAL_ENCRYPTION_KEY"):
         cs.encrypt_token(_valid_token())
 
 
 def test_decrypt_with_wrong_key_fails_closed(monkeypatch):
     ciphertext = cs.encrypt_token(_valid_token())
-    monkeypatch.setattr(cs, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
+    monkeypatch.setattr(credential_encryption, "CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode("ascii"))
     with pytest.raises(cs.CredentialStoreError, match="could not be decrypted"):
         cs.decrypt_token(ciphertext)
 

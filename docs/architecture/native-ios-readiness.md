@@ -102,6 +102,14 @@ the Settings page (web adapter) decides to navigate to it.
 connect time, and the Instagram callback redirects there (default: web Settings). Milestone 7 then
 only adds native return targets, and moves TikTok onto the same column.
 
+*2026-10-06 (Milestone 4.1, implemented with mocked Meta responses):* `oauth_states.return_target`
+exists on both backends; `POST /api/platforms/instagram/connect` takes an optional
+`{"return_target": ...}` that must exactly match `api/oauth_return_targets.py`'s server-owned
+allowlist (web Settings plus `OAUTH_EXTRA_RETURN_TARGETS`). Allowlist entries are currently
+accepted only as `https://` (or `http://localhost`) URLs, so a universal link works as-is; a
+custom scheme such as `picklebatch://` needs that module's acceptance rule extended in
+Milestone 7.
+
 Platform registration note: TikTok redirect URIs must be HTTPS; native apps keep the backend
 callback and use a custom scheme or universal link only for the final hop back into the app.
 

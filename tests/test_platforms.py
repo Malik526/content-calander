@@ -26,9 +26,10 @@ def test_registry_knows_tiktok_and_instagram_with_their_real_differences():
     assert instagram.caption_max_chars == 2200
 
 
-def test_instagram_is_not_connectable_or_publishable_until_its_milestones_ship():
+def test_instagram_is_connectable_but_not_publishable_until_4_2():
+    # Milestone 4.1 shipped the connect flow; publishing is Milestone 4.2.
     assert get_platform(TIKTOK).connection_available and get_platform(TIKTOK).publishing_available
-    assert not get_platform(INSTAGRAM).connection_available
+    assert get_platform(INSTAGRAM).connection_available
     assert not get_platform(INSTAGRAM).publishing_available
 
 

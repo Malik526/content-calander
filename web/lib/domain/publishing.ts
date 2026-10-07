@@ -27,7 +27,7 @@ export type PublishStatusValue = (typeof PublishStatus)[keyof typeof PublishStat
 /** Publishing platform identifiers (platform_posts.platform). */
 export const PlatformId = {
   TIKTOK: "tiktok",
-  /** Milestone 4.0: registered; connecting arrives in 4.1, publishing in 4.2. */
+  /** Milestone 4.0: registered; connecting since 4.1, publishing arrives in 4.2. */
   INSTAGRAM: "instagram",
 } as const;
 

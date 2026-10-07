@@ -3,8 +3,8 @@ app.py — the FastAPI application (Milestone 3.6, extended Milestone 3.7,
 3.8).
 
 What it does:
-  Wires together only what's been built so far: /api/me, the TikTok
-  connection flow (/api/platforms/tiktok/*), batch video upload + Library
+  Wires together only what's been built so far: /api/me, the TikTok and
+  Instagram (Milestone 4.1) connection flows (/api/platforms/*), batch video upload + Library
   listing (/api/videos — Milestone 3.7), and hosted posting-cadence
   configuration + future slot generation (/api/cadence — Milestone 3.8).
   No queue/calendar editing, publishing, or assignment endpoints yet —
@@ -46,8 +46,16 @@ from content_automation.config import (
 # (and every other logger) is untouched. It fails open (leaves the record
 # alone) rather than raising, so a future uvicorn internals change can
 # never turn a logging filter into a request-handling failure.
-_OAUTH_CALLBACK_PATH = "/api/platforms/tiktok/callback"
-_SENSITIVE_QUERY_PARAMS_PATTERN = re.compile(r"\b(code|state)=[^&\s]+")
+#
+# Milestone 4.1: generalized from the one TikTok path to every hosted OAuth
+# callback — Instagram's callback carries the same one-time code and state.
+# Matched on the exact path (a trailing slash tolerated), so a route that
+# merely starts with a callback path is not touched.
+_OAUTH_CALLBACK_PATHS = frozenset({
+    "/api/platforms/tiktok/callback",
+    "/api/platforms/instagram/callback",
+})
+_SENSITIVE_QUERY_PARAMS_PATTERN = re.compile(r"(?<![^&])(code|state)=[^&\s]*")
 
 
 class _RedactOAuthCallbackQueryFilter(logging.Filter):
@@ -56,8 +64,10 @@ class _RedactOAuthCallbackQueryFilter(logging.Filter):
             client_addr, method, full_path, http_version, status_code = record.args  # type: ignore[misc]
         except (TypeError, ValueError):
             return True
-        if isinstance(full_path, str) and full_path.startswith(_OAUTH_CALLBACK_PATH) and "?" in full_path:
-            path, _, query = full_path.partition("?")
+        if not isinstance(full_path, str) or "?" not in full_path:
+            return True
+        path, _, query = full_path.partition("?")
+        if path.rstrip("/") in _OAUTH_CALLBACK_PATHS:
             redacted_query = _SENSITIVE_QUERY_PARAMS_PATTERN.sub(r"\1=[redacted]", query)
             record.args = (client_addr, method, f"{path}?{redacted_query}", http_version, status_code)
         return True

@@ -73,3 +73,54 @@ def test_empty_optional_settings_copied_from_env_example_fall_back_to_defaults(m
     finally:
         monkeypatch.undo()
         importlib.reload(config)
+
+
+def test_empty_milestone_4_1_settings_copied_from_env_example_fall_back_to_defaults(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS", "")
+    monkeypatch.setenv("OAUTH_EXTRA_RETURN_TARGETS", "")
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS == 30 * 86_400
+        assert reloaded.OAUTH_EXTRA_RETURN_TARGETS == []
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
+def test_empty_frontend_base_url_falls_back_to_first_cors_origin(monkeypatch):
+    """.env.example ships FRONTEND_BASE_URL= blank; that must not disable Instagram
+    Connect or send TikTok's callback to a host-relative path."""
+    import importlib
+
+    monkeypatch.setenv("FRONTEND_BASE_URL", "")
+    monkeypatch.setenv("API_CORS_ALLOWED_ORIGINS", "https://app.example.com,https://other.example.com")
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.FRONTEND_BASE_URL == "https://app.example.com"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
+def test_explicit_frontend_base_url_still_wins(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("FRONTEND_BASE_URL", "https://picklebatch.example.com")
+    monkeypatch.setenv("API_CORS_ALLOWED_ORIGINS", "https://app.example.com")
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.FRONTEND_BASE_URL == "https://picklebatch.example.com"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
+@pytest.mark.parametrize("window", [3600, 60 * 86_400])
+def test_refresh_window_outside_one_to_fifty_nine_days_is_reported(configure, monkeypatch, window):
+    configure()
+    monkeypatch.setattr(config, "INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS", window)
+    assert configuration.configuration_problems() == [
+        "INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS must be between 86400 and 5097600"
+    ]

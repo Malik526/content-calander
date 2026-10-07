@@ -35,11 +35,28 @@ class PlatformConnectionStatus(BaseModel):
     creator identity). Never carries a credential.
 
     connect_available: the hosted connect flow exists AND is configured on
-    this server. False for Instagram until Milestone 4.1 ships, so clients
-    show the platform without offering a button that can't work."""
+    this server, so clients never offer a button that can't work.
+
+    account_label (Milestone 4.1, Instagram): "@username" from the
+    credential-backed identity lookup, or None — never the platform's
+    numeric account id."""
 
     platform: str
     connected: bool
     status: str
     account_label: str | None = None
     connect_available: bool = False
+
+
+class ConnectStartRequest(BaseModel):
+    """Milestone 4.1 (Instagram): optional body of a connect request.
+    return_target must exactly match a server-allowlisted destination
+    (api/oauth_return_targets.py); omitted means the web Settings page."""
+
+    return_target: str | None = None
+
+
+class ConnectStartResponse(BaseModel):
+    """The platform's authorization URL for one attempt — nothing else."""
+
+    authorization_url: str

@@ -21,8 +21,11 @@ What it does:
     publishing_available    A hosted Publisher exists, so platform_posts rows
                             for it can actually be published.
 
-  Instagram is registered with both availability flags False until
-  Milestones 4.1 (OAuth) and 4.2 (Reels publishing) ship. See
+  Instagram's connection_available became True in Milestone 4.1 (the OAuth
+  connect flow exists; the status endpoint still reports connect_available
+  False unless the server is configured for it). publishing_available stays
+  False until Milestone 4.2 (Reels publishing), so no Instagram
+  platform_posts rows are created. See
   docs/decisions/0018-instagram-integration-architecture.md.
 
 Dependencies:
@@ -56,7 +59,7 @@ PLATFORMS: dict[str, PlatformCapabilities] = {
     ),
     INSTAGRAM: PlatformCapabilities(
         id=INSTAGRAM, label="Instagram", media_delivery=PULL_URL, requires_finalize_step=True,
-        caption_max_chars=2200, connection_available=False, publishing_available=False,
+        caption_max_chars=2200, connection_available=True, publishing_available=False,
     ),
 }
 

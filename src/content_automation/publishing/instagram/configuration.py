@@ -1,6 +1,6 @@
 """
 configuration.py — the Instagram integration's configuration contract and
-its validation (Milestone 4.0).
+its validation (Milestone 4.0; token refresh window added in 4.1).
 
 What it does:
   SCOPES lists the Instagram Login permissions Pickle Batch requests
@@ -26,6 +26,11 @@ SCOPES: tuple[str, ...] = ("instagram_business_basic", "instagram_business_conte
 MIN_MEDIA_URL_TTL_SECONDS = 300
 MAX_MEDIA_URL_TTL_SECONDS = 86_400
 
+# A long-lived token lives 60 days; a refresh window outside 1–59 days would
+# either refresh constantly or never before expiry.
+MIN_TOKEN_REFRESH_WINDOW_SECONDS = 86_400
+MAX_TOKEN_REFRESH_WINDOW_SECONDS = 59 * 86_400
+
 
 def configuration_problems() -> list[str]:
     """Empty when the API process has everything the Instagram connect
@@ -45,6 +50,11 @@ def configuration_problems() -> list[str]:
     if not MIN_MEDIA_URL_TTL_SECONDS <= config.INSTAGRAM_MEDIA_URL_TTL_SECONDS <= MAX_MEDIA_URL_TTL_SECONDS:
         problems.append(
             f"INSTAGRAM_MEDIA_URL_TTL_SECONDS must be between {MIN_MEDIA_URL_TTL_SECONDS} and {MAX_MEDIA_URL_TTL_SECONDS}"
+        )
+    if not MIN_TOKEN_REFRESH_WINDOW_SECONDS <= config.INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS <= MAX_TOKEN_REFRESH_WINDOW_SECONDS:
+        problems.append(
+            "INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS must be between "
+            f"{MIN_TOKEN_REFRESH_WINDOW_SECONDS} and {MAX_TOKEN_REFRESH_WINDOW_SECONDS}"
         )
     return problems
 

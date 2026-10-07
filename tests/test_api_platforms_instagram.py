@@ -1,8 +1,9 @@
 """Tests for GET /api/platforms/instagram/status (Milestone 4.0): the real
 connection state from the shared platform tables, owner isolation, no
-credential leakage, and connect_available staying False until the 4.1
-connect flow exists. Same TestClient + temp SQLite pattern as
-test_api_platforms_tiktok.py."""
+credential leakage, and connect_available (offered only once configured,
+since Milestone 4.1 — the connect/callback flow itself is covered by
+test_api_platforms_instagram_oauth.py). Same TestClient + temp SQLite
+pattern as test_api_platforms_tiktok.py."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -99,12 +100,14 @@ def test_response_never_carries_credential_or_platform_account_identifiers(clien
     assert "token" not in raw.lower()
 
 
-def test_connect_is_not_offered_in_4_0_even_when_the_server_is_configured(client, users, monkeypatch):
+def test_connect_is_offered_once_the_server_is_configured(client, users, monkeypatch):
+    # Milestone 4.0 asserted False here (no connect flow yet); 4.1 ships it.
     monkeypatch.setattr(config, "INSTAGRAM_APP_ID", "1234567890")
     monkeypatch.setattr(config, "INSTAGRAM_APP_SECRET", "x")
     monkeypatch.setattr(config, "INSTAGRAM_REDIRECT_URI", "https://api.example.com/api/platforms/instagram/callback")
+    monkeypatch.setattr(config, "FRONTEND_BASE_URL", "https://app.example.com")
     _act_as(users[0])
-    assert client.get("/api/platforms/instagram/status").json()["connect_available"] is False
+    assert client.get("/api/platforms/instagram/status").json()["connect_available"] is True
 
 
 def test_instagram_does_not_change_tiktok_status(client, users, db_path):

@@ -257,6 +257,14 @@ class PostgresContentStore:
         now = _utc_now_iso()
         return self.create_platform_connection(user_id, platform, external_account_id, "ACTIVE", now)
 
+    def update_platform_connection_external_account(
+        self, connection_id: int, external_account_id: str | None, updated_at: str,
+    ) -> None:
+        self._conn.execute(
+            "UPDATE platform_connections SET external_account_id = %s, updated_at = %s WHERE id = %s",
+            (external_account_id, updated_at, connection_id),
+        )
+
     def update_platform_connection_status(self, connection_id: int, status: str, updated_at: str) -> None:
         self._conn.execute(
             "UPDATE platform_connections SET status = %s, updated_at = %s WHERE id = %s",
@@ -333,31 +341,27 @@ class PostgresContentStore:
 
     def create_oauth_state(
         self, user_id: int, platform: str, state: str, code_verifier: str, redirect_uri: str,
-        created_at: str, expires_at: str,
+        created_at: str, expires_at: str, return_target: str | None = None,
     ) -> OAuthStateRecord:
         row = self._conn.execute(
-            "INSERT INTO oauth_states (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
-            (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at),
+            "INSERT INTO oauth_states "
+            "(user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at, return_target) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+            (user_id, platform, state, code_verifier, redirect_uri, created_at, expires_at, return_target),
         ).fetchone()
         return _row_to_oauth_state(row)
 
-    def consume_oauth_state(self, state: str, now: str) -> OAuthStateRecord | None:
-        row = self._conn.execute("SELECT * FROM oauth_states WHERE state = %s", (state,)).fetchone()
-        if row is None:
-            return None
-        record = _row_to_oauth_state(row)
-        if record.consumed_at is not None:
-            return None
-        if now >= record.expires_at:
-            return None
-        cur = self._conn.execute(
-            "UPDATE oauth_states SET consumed_at = %s WHERE state = %s AND consumed_at IS NULL", (now, state)
-        )
-        if cur.rowcount == 0:
-            return None
-        record.consumed_at = now
-        return record
+    def consume_oauth_state(self, state: str, now: str, *, platform: str) -> OAuthStateRecord | None:
+        """Milestone 4.1: a single conditional UPDATE ... RETURNING, so
+        the platform/replay/expiry checks and the consumption are one atomic
+        statement. See ContentStore.consume_oauth_state."""
+        row = self._conn.execute(
+            "UPDATE oauth_states SET consumed_at = %s "
+            "WHERE state = %s AND platform = %s AND consumed_at IS NULL AND expires_at > %s "
+            "RETURNING *",
+            (now, state, platform, now),
+        ).fetchone()
+        return _row_to_oauth_state(row) if row else None
 
     # -- upload_batches / upload_attempts (Milestone 3.7 follow-up) --------
     # See ContentStore's identical methods for the shared contract/docstrings.

@@ -351,6 +351,76 @@ def test_platform_post_failure_code_roundtrips_against_real_postgres(store):
     assert store.get_platform_post(video.id, "tiktok").failure_code == "CAPTION_TOO_LONG"
 
 
+# --- Milestone 4.1: oauth_states.return_target, platform-scoped consumption ---
+
+def _oauth_state(store, user, platform, state, *, return_target=None, ttl=timedelta(minutes=10)):
+    return store.create_oauth_state(
+        user.id, platform, state, "", "https://api.example.com/cb", NOW_UTC.isoformat(),
+        (NOW_UTC + ttl).isoformat(), return_target=return_target,
+    )
+
+
+def test_oauth_state_return_target_roundtrips_against_real_postgres(store):
+    """Migration 0011: nullable return_target; legacy (TikTok) calls omit it."""
+    user = _user(store)
+    created = _oauth_state(store, user, "instagram", "pg-ig", return_target="https://app.example.com/app/settings")
+    legacy = store.create_oauth_state(
+        user.id, "tiktok", "pg-tt", "verifier", "https://api.example.com/cb", NOW_UTC.isoformat(),
+        (NOW_UTC + timedelta(minutes=10)).isoformat(),
+    )
+    assert created.return_target == "https://app.example.com/app/settings" and legacy.return_target is None
+    consumed = store.consume_oauth_state("pg-ig", NOW_UTC.isoformat(), platform="instagram")
+    assert (consumed.user_id, consumed.code_verifier, consumed.return_target) == (user.id, "", created.return_target)
+    assert store.consume_oauth_state("pg-tt", NOW_UTC.isoformat(), platform="tiktok").return_target is None
+
+
+def test_oauth_state_consumption_is_platform_scoped_single_use_and_unexpired_against_real_postgres(store):
+    user = _user(store)
+    _oauth_state(store, user, "tiktok", "pg-tiktok")
+    _oauth_state(store, user, "instagram", "pg-short", ttl=timedelta(minutes=1))
+    now = NOW_UTC.isoformat()
+
+    assert store.consume_oauth_state("pg-tiktok", now, platform="instagram") is None
+    row = store._conn.execute("SELECT consumed_at FROM oauth_states WHERE state = 'pg-tiktok'").fetchone()
+    assert row["consumed_at"] is None
+    assert store.consume_oauth_state("pg-tiktok", now, platform="tiktok") is not None
+    assert store.consume_oauth_state("pg-tiktok", now, platform="tiktok") is None
+    assert store.consume_oauth_state("pg-short", (NOW_UTC + timedelta(minutes=1)).isoformat(), platform="instagram") is None
+    assert store.consume_oauth_state("never-issued", now, platform="instagram") is None
+
+
+def test_concurrent_oauth_state_consumers_have_exactly_one_winner_against_real_postgres():
+    with PostgresContentStore(dsn=DATABASE_URL, schema=POSTGRES_TEST_SCHEMA) as setup_store:
+        setup_store._conn.execute("TRUNCATE users RESTART IDENTITY CASCADE")
+        _oauth_state(setup_store, _user(setup_store), "instagram", "pg-contested")
+
+    results, barrier = [], threading.Barrier(5)
+
+    def consume():
+        with PostgresContentStore(dsn=DATABASE_URL, schema=POSTGRES_TEST_SCHEMA) as own_store:
+            barrier.wait()
+            results.append(own_store.consume_oauth_state("pg-contested", NOW_UTC.isoformat(), platform="instagram"))
+
+    threads = [threading.Thread(target=consume) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len([r for r in results if r is not None]) == 1
+
+
+def test_update_platform_connection_external_account_against_real_postgres(store):
+    user, other = _user(store), _user(store, "b@example.com")
+    mine = store.get_or_create_platform_connection(user.id, "instagram", external_account_id="111")
+    store.get_or_create_platform_connection(other.id, "instagram", external_account_id="222")
+
+    store.update_platform_connection_external_account(mine.id, "333", NOW_UTC.isoformat())
+
+    assert store.get_platform_connection(user.id, "instagram").external_account_id == "333"
+    assert store.get_platform_connection(other.id, "instagram").external_account_id == "222"
+
+
 # --- Phase 13: atomic claiming under real Postgres concurrency ----------
 
 def test_two_real_connections_racing_to_claim_exactly_one_wins():

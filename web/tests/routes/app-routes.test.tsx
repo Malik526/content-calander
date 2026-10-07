@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import AppHomePage from "@/app/app/page";
 import LibraryPage from "@/app/app/library/page";
@@ -58,6 +58,8 @@ describe("/app product routes", () => {
     expect(screen.getByText("Local Creator")).toBeInTheDocument();
     expect(screen.getByText("local@pickle-batch.local")).toBeInTheDocument();
     // Milestone 4.0: TikTok and Instagram each show their own (dev-mock) status.
-    expect(await screen.findAllByText("Not connected")).toHaveLength(2);
+    // Milestone 4.1: the Instagram card is its own component and may settle
+    // a tick after TikTok's, so wait for both rather than the first match.
+    await waitFor(() => expect(screen.getAllByText("Not connected")).toHaveLength(2));
   });
 });

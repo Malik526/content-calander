@@ -469,8 +469,13 @@ API_CORS_ALLOWED_ORIGINS = [
 # navigation TikTok controls, not an XHR the frontend's own fetch client
 # handles, so this must be a real, absolute frontend URL. First entry of
 # API_CORS_ALLOWED_ORIGINS by default (same origin the frontend is already
-# configured to call this API from) unless explicitly overridden.
-FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", API_CORS_ALLOWED_ORIGINS[0] if API_CORS_ALLOWED_ORIGINS else "")
+# configured to call this API from) unless explicitly overridden. An empty
+# value (the blank line .env.example ships) counts as unset, like every other
+# optional setting, so it falls back instead of leaving the OAuth callbacks
+# with no frontend to return to (Milestone 4.1 fix).
+FRONTEND_BASE_URL = (os.getenv("FRONTEND_BASE_URL") or "").strip() or (
+    API_CORS_ALLOWED_ORIGINS[0] if API_CORS_ALLOWED_ORIGINS else ""
+)
 
 # The TikTok redirect_uri the hosted OAuth flow (api/routes/platforms_tiktok.py)
 # sends to TikTok and registers state under — TikTok's own callback URL,
@@ -499,6 +504,17 @@ TIKTOK_WEB_REDIRECT_URI = os.getenv("TIKTOK_WEB_REDIRECT_URI", "")
 # callback runs in a stateless API request, not the same process that
 # started the flow.
 OAUTH_STATE_TTL_SECONDS = int(os.getenv("OAUTH_STATE_TTL_SECONDS", "600"))
+
+# Milestone 4.1: extra exact URLs an OAuth attempt may return the browser to
+# after its callback (api/oauth_return_targets.py), comma-separated, in
+# addition to the always-allowed web Settings page
+# (FRONTEND_BASE_URL + "/app/settings"). Empty by default: the web app
+# needs nothing else. Reserved for a future native app scheme or universal
+# link. Matched exactly — never a prefix, host or pattern — and only
+# https:// (or http:// on localhost) entries are honored.
+OAUTH_EXTRA_RETURN_TARGETS = [
+    target.strip() for target in os.getenv("OAUTH_EXTRA_RETURN_TARGETS", "").split(",") if target.strip()
+]
 
 # ---------------------------------------------------------------------------
 # Instagram (Milestone 4.0 — configuration contract only; the OAuth flow
@@ -543,6 +559,15 @@ INSTAGRAM_GRAPH_API_VERSION = os.getenv("INSTAGRAM_GRAPH_API_VERSION") or "v25.0
 # `or` (not a getenv default) so an empty line copied from .env.example
 # falls back instead of crashing int("") at import.
 INSTAGRAM_MEDIA_URL_TTL_SECONDS = int(os.getenv("INSTAGRAM_MEDIA_URL_TTL_SECONDS") or "3600")
+
+# Milestone 4.1: when a stored long-lived Instagram token (60 days) is
+# refreshed. Meta allows a refresh once the token is at least 24 hours old
+# and still valid; this refreshes on first use once fewer than this many
+# seconds of validity remain (default 30 days, i.e. about halfway), so a
+# connection that is used at least monthly — a publish, or a Settings visit
+# — never lapses. Validated by publishing/instagram/configuration.py
+# (between 1 and 59 days). See publishing/instagram/credential_store.py.
+INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS = int(os.getenv("INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS") or str(30 * 86_400))
 
 # ---------------------------------------------------------------------------
 # TikTok publishing (Milestone 2.0, corrected)

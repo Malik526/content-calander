@@ -6,8 +6,8 @@ import { Card } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Spinner } from "@/components/ui/Spinner";
+import { InstagramConnectionSection } from "@/components/app/InstagramConnectionSection";
 import { PlatformConnectionCard } from "@/components/app/PlatformConnectionCard";
-import { useInstagramConnection } from "@/hooks/useInstagramConnection";
 import { useTikTokActions } from "@/hooks/useTikTokActions";
 import { useTikTokConnection } from "@/hooks/useTikTokConnection";
 import { ApiError } from "@/lib/api/client";
@@ -40,8 +40,13 @@ import { connectedAccountName } from "@/lib/tiktokAccount";
  *
  * Milestone 4.0: an Instagram card shows that platform's real connection
  * status (useInstagramConnection) through the shared
- * PlatformConnectionCard. It offers no Connect button until the backend
- * reports connect_available (the 4.1 connect flow).
+ * PlatformConnectionCard.
+ *
+ * Milestone 4.1: that card is components/app/InstagramConnectionSection,
+ * which adds Connect (only when the backend reports connect_available),
+ * Disconnect, "@username", and the `?instagram=` callback outcome — with
+ * its own progress/error state and cache updates, so nothing here (the
+ * TikTok state, `?tiktok=` handling and actionError) changed.
  *
  * Milestone 3.8.1: the posting-cadence editor that briefly lived here
  * (Milestone 3.8's "Scheduling" section) moved to /app/queue
@@ -54,8 +59,6 @@ export default function SettingsPage() {
   const connectionQuery = useTikTokConnection();
   const { startConnect, disconnect } = useTikTokActions();
   const connection = connectionQuery.data ?? null;
-  const instagramQuery = useInstagramConnection();
-  const instagram = instagramQuery.data ?? null;
   const [connecting, setConnecting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -176,25 +179,8 @@ export default function SettingsPage() {
             </PlatformConnectionCard>
           )}
 
-          {/* Milestone 4.0: Instagram's real status, read-only. A Connect
-              button appears only once the backend reports connect_available
-              (Milestone 4.1). */}
-          <div className="mt-3">
-            {instagramQuery.isError && instagram === null ? (
-              <ErrorState message="Could not load your Instagram connection." onRetry={() => void instagramQuery.refetch()} />
-            ) : instagram === null ? (
-              <Card>
-                <Spinner label="Loading connection status…" />
-              </Card>
-            ) : (
-              <PlatformConnectionCard
-                name={instagram.platform}
-                connected={instagram.connected}
-                accountName={instagram.account_label}
-                note={!instagram.connected && !instagram.connect_available ? "Connecting Instagram is coming soon." : undefined}
-              />
-            )}
-          </div>
+          {/* Milestone 4.1: Instagram's card, with its own actions and state. */}
+          <InstagramConnectionSection />
         </section>
       </div>
     </>

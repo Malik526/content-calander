@@ -236,3 +236,49 @@ initial scope.
 - Platform overview (login models, access levels): https://developers.facebook.com/docs/instagram-platform/overview
 - Get started / create an app: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/get-started , https://developers.facebook.com/documentation/development/create-an-app/other-app-types/instagram-apis.md
 - Caption limits: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/error-codes
+
+## Addendum — 2026-10-06 (Milestone 4.1 implementation, mocked Meta only)
+
+The Decision 6 connection flow is implemented and covered by automated tests with every Meta
+response mocked. **Live Meta OAuth is not verified** (that is M4.1B, blocked on Meta app and
+tester access). The decisions above stand; implementation resolved these details:
+
+- **Shared encryption module.** The Fernet helpers live in `publishing/credential_encryption.py`
+  (`encrypt_credential`, `decrypt_credential`, `CredentialStoreError`).
+  `publishing/tiktok/credential_store.py` re-exports them as `encrypt_token`, `decrypt_token`
+  and `CredentialStoreError`, so TikTok's behavior and callers are unchanged.
+- **Refresh window.** Decision 1's rule (≥ 24 h old, still valid) is necessary but not a
+  schedule. A stored token is refreshed on first use once it is ≥ 24 h since it was obtained or
+  last refreshed **and** has at most `INSTAGRAM_TOKEN_REFRESH_WINDOW_SECONDS` left (default 30
+  days, validated 1–59 days). Settings status reads use the token for the identity lookup, so a
+  connection used at least monthly never lapses. A transient refresh failure (network, 5xx,
+  malformed) keeps using a still-valid token; a 4xx means reconnect. Refreshes run under
+  `credential_refresh_lock` with a re-read and the CAS write, like TikTok.
+- **Platform-scoped, atomic state consumption.** `consume_oauth_state(state, now, *, platform)`
+  is one conditional `UPDATE` (state, platform, unconsumed, unexpired). A state is never
+  consumed, or marked, by another platform's callback. This applies to TikTok too.
+- **Return targets.** `api/oauth_return_targets.py`: exact string match against the web Settings
+  URL (`FRONTEND_BASE_URL` + `/app/settings`, the default) plus
+  `OAUTH_EXTRA_RETURN_TARGETS`. Entries must be `https://` without user info (`http://` only on
+  localhost). The callback re-checks the stored target against the current allowlist and falls
+  back to Settings, and appends `instagram=<outcome>` while keeping the target's own query
+  parameters. Without a usable `FRONTEND_BASE_URL`, `connect_available` is false.
+- **Account id.** `platform_connections.external_account_id` is the token exchange's `user_id`,
+  written on every successful callback (`update_platform_connection_external_account`), so a
+  reconnect that picks a different Instagram account updates it. `GET /me` also returns a
+  `user_id`. Whether `/<IG_ID>/media` needs the exchange id or the `/me` id must be checked
+  against a tester account (M4.1B / 4.2) before publishing relies on it.
+- **Identity.** `GET /me?fields=user_id,username` is read live at status time with the stored
+  credential (`publishing/instagram/identity.py`), like TikTok's `creator_info`. Usernames are
+  never persisted; a failure or an invalid username shows no label.
+- **Response shapes.** Meta documents some responses wrapped in a `data` list and `user_id` as a
+  number or string; both shapes are accepted. Transport errors are re-raised without the
+  original exception because `requests` messages include URLs carrying the app secret or a token.
+- **Callback outcomes:** `connected`, `denied`, `invalid_state`, `expired_state`,
+  `exchange_failed`, `unavailable`. The connection is created inactive and activated only after
+  its credential is stored, so an encryption failure never leaves an ACTIVE row behind.
+- Instagram's registry `connection_available` is now True; `publishing_available` stays False,
+  so no Instagram `platform_posts` rows are created. Postgres migration `0011` adds
+  `oauth_states.return_target`.
+
+Evidence: `docs/evaluations/productization/milestone-4.1-instagram-oauth.md`.
