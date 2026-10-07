@@ -1,5 +1,21 @@
 # Content Automation — Changelog
 
+## 2026-10-06
+
+### Milestone 4.1 — Approved Autobuild Plan
+
+- Approved two implementation briefs under `docs/roadmap/milestone-4.1/`: GREEN
+  credential-independent Instagram OAuth implementation with mocked Meta
+  responses, followed by YELLOW live Meta validation after developer-app and
+  tester access become available.
+- The GREEN item covers connect/callback/disconnect, shared encrypted
+  credential helpers, Instagram token lifecycle and `@username` identity,
+  platform-scoped OAuth state, allowlisted return targets, callback-log
+  redaction, Settings actions, and automated backend/frontend coverage.
+- Reels publishing, worker integration, production deployment, Meta App Review,
+  Advanced Access, Business Verification, and live credentials remain outside
+  the GREEN implementation.
+
 ## 2026-10-05
 
 ### Tooling — Project Roadmap And Planner Handoff

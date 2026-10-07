@@ -33,7 +33,10 @@ starts `autobuild run`.
 
 ## Approved Implementations
 
-No approved Autobuild briefs yet.
+| Order | ID | Title | Autonomy | Status | Brief |
+| --- | --- | --- | --- | --- | --- |
+| 1 | M4.1A | Build Instagram OAuth integration | GREEN | Ready | [Brief](milestone-4.1/M4.1A-instagram-oauth-integration.md) |
+| 2 | M4.1B | Validate Instagram OAuth against Meta | YELLOW | Ready; blocked on Meta access | [Brief](milestone-4.1/M4.1B-live-meta-oauth-validation.md) |
 
 ## Handoff
 
